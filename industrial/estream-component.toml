@@ -1,0 +1,42 @@
+[component]
+name = "estream-industrial-gateway"
+version = "0.9.0"
+category = "integration"
+description = "Industrial protocol gateway for eStream — Modbus TCP client, poll scheduling, stream emission, and StreamSight bridge with Lite/Standard/Premium tiers"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-industrial-gateway"
+readme = "specs/INDUSTRIAL_PROTOCOL_GATEWAY_V2.md"
+keywords = ["modbus", "industrial", "iot", "gateway", "protocol", "scada", "plc"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "freemium"
+visibility = "open"
+
+[component.estream]
+min_version = "0.8.0"
+
+[component.schemas]
+provides = ["ModbusTcpFrame", "PollSchedule", "IndustrialTelemetry", "StreamSightBridgeEvent"]
+requires = []
+
+[component.circuits]
+provides = [
+    "modbus_tcp_client",
+    "poll_scheduler",
+    "stream_emitter",
+    "industrial_streamsight_bridge",
+    "industrial_gateway_lite",
+    "industrial_gateway_standard",
+    "industrial_gateway_premium",
+]
+target = ["cpu", "fpga"]
+
+[component.include]
+circuits = ["components/*.escir.yaml", "gateway/*.escir.yaml"]
+docs = ["specs/*.md"]

@@ -1,0 +1,383 @@
+// eStream Marketplace — Stream API Definitions
+// Lex: estream/marketplace
+//
+// All marketplace operations (browse, search, install, publish) flow over
+// eStream's native Stream API. The CLI and browser SDK subscribe to the
+// same topics via the binary wire protocol (WebTransport/QUIC).
+//
+// Epic: polyquantum/estream#136
+// Phase 1: polyquantum/estream#130
+
+// =============================================================================
+// Common Types
+// =============================================================================
+
+type ComponentName = bytes(128)
+type PublisherName = bytes(64)
+type VersionString = bytes(20)
+type CategoryId = bytes(32)
+type RequestId = bytes(32)
+type PublicKey = bytes(1952)
+type Signature = bytes(4627)
+type Checksum = bytes(32)
+
+// =============================================================================
+// Data Declarations — Registry Index
+// =============================================================================
+
+data ComponentSummary : marketplace v1 {
+    name: ComponentName,
+    version: VersionString,
+    category: CategoryId,
+    publisher: PublisherName,
+    publisher_verified: bool,
+    description: bytes(512),
+    pricing_type: u8,
+    pricing_amount_es: u64,
+    visibility: u8,
+    badges: u32,
+    rating_x100: u32,
+    review_count: u32,
+    download_count: u64,
+    source_hash: Checksum,
+    updated_at: u64,
+}
+    encode @ bytes(1474) {
+        name             @ le,
+        version          @ le,
+        category         @ le,
+        publisher        @ le,
+        publisher_verified @ le,
+        description      @ le,
+        pricing_type     @ le,
+        pricing_amount_es @ le,
+        visibility       @ le,
+        badges           @ le,
+        rating_x100      @ le,
+        review_count     @ le,
+        download_count   @ le,
+        source_hash      @ le,
+        updated_at       @ le,
+    }
+    observe metrics [download_count, rating_x100, pricing_type, category] level adaptive
+
+// pricing_type: 0=Free, 1=OneTime, 2=Subscription, 3=UsageBased, 4=Enterprise, 5=Freemium
+// visibility: 0=Open, 1=Interface, 2=Compiled, 3=LicensedFull
+// badges: bitmask — bit 0=Verified, 1=Tested, 2=Audited, 3=Certified,
+//         4=Official, 5=CommunityChoice, 6=HighPerformance, 7=PostQuantum
+
+// =============================================================================
+// Data Declarations — Component Detail
+// =============================================================================
+
+data PortDefinition : marketplace v1 {
+    port_name: bytes(64),
+    port_type: bytes(64),
+    direction: u8,
+    description: bytes(256),
+}
+    encode
+
+data DependencyRef : marketplace v1 {
+    name: ComponentName,
+    version_req: bytes(32),
+    resolved_version: VersionString,
+}
+    encode
+
+data SkuTier : marketplace v1 {
+    tier_name: bytes(32),
+    pricing_type: u8,
+    pricing_amount_es: u64,
+    features: bytes(512),
+}
+    encode
+
+data ComponentDetail : marketplace v1 {
+    name: ComponentName,
+    version: VersionString,
+    category: CategoryId,
+    publisher: PublisherName,
+    publisher_verified: bool,
+    description: bytes(512),
+    readme: bytes(8192),
+    license_spdx: bytes(32),
+    repository_url: bytes(256),
+    pricing_type: u8,
+    pricing_amount_es: u64,
+    visibility: u8,
+    badges: u32,
+    rating_x100: u32,
+    review_count: u32,
+    download_count: u64,
+    source_hash: Checksum,
+    estream_min_version: VersionString,
+    estream_max_version: VersionString,
+    targets: u8,
+    witness_tier: u8,
+    compute_budget: u32,
+    memory_bytes: u32,
+    estimated_cost_es: u64,
+    port_count: u16,
+    dependency_count: u16,
+    sku_tier_count: u8,
+    created_at: u64,
+    updated_at: u64,
+}
+    encode
+    observe metrics [download_count, category, visibility] level adaptive
+    govern {
+        PRICING -> public
+        PUBLISHER_IDENTITY -> public
+        SOURCE -> filtered(visibility)
+    }
+
+// targets: bitmask — bit 0=CPU, 1=FPGA
+
+// =============================================================================
+// Data Declarations — Search
+// =============================================================================
+
+data SearchQuery : marketplace v1 {
+    query_text: bytes(256),
+    category_filter: CategoryId,
+    pricing_filter: u8,
+    badges_filter: u32,
+    sort_order: u8,
+    offset: u32,
+    limit: u32,
+}
+    encode
+    observe metrics [query_text, category_filter, sort_order] level adaptive
+
+// sort_order: 0=Relevance, 1=Downloads, 2=Rating, 3=Recent, 4=Trending
+
+data SearchResult : marketplace v1 {
+    request_id: RequestId,
+    total_count: u64,
+    result_count: u16,
+    query_ms: u32,
+}
+    encode
+    observe metrics [total_count, query_ms] level adaptive
+
+// =============================================================================
+// Data Declarations — Install
+// =============================================================================
+
+data InstallRequest : marketplace v1 {
+    request_id: RequestId,
+    component_name: ComponentName,
+    version_req: bytes(32),
+    force: bool,
+    skip_verify: bool,
+}
+    encode
+
+data InstallProgress : marketplace v1 {
+    request_id: RequestId,
+    phase: u8,
+    component_name: ComponentName,
+    version: VersionString,
+    progress_pct: u8,
+    message: bytes(256),
+    signature_valid: bool,
+    checksum_valid: bool,
+}
+    encode
+    observe metrics [phase, component_name] level adaptive
+
+// phase: 0=Resolving, 1=Downloading, 2=Verifying, 3=Installing, 4=Complete, 255=Error
+
+// =============================================================================
+// Data Declarations — Publish
+// =============================================================================
+
+data PublishRequest : marketplace v1 {
+    request_id: RequestId,
+    component_name: ComponentName,
+    version: VersionString,
+    category: CategoryId,
+    archive_checksum: Checksum,
+    archive_size_bytes: u64,
+    signature: Signature,
+    signer_key_id: bytes(64),
+}
+    encode
+    sign {
+        algorithm mldsa87
+        fields [component_name, version, archive_checksum]
+    }
+
+data PublishProgress : marketplace v1 {
+    request_id: RequestId,
+    phase: u8,
+    message: bytes(256),
+    pr_url: bytes(256),
+    registry_entry_url: bytes(256),
+}
+    encode
+    observe metrics [phase, component_name] level adaptive
+
+// phase: 0=Validating, 1=Testing, 2=Building, 3=Signing, 4=Submitting, 5=Merged, 255=Error
+
+// =============================================================================
+// Data Declarations — Reviews and Licenses
+// =============================================================================
+
+data Review : marketplace v1 {
+    component_name: ComponentName,
+    reviewer: PublisherName,
+    rating: u8,
+    title: bytes(128),
+    body: bytes(2048),
+    verified_purchase: bool,
+    created_at: u64,
+}
+    encode
+    govern {
+        REVIEWER_IDENTITY -> public
+    }
+
+data License : marketplace v1 {
+    component_name: ComponentName,
+    licensee: bytes(32),
+    license_type: u8,
+    granted_at: u64,
+    expires_at: u64,
+    usage_limit: u64,
+    usage_count: u64,
+}
+    encode
+
+// license_type: 0=Perpetual, 1=Subscription, 2=UsageBased, 3=Trial
+
+// =============================================================================
+// Data Declarations — Publisher Identity
+// =============================================================================
+
+data PublisherProfile : marketplace v1 {
+    name: PublisherName,
+    display_name: bytes(128),
+    url: bytes(256),
+    verified: bool,
+    signing_key_id: bytes(64),
+    signing_key_pubkey: PublicKey,
+    key_created_at: u64,
+    key_expires_at: u64,
+}
+    encode
+    sign {
+        algorithm mldsa87
+        fields [name, signing_key_pubkey]
+    }
+
+// =============================================================================
+// Stream Declarations — Lattice Topic Map
+// =============================================================================
+
+// Registry index: full component listing with real-time updates
+stream marketplace_index: state<ComponentName, ComponentSummary>
+    retention 24h
+    consumers [designer, cli, console]
+
+// Search: emit query, receive results + matching component summaries
+stream marketplace_search: event<SearchResult>
+    ttl 60s
+    consumers [designer, cli]
+
+// Component detail: keyed by name, includes full metadata
+stream marketplace_component: state<ComponentName, ComponentDetail>
+    retention 24h
+    consumers [designer, cli]
+
+// Reviews: event stream per component
+stream marketplace_reviews: event<Review>
+    retention 1y
+    consumers [designer, cli, console]
+
+// Install progress: keyed by request ID
+stream marketplace_install: event<InstallProgress>
+    ttl 5m
+    consumers [designer, cli]
+
+// Publish progress: keyed by request ID
+stream marketplace_publish: event<PublishProgress>
+    ttl 10m
+    consumers [designer, cli]
+
+// Active licenses: keyed per user session
+stream marketplace_licenses: state<ComponentName, License>
+    retention 30d
+    consumers [designer, cli, console]
+
+// Publisher profiles: identity registry
+stream marketplace_publishers: state<PublisherName, PublisherProfile>
+    retention 1y
+    consumers [designer, cli, registry]
+
+// =============================================================================
+// Circuits — Marketplace Operations
+// =============================================================================
+
+// Search the registry — returns matching components
+circuit marketplace_search_query(query: SearchQuery) -> SearchResult
+    lex estream/marketplace
+    precision C
+    observe metrics: [search_queries, search_latency_ns, result_count]
+    invariant "limit_bounded" { query.limit <= 100 }
+{
+    let results = index_search(query.query_text, query.category_filter, query.pricing_filter, query.badges_filter, query.sort_order, query.offset, query.limit)
+    SearchResult {
+        request_id: sha3_256(query.query_text),
+        total_count: results.total,
+        result_count: results.count,
+        query_ms: results.elapsed_ms,
+    }
+}
+
+// Verify a component package signature (ML-DSA-87)
+circuit marketplace_verify_signature(archive_hash: Checksum, signature: Signature, pubkey: PublicKey) -> bool
+    lex estream/marketplace
+    precision A
+    observe metrics: [signature_verifications, verification_failures]
+{
+    let valid = mldsa_verify(archive_hash, signature, pubkey)
+    valid
+}
+
+// Verify a component checksum (SHA3-256)
+circuit marketplace_verify_checksum(archive_data: bytes(8192), expected_hash: Checksum) -> bool
+    lex estream/marketplace
+    precision A
+{
+    let computed = sha3_256(archive_data)
+    computed == expected_hash
+}
+
+// Register or update a publisher profile
+circuit marketplace_register_publisher(profile: PublisherProfile, pk: PublicKey) -> bool
+    lex estream/marketplace
+    precision B
+    rbac [publisher, marketplace_admin]
+    observe metrics: [publishers_registered]
+    invariant "key_not_expired" { profile.key_expires_at > current_time() }
+{
+    let profile_hash = sha3_256(profile.name)
+    let sig = mldsa_sign(profile_hash, profile.signing_key_pubkey)
+    let verified = mldsa_verify(profile_hash, sig, profile.signing_key_pubkey)
+    verified
+}
+
+// =============================================================================
+// Audience Declarations — Field-Level Visibility
+// =============================================================================
+
+audience marketplace_public inherits authenticated
+    fields [name, version, category, publisher, pricing_type, pricing_amount_es, badges, rating_x100, download_count, source_hash]
+
+audience marketplace_licensee inherits marketplace_public
+    fields [readme, repository_url, estream_min_version, estream_max_version]
+
+audience marketplace_admin inherits marketplace_licensee
+    fields [created_at, updated_at, license_type, usage_count, usage_limit]

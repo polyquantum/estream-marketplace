@@ -1,0 +1,44 @@
+[component]
+name = "estream-wire-fix"
+version = "1.0.0"
+category = "wire-adapter"
+description = "FIX 4.2/4.4 protocol adapter for eStream — parses FIX messages, manages sessions, routes orders via SmartCircuits"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-wire-fix"
+readme = "FIX_TRADING_COMPONENT_SPEC.md"
+keywords = ["fix", "trading", "capital-markets", "protocol", "wire-adapter", "fintech"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "free"
+visibility = "open"
+
+[component.estream]
+min_version = "0.8.0"
+
+[component.dependencies]
+esf-trading = "^1.0.0"
+
+[component.schemas]
+provides = ["EStreamOrder", "EStreamFill", "EStreamQuote", "EStreamMarketData"]
+requires = []
+
+[component.circuits]
+provides = ["fix_wire_adapter", "fix_trading_gateway", "trading_schemas"]
+target = ["cpu", "fpga"]
+
+[component.wire_adapter]
+protocol_family = "financial"
+transports = ["tcp", "tls"]
+bidirectional = true
+request_response = true
+
+[component.include]
+schemas = ["trading_schemas.fl"]
+circuits = ["*.fl"]
+docs = ["FIX_TRADING_COMPONENT_SPEC.md"]

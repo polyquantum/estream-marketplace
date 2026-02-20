@@ -1,0 +1,41 @@
+[component]
+name = "estream-wire-iso20022"
+version = "0.8.0"
+category = "wire-adapter"
+description = "ISO 20022 (SWIFT MX) parser and mapper for eStream — transforms pacs.008/pacs.002 XML messages into native data schemas"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-wire-iso20022"
+readme = "README.md"
+keywords = ["iso20022", "swift", "pacs008", "pacs002", "payments", "fintech", "wire-adapter"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "free"
+visibility = "open"
+
+[component.estream]
+min_version = "0.8.0"
+
+[component.schemas]
+provides = ["Iso20022Pacs008", "Iso20022Pacs002", "PaymentStatus"]
+requires = []
+
+[component.circuits]
+provides = ["iso20022_parser"]
+target = ["cpu"]
+
+[component.wire_adapter]
+protocol_family = "financial"
+transports = ["tcp", "tls"]
+bidirectional = false
+request_response = false
+
+[component.include]
+circuits = ["circuit.v080.escir.yaml"]
+tests = ["test_vectors/**"]
+docs = ["README.md", "COMPONENT_MARKETPLACE.md"]

@@ -1,0 +1,88 @@
+# estream-component.toml — Marketplace Component Manifest
+#
+# Every publishable component includes this file at its root.
+# See: estream-marketplace/specs/ESTREAM_MARKETPLACE_SPEC.md §3
+#
+# Generate this file: estream marketplace scaffold <category> <name>
+
+[component]
+# Required: unique name (lowercase, hyphens). Official: estream-* or esf-*. Third-party: @publisher/name
+name = "{{name}}"
+
+# Required: semantic version (major.minor.patch)
+version = "0.1.0"
+
+# Required: one of — esf-schema, wire-adapter, smart-circuit, fpga-circuit, integration, console-widget
+category = "{{category}}"
+
+# Required: short description (one line)
+description = "{{description}}"
+
+# Optional metadata
+license = "Apache-2.0"
+repository = ""
+homepage = ""
+readme = "README.md"
+keywords = []
+
+[component.author]
+name = "{{author_name}}"
+email = "{{author_email}}"
+url = ""
+
+# Marketplace settings (defaults to free/open)
+[component.marketplace]
+# free | one-time | subscription | usage-based | enterprise | freemium
+pricing = "free"
+# open | interface | compiled | licensed
+visibility = "open"
+
+# eStream version compatibility
+[component.estream]
+min_version = "0.8.0"
+# max_version = "2.0.0"  # uncomment to set ceiling
+
+# Dependencies on other marketplace components (semver requirements)
+[component.dependencies]
+# esf-trading = "^1.0.0"
+# estream-kernel = ">=0.8.0"
+
+# Schemas this component provides and requires
+[component.schemas]
+provides = []
+requires = []
+
+# Circuit definitions included in this component
+[component.circuits]
+provides = []
+# cpu | fpga | both
+target = ["cpu"]
+
+# --- Category-specific sections (uncomment the one matching your category) ---
+
+# Wire adapter metadata (category = "wire-adapter" only)
+# [component.wire_adapter]
+# protocol_family = "financial"   # messaging | financial | healthcare | industrial | general
+# transports = ["tcp"]            # tcp | udp | serial | websocket | tls | quic
+# bidirectional = true
+# request_response = true
+
+# Console widget metadata (category = "console-widget" only)
+# [component.widget]
+# widget_category = "analytics"   # analytics | monitoring | control | visualization
+# roles = ["operator"]            # Required RBAC roles
+# sizes = ["medium"]              # small | medium | large
+# data_sources = ["eslite"]       # eslite | api | lex-stream
+
+# FPGA metadata (category = "fpga-circuit" only)
+# [component.fpga]
+# device_family = ["xcvu9p"]
+# resource_estimate = { luts = 50000, brams = 100, dsps = 0 }
+
+# Files to include in the published package (glob patterns)
+[component.include]
+schemas = ["schemas/*.data.yaml"]
+circuits = ["circuits/*.fl"]
+tests = ["tests/golden/**"]
+# fpga = ["fpga/*.bit"]           # uncomment for FPGA bitstreams
+# widgets = ["widgets/dist/**"]   # uncomment for console widgets
