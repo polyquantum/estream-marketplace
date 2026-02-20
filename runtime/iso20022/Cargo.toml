@@ -1,0 +1,32 @@
+[package]
+name = "estream-iso20022"
+version.workspace = true
+edition = "2021"
+description = "ISO 20022 message types and parsing for eStream CBDC integration"
+license = "Apache-2.0"
+repository = "https://github.com/toddrooke/estream-io"
+
+[features]
+default = ["std"]
+std = []
+fpga = ["estream-fpga-bridge"]
+serde = ["dep:serde"]
+
+[dependencies]
+thiserror = "2.0"
+zerocopy = { version = "0.8", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+rust_decimal = "1.33"
+
+# Optional dependencies
+serde = { version = "1.0", features = ["derive"], optional = true }
+estream-fpga-bridge = { path = "../fpga-bridge", optional = true }
+estream-wire = { path = "../wire" }
+
+[dev-dependencies]
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "parser_benchmark"
+harness = false

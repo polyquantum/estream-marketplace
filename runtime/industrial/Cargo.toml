@@ -1,0 +1,78 @@
+[package]
+name = "estream-industrial"
+version.workspace = true
+edition = "2021"
+license = "Apache-2.0"
+description = "Industrial Protocol Gateway for estream-io platform"
+repository = "https://github.com/toddrooke/estream-io"
+keywords = ["industrial", "modbus", "scada", "plc", "iot"]
+categories = ["embedded", "network-programming", "hardware-support"]
+
+[features]
+default = ["std", "modbus-tcp"]
+std = []
+no_std = []
+
+# Protocol features
+modbus-tcp = []
+modbus-rtu = ["serial"]
+opcua = []
+dnp3 = []
+
+# Transport features
+serial = ["dep:serialport"]
+
+# Gateway tiers
+gateway-lite = ["modbus-tcp"]
+gateway-standard = ["modbus-tcp", "modbus-rtu", "opcua"]
+gateway-premium = ["gateway-standard", "dnp3"]
+
+# Optional features
+historian = []
+redundancy = []
+audit = []
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["net", "io-util", "time", "sync", "macros", "rt-multi-thread"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+
+# Async traits
+async-trait = "0.1"
+
+# Bytes handling
+bytes = "1.5"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Hex encoding
+hex = "0.4"
+
+# Serial port (optional)
+serialport = { version = "4.3", optional = true }
+
+# Internal dependencies
+estream-kernel = { path = "../kernel" }
+estream-escir = { path = "../../compiler/escir" }
+
+[dev-dependencies]
+tokio-test = "0.4"
+proptest = "1.4"
+
+[package.metadata.docs.rs]
+all-features = true
