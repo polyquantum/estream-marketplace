@@ -1,27 +1,28 @@
-# eStream Marketplace — Open Source Component Exchange Specification
+# eStream Marketplace Specification
 
-> Comprehensive specification for the eStream component marketplace, modeled after Chronicle Software's open-core strategy.
+> Canonical specification for the eStream component marketplace — discovery, packaging, signing, pricing, and developer tooling for SmartCircuit components.
 
-**Status:** Draft  
-**Version:** 1.0.0  
-**Issue:** [#524](https://github.com/polyquantum/estream-io/issues/524)  
-**Epic:** [EPIC_ESTREAM_MARKETPLACE.md](../../.github/epics/EPIC_ESTREAM_MARKETPLACE.md)
+**Status:** Draft
+**Version:** 2.0.0
+**Epic:** [polyquantum/estream#136](https://github.com/polyquantum/estream/issues/136)
+**Supersedes:** MARKETPLACE_SPEC.md (v0.8.0), COMPONENT_REGISTRY_API_SPEC.md (v1.0.0), SMARTCIRCUIT_PACKAGE_FORMAT_SPEC.md (v1.0.0), CONSOLE_WIDGET_MARKETPLACE_SPEC.md (v1.0.0), FPGA_COMPONENT_EXTENSION.md
 
 ---
 
 ## 1. Overview
 
-The eStream Marketplace is an open source component exchange that enables developers to discover, publish, install, and compose reusable eStream components — ESF schemas, SmartCircuits, protocol adapters, FPGA circuits, console widgets, and pre-built integrations.
+The eStream Marketplace is an open source component exchange — "npm for verifiable circuits" — enabling developers to discover, publish, install, and compose reusable eStream components: ESF schemas, SmartCircuits, protocol adapters, FPGA circuits, console widgets, and full-stack integrations.
 
-### 1.1 Beyond Chronicle — SmartCircuit-Native Architecture
+### 1.1 Design Principles
 
-Chronicle Software proved that open-sourcing high-performance middleware (Queue, Map, Wire) creates a thriving ecosystem and enterprise adoption funnel. eStream follows the same open-core model but with a fundamentally different architecture: **every queue and map operation is a SmartCircuit execution on native lex streams and lex state** — not a standalone library crate.
+1. **Stream API, not HTTP** — All marketplace data flows over eStream's native lattice streams (WebTransport/QUIC binary wire protocol), defined in FastLang. See §5.
+2. **No trusted TypeScript** — All signatures (ML-DSA-87), verifications, Spark authentication, and RBAC execute in Rust/WASM (`estream-app-wasm`). TypeScript is UI-only.
+3. **CLI full parity** — Everything the visual circuit designer can do, the CLI (`estream marketplace`) must also do. The CLI is the primary testing interface.
+4. **SmartCircuit-native** — Every queue and map operation is a SmartCircuit execution on native lex streams and lex state, not a standalone library crate. Components are active processing units with witness attestation and 8D metering.
 
-Chronicle Queue and Chronicle Map are Java libraries that ultimately hit the JVM ceiling: GC pauses, OS scheduling jitter, heap management, and no path to hardware acceleration. eStream transcends this by making queue and map operations SmartCircuit executions that:
+### 1.2 SmartCircuit-Native Architecture
 
-1. **Run natively on lex streams and lex state** — persistence, ordering, replication, and witness attestation come from the platform, not from library code
-2. **Are dual-target compiled via ESCIR** — the same circuit definition runs on CPU (Rust/WASM) or FPGA (synthesized Verilog)
-3. **Achieve orders-of-magnitude speedup on FPGA** — queue append becomes a hardware pipeline (ESF serialize → PRIME signer → lex store write → ack) with deterministic nanosecond latency and zero OS overhead
+Chronicle Software proved that open-sourcing high-performance middleware creates a thriving ecosystem. eStream follows the same open-core model but with a fundamentally different architecture: **every queue and map operation is a SmartCircuit execution on native lex streams and lex state**.
 
 | Chronicle (OSS) | eStream Native | Execution Model |
 |-----------------|---------------|-----------------|
@@ -31,9 +32,7 @@ Chronicle Queue and Chronicle Map are Java libraries that ultimately hit the JVM
 | Chronicle Services | SmartCircuit runtime (BSL 1.1) | Exists |
 | Chronicle FIX | Wire adapters via `WireAdapter` trait | Circuit-wrapped protocol adapters |
 
-**SmartCircuits are the proactive real-time backend** — not passive marketplace components waiting to be composed, but active processing units that drive queue compaction, map replication, TTL garbage collection, and protocol translation. They execute on triggers (events, timers, thresholds) with full witness attestation and 8D metering.
-
-### 1.2 Licensing Tiers
+### 1.3 Licensing Tiers
 
 | Tier | License | Components |
 |------|---------|-----------|
@@ -41,844 +40,1248 @@ Chronicle Queue and Chronicle Map are Java libraries that ultimately hit the JVM
 | **Source Available** | BSL 1.1 | FPGA acceleration, VRF Scatter HA, production runtime |
 | **Commercial** | Enterprise | Managed deployment, SLA, support, custom adapters |
 
-### 1.3 Upstream Specifications
+---
 
-This spec builds on five upstream requirement specifications:
+## 2. Component Model
 
-| Spec | Issue | Description |
-|------|-------|-------------|
-| [WIRE_ADAPTER_TRAIT_SPEC.md](../protocol/WIRE_ADAPTER_TRAIT_SPEC.md) | #528 | `WireAdapter` trait, lifecycle, ESF conversion |
-| [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) | #525 | Manifest, registry, CLI, ML-DSA-87 signing |
-| [ESF_SCHEMA_COMPOSITION_SPEC.md](../protocol/ESF_SCHEMA_COMPOSITION_SPEC.md) | #526 | Schema dependency resolution |
-| [SMARTCIRCUIT_PACKAGE_FORMAT_SPEC.md](./SMARTCIRCUIT_PACKAGE_FORMAT_SPEC.md) | #527 | Package format, test vectors, FPGA bitstreams |
-| [CONSOLE_WIDGET_MARKETPLACE_SPEC.md](./CONSOLE_WIDGET_MARKETPLACE_SPEC.md) | #533 | Console widget marketplace extension |
+### 2.1 Component Categories
 
-And three pre-existing specifications:
+Every publishable component belongs to one infrastructure category:
 
-| Spec | Description |
-|------|-------------|
-| [MARKETPLACE_SPEC.md](./MARKETPLACE_SPEC.md) | Pricing, visibility, creator program |
-| [FPGA_COMPONENT_EXTENSION.md](./FPGA_COMPONENT_EXTENSION.md) | FPGA component metadata |
-| [INDUSTRIAL_PROTOCOL_GATEWAY_V2.md](./INDUSTRIAL_PROTOCOL_GATEWAY_V2.md) | Layered adapter architecture |
+| Category | Description | Examples |
+|----------|-------------|---------|
+| `esf-schema` | ESF schema packs | `esf-iot`, `esf-trading`, `esf-carbon` |
+| `wire-adapter` | Protocol adapters (impl `WireAdapter` trait) | `estream-wire-fix`, `estream-wire-mqtt` |
+| `smart-circuit` | Reusable SmartCircuit packages | `carbon-credit-mint`, `order-matcher` |
+| `fpga-circuit` | FPGA bitstream components | `ntt-accelerator`, `sha3-pipeline` |
+| `integration` | Full-stack integrations | `thermogen-zero-edge` |
+| `console-widget` | Console dashboard widgets | `impact-counter`, `network-map` |
+
+Components are also tagged with domain categories for discovery:
+
+```rust
+pub enum DomainCategory {
+    Crypto, Identity, DeFi, Gaming, Social,
+    Compliance, Analytics, Networking, Storage,
+    AiMl, Iot, Utility, Template,
+}
+```
+
+### 2.2 Component Record
+
+```rust
+pub struct MarketplaceComponent {
+    pub id: ComponentId,
+    pub name: String,
+    pub version: semver::Version,
+    pub publisher: Publisher,
+    pub description: String,
+    pub readme: String,
+    pub license: License,
+    pub pricing: Pricing,
+    pub badges: Vec<Badge>,
+    pub categories: Vec<DomainCategory>,
+    pub tags: Vec<String>,
+    pub dependencies: Vec<DependencyRef>,
+    pub stats: ComponentStats,
+    pub storage: StorageRefs,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+pub struct Publisher {
+    pub id: PublisherId,
+    pub name: String,
+    pub verified: bool,
+    pub avatar_url: Option<String>,
+    pub reputation_score: f32,
+}
+
+pub struct ComponentStats {
+    pub downloads: u64,
+    pub active_installs: u64,
+    pub stars: u64,
+    pub reviews_count: u64,
+    pub average_rating: f32,
+    pub revenue_total: u64,
+}
+```
+
+### 2.3 Source Visibility
+
+Components support **tiered visibility**, controlled by the creator:
+
+```rust
+pub enum SourceVisibility {
+    Open,          // Full ESCIR source visible to all
+    Interface,     // Only ports, annotations, source hash visible
+    Compiled,      // Interface + compiled artifacts (WASM/Verilog)
+    LicensedFull,  // Full source visible only to licensees
+}
+```
+
+**Always public** regardless of visibility level: name, version, publisher, input/output ports, resource requirements, estimated cost per execution, source hash.
+
+Visibility is implemented using ESF Filter — the same field-level privacy primitive used throughout the platform:
+
+```rust
+pub struct FilteredComponentData {
+    pub interface: ComponentInterface,       // always visible
+    pub resources: ResourceRequirements,     // always visible
+    pub source_hash: [u8; 32],              // always visible
+
+    #[filter(audiences = ["public", "licensee"])]
+    pub escir_source: Filtered<ESCIR>,
+
+    #[filter(audiences = ["public", "compiled", "licensee"])]
+    pub wasm_artifact: Filtered<AssetId>,
+
+    #[filter(audiences = ["public", "compiled", "licensee"])]
+    pub verilog_artifact: Filtered<AssetId>,
+}
+```
+
+**Policy**: Creators can increase visibility at any time (Interface → Open) but cannot decrease it after publishing. Official eStream components are always Open + Free.
 
 ---
 
-## 2. Architecture
+## 3. Component Manifest (`estream-component.toml`)
 
-### 2.1 System Architecture
+Every publishable component includes an `estream-component.toml` manifest at its root.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           eStream Marketplace                               │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  CLI (estream marketplace)            Console (WidgetPicker)                │
-│  ┌──────────────────────────┐        ┌──────────────────────────┐          │
-│  │ search · install · pub   │        │ Browse · Install · Rate  │          │
-│  │ verify · scaffold        │        │ Marketplace Tab           │          │
-│  └────────────┬─────────────┘        └────────────┬─────────────┘          │
-│               │                                    │                        │
-│               ▼                                    ▼                        │
-│  ┌─────────────────────────────────────────────────────────────┐           │
-│  │              Component Registry (GitHub-backed)              │           │
-│  └─────────────────────────────┬───────────────────────────────┘           │
-│                                │                                            │
-│  ┌─────────────────────────────┼───────────────────────────────┐           │
-│  │              Component Types│                                │           │
-│  │  ESF Schemas · SmartCircuits · Wire Adapters · Widgets       │           │
-│  │  FPGA Circuits · Full Integrations                           │           │
-│  └──────────────────────────────────────────────────────────────┘           │
-│                                                                             │
-│  ╔══════════════════════════════════════════════════════════════╗           │
-│  ║          SmartCircuit Runtime (Proactive Real-Time Backend)  ║           │
-│  ║                                                              ║           │
-│  ║  ┌────────────────────────┐  ┌────────────────────────┐     ║           │
-│  ║  │   Queue Stream Circuits│  │   State Map Circuits   │     ║           │
-│  ║  │   queue.append.v1      │  │   map.put.v1           │     ║           │
-│  ║  │   queue.compact.v1     │  │   map.cas.v1           │     ║           │
-│  ║  │   queue.replicate.v1   │  │   map.gc.v1            │     ║           │
-│  ║  └───────────┬────────────┘  └───────────┬────────────┘     ║           │
-│  ║              │                            │                  ║           │
-│  ║              ▼                            ▼                  ║           │
-│  ║  ┌──────────────────────────────────────────────────────┐   ║           │
-│  ║  │           Lex Streams + Lex State                     │   ║           │
-│  ║  │  Witness Attestation · 8D Metering · MTP Ordering     │   ║           │
-│  ║  │  VRF Scatter Replication · PQ Signing (PRIME Signer)  │   ║           │
-│  ║  └──────────────────────────────────────────────────────┘   ║           │
-│  ║                                                              ║           │
-│  ║  ┌─────────────────┐  ┌──────────────────────────────┐      ║           │
-│  ║  │  CPU Target      │  │  FPGA Target                 │      ║           │
-│  ║  │  Rust / WASM     │  │  ESCIR → Verilog → Bitstream │      ║           │
-│  ║  │  (competitive)   │  │  (orders of magnitude faster) │      ║           │
-│  ║  └─────────────────┘  └──────────────────────────────┘      ║           │
-│  ╚══════════════════════════════════════════════════════════════╝           │
-│                                                                             │
-│  ┌──────────────────────────────────────────────────────────────┐           │
-│  │  Wire Adapters (WireAdapter trait)                            │           │
-│  │  MQTT · FIX · HL7 · Modbus · SWIFT · OPC-UA                  │           │
-│  └──────────────────────────────────────────────────────────────┘           │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### 2.2 End-to-End Data Flow — SmartCircuit Execution Path
-
-```
-External Protocol                  eStream Platform                      Consumer
-      │                                  │                                  │
-      │  MQTT/FIX/HL7/Modbus            │                                  │
-      │─────────────────────────▶       │                                  │
-      │                         WireAdapter                                │
-      │                         ├─ ingest()                                │
-      │                         ├─ translate_ingress()                     │
-      │                         ▼                                          │
-      │                    ┌─────────┐                                     │
-      │                    │  ESF    │  Protocol-agnostic pivot            │
-      │                    │ Message │                                     │
-      │                    └────┬────┘                                     │
-      │                         │                                          │
-      │           ┌─────────────┼──────────────┐                           │
-      │           │             │              │                           │
-      │           ▼             ▼              ▼                           │
-      │    ┌─────────────┐ ┌─────────┐ ┌────────────┐                    │
-      │    │queue.append │ │map.put  │ │ User       │                    │
-      │    │.v1 Circuit  │ │.v1 Circ │ │ Circuits   │                    │
-      │    └──────┬──────┘ └────┬────┘ └─────┬──────┘                    │
-      │           │             │             │                            │
-      │           ▼             ▼             ▼                            │
-      │    ┌────────────────────────────────────────┐                     │
-      │    │       Witness Attestation (PoVC)        │                     │
-      │    │       8D Resource Metering               │                     │
-      │    └──────────────────┬─────────────────────┘                     │
-      │                       │                                            │
-      │           ┌───────────┼───────────┐                                │
-      │           ▼           ▼           ▼                                │
-      │    ┌───────────┐ ┌─────────┐ ┌──────────┐                        │
-      │    │ Lex Stream│ │Lex State│ │ Lex      │                        │
-      │    │ (persist) │ │ (root)  │ │ (govern) │                        │
-      │    └─────┬─────┘ └────┬────┘ └────┬─────┘                        │
-      │          │             │           │                               │
-      │          └──────────┬──┘           │                               │
-      │                     │              │                               │
-      │  ┌──────────────────┼──────────────┼───────────────────────┐      │
-      │  │  EXECUTION TARGET│              │                       │      │
-      │  │  ┌───────────────┴──┐  ┌────────┴────────────────┐     │      │
-      │  │  │ CPU (Rust/WASM)  │  │ FPGA (ESCIR→Verilog)    │     │      │
-      │  │  │ ~100ns append    │  │ ~10ns append             │     │      │
-      │  │  │ ~400μs signed    │  │ ~400ns signed (PRIME)    │     │      │
-      │  │  └──────────────────┘  └─────────────────────────┘     │      │
-      │  └─────────────────────────────────────────────────────────┘      │
-      │                     │                                              │
-      │                     ├─────────────────────────────────────────────▶│
-      │                     │  ESF events on lattice paths                 │
-      │◀────────────────────┤                                              │
-      │  translate_egress() │  WireAdapter.emit()                          │
-```
-
----
-
-## 3. Phase 1: Marketplace Infrastructure
-
-Phase 1 is fully specified by the upstream specs. Implementation creates:
-
-| Deliverable | Spec | Crate/Location |
-|-------------|------|----------------|
-| `estream-component.toml` manifest | [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) §2 | Parsed in `estream-cli` |
-| `GitHubRegistry` | [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) §6 | `crates/estream-escir/src/composition/github.rs` |
-| CLI commands | [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) §5 | `crates/estream-cli/src/commands/marketplace.rs` |
-| ML-DSA-87 signing | [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) §4 | `crates/estream-kernel/src/pq/sign.rs` (existing) |
-| ESF schema resolution | [ESF_SCHEMA_COMPOSITION_SPEC.md](../protocol/ESF_SCHEMA_COMPOSITION_SPEC.md) | `crates/estream-escir/src/esf.rs` (extend) |
-| Package format | [SMARTCIRCUIT_PACKAGE_FORMAT_SPEC.md](./SMARTCIRCUIT_PACKAGE_FORMAT_SPEC.md) | `crates/estream-cli/src/commands/marketplace.rs` |
-
-### 3.1 Implementation Checklist
-
-- [ ] Parse `estream-component.toml` manifest (all fields per §2 of Registry spec)
-- [ ] `GitHubRegistry` implementing existing `Registry` trait from `composition/registry.rs`
-- [ ] `estream marketplace search` command
-- [ ] `estream marketplace install` command with dependency resolution
-- [ ] `estream marketplace publish` command with ML-DSA-87 signing
-- [ ] `estream marketplace verify` command
-- [ ] `estream marketplace scaffold` command
-- [ ] ESF schema provides/requires resolution during install
-- [ ] Package archive creation (deterministic tar.gz)
-- [ ] `SIGNATURE.ml-dsa` generation and verification
-- [ ] Local cache at `$HOME/.estream/cache/`
-- [ ] `estream-workspace.toml` tracking
-
----
-
-## 4. Platform Stream Primitives (Moved)
-
-> **This content has been moved to the canonical [Stream Architecture Specification v0.8.1](../architecture/STREAM_ARCHITECTURE_SPEC.md).**
->
-> The Stream Architecture Spec v0.8.1 defines:
-> - **Typed stream patterns**: event, state, signal, curated, log, media, transaction, mpc_session (§2)
-> - **Growing context pipelines**: Multi-stage widening ESF schemas (§3)
-> - **ESCIR pattern annotations**: stream_pattern, topology, governance, sla (§4)
-> - **Stream operators**: filter, transform, aggregate, throttle, join, materialize, pipeline (§13)
-> - **Audience filters**: Crypto-enforced field visibility with governance auto-generation (§14)
-> - **Adaptive observation**: StreamSight dynamic telemetry L0-L3 (§15)
-> - **Governance lifecycle**: Genesis, lex activation, protocol upgrade, emergency (§16)
-> - **Transport & addressing**: IPv6, SRv6, geo-avoidance, ESP tunnels (§17)
-> - **DNS & naming**: gTLD hybrid DNS+lex resolution (§18)
-> - **High availability**: SLA-driven HA clusters with witness braiding (§19)
-> - **Multi-party computation**: Garbled circuits, PSI, threshold decryption (§20)
-> - **Deployment pipeline**: Growing context release flow with PoVC (§21)
-> - **Circuit references**: Lex-path-based URI scheme (§22)
-> - **Codegen contract**: Rust and Verilog generation per annotation (§5)
-> - **Typed governance primitives**: SOC2, PCI-DSS, HIPAA, GDPR (§6)
-> - **Lex hierarchy & typed consensus**: N-level with governance cascade (§7)
-> - **Declarative SLAs**: Latency, durability, geo, throughput targets (§8)
-> - **Multi-language SDK design**: Rust, Swift, Kotlin, Go, TypeScript, Python (§9)
->
-> Queue Streams (`estream-queue`) and State Maps (`estream-map`) are now expressed as
-> **event streams** and **state streams** respectively, implemented as SmartCircuit-driven
-> typed stream patterns on lex FIFO and KV storage primitives.
->
-> See the [Stream Architecture Implementation Plan](../architecture/STREAM_ARCHITECTURE_IMPLEMENTATION_PLAN.md)
-> for the phased build roadmap.
-
----
-
-## ~~5. Phase 2: State Maps~~ (Moved — see §4 above)
-
----
-
-## 5. `WireAdapter` Trait + `estream-wire-mqtt`
-
-Fully specified in [WIRE_ADAPTER_TRAIT_SPEC.md](../protocol/WIRE_ADAPTER_TRAIT_SPEC.md).
-
-### 5.1 Implementation Checklist
-
-- [ ] `WireAdapter` trait in `crates/estream-kernel/src/wire.rs`
-- [ ] `WireAdapterFactory` and `AdapterRegistry`
-- [ ] `AdapterError`, `HealthStatus`, `AdapterDescriptor`, `AdapterSchemas` types
-- [ ] `AdapterEvent` for StreamSight integration
-- [ ] `EsfMessage` pivot format
-- [ ] `estream-wire-mqtt` crate: MQTT 5.0 reference implementation
-  - [ ] `MqttConfig` with broker, auth, TLS, subscriptions
-  - [ ] `MqttAdapter` implementing `WireAdapter`
-  - [ ] Topic-to-schema mapping for ESF translation
-  - [ ] Reconnect with exponential backoff
-  - [ ] StreamSight event emission
-- [ ] Compliance test suite for `WireAdapter` implementations
-- [ ] Journey tests in `crates/estream-test/`
-
----
-
-## 6. Phase 3: Domain Schema Packs
-
-Three ESF schema packs covering the most common integration domains. Each is published as an `esf-schema` component to the marketplace.
-
-### 6.1 `esf-iot` — IoT Schema Pack
-
-**Component:** `esf-iot`  
-**Schemas:** Telemetry, Command, Alert
-
-```yaml
-# schemas/iot-telemetry.esf.yaml
-version: "1.0"
-namespace: estream.iot
-
-schemas:
-  IoTTelemetry:
-    description: "Real-time device telemetry reading"
-    lattice: estream.iot.telemetry
-    path: /devices/{device_id}/telemetry
-    fields:
-      device_id:
-        type: string(64)
-        description: "Unique device identifier"
-      timestamp:
-        type: timestamp
-        description: "Reading timestamp (MTP)"
-      metric_name:
-        type: string(128)
-        description: "Metric identifier"
-      value:
-        type: f64
-        description: "Metric value"
-      unit:
-        type: string(32)
-        description: "Unit of measurement"
-        optional: true
-      quality:
-        type: u8
-        description: "Data quality indicator (0-100)"
-        optional: true
-      location:
-        type: object
-        fields:
-          latitude: { type: f64 }
-          longitude: { type: f64 }
-          altitude_m: { type: f64, optional: true }
-        optional: true
-      metadata:
-        type: "map(string, string)"
-        description: "Key-value metadata"
-        optional: true
-    retention:
-      duration_days: 90
-
-  IoTCommand:
-    description: "Command sent to a device"
-    lattice: estream.iot.command
-    path: /devices/{device_id}/commands
-    fields:
-      command_id:
-        type: bytes32
-        description: "Unique command identifier"
-      device_id:
-        type: string(64)
-      command_type:
-        type: string(64)
-        description: "Command type identifier"
-      payload:
-        type: bytes
-        description: "Command payload"
-      issued_at:
-        type: timestamp
-      issued_by:
-        type: bytes32
-        description: "Issuer public key fingerprint"
-        privacy: encrypted
-      expires_at:
-        type: timestamp
-        optional: true
-      signature:
-        type: pq_signature
-        description: "ML-DSA-87 command signature"
-    retention:
-      duration_days: 30
-
-  IoTAlert:
-    description: "Device alert or alarm"
-    lattice: estream.iot.alert
-    path: /devices/{device_id}/alerts
-    fields:
-      alert_id:
-        type: bytes32
-      device_id:
-        type: string(64)
-      severity:
-        type: AlertSeverity
-      message:
-        type: string
-      triggered_at:
-        type: timestamp
-      acknowledged_at:
-        type: timestamp
-        optional: true
-      resolved_at:
-        type: timestamp
-        optional: true
-      trigger_value:
-        type: f64
-        optional: true
-      threshold:
-        type: f64
-        optional: true
-    retention:
-      duration_days: 365
-
-enums:
-  AlertSeverity:
-    values:
-      - Info
-      - Warning
-      - Critical
-      - Emergency
-```
-
-### 6.2 `esf-trading` — Trading Schema Pack
-
-**Component:** `esf-trading`  
-**Schemas:** EStreamOrder, EStreamFill, EStreamQuote, EStreamMarketData
-
-```yaml
-# schemas/trading-order.esf.yaml
-version: "1.0"
-namespace: estream.trading
-
-schemas:
-  EStreamOrder:
-    description: "Order submission"
-    lattice: estream.trading.order
-    path: /trading/orders/{order_id}
-    fields:
-      order_id:
-        type: bytes32
-      client_order_id:
-        type: string(64)
-      instrument:
-        type: string(32)
-        description: "Instrument symbol"
-      side:
-        type: OrderSide
-      order_type:
-        type: OrderType
-      quantity:
-        type: u64
-        description: "Quantity in base units"
-      price:
-        type: u64
-        description: "Price in quote units (fixed-point, 8 decimals)"
-        optional: true
-      time_in_force:
-        type: TimeInForce
-      submitted_at:
-        type: timestamp
-      submitter:
-        type: bytes32
-        privacy: encrypted
-    retention:
-      duration_days: 365
-
-  EStreamFill:
-    description: "Trade execution / fill"
-    lattice: estream.trading.fill
-    path: /trading/fills/{fill_id}
-    fields:
-      fill_id:
-        type: bytes32
-      order_id:
-        type: bytes32
-      instrument:
-        type: string(32)
-      side:
-        type: OrderSide
-      quantity:
-        type: u64
-      price:
-        type: u64
-      fee:
-        type: u64
-        description: "Transaction fee in quote units"
-      executed_at:
-        type: timestamp
-      venue:
-        type: string(32)
-        optional: true
-    retention:
-      duration_days: 365
-
-  EStreamQuote:
-    description: "Bid/ask quote"
-    lattice: estream.trading.quote
-    path: /trading/quotes/{instrument}
-    fields:
-      instrument:
-        type: string(32)
-      bid_price:
-        type: u64
-      bid_quantity:
-        type: u64
-      ask_price:
-        type: u64
-      ask_quantity:
-        type: u64
-      timestamp:
-        type: timestamp
-      source:
-        type: string(32)
-    retention:
-      duration_hours: 24
-
-  EStreamMarketData:
-    description: "Market data snapshot (OHLCV)"
-    lattice: estream.trading.marketdata
-    path: /trading/market-data/{instrument}
-    fields:
-      instrument:
-        type: string(32)
-      interval:
-        type: MarketDataInterval
-      open:
-        type: u64
-      high:
-        type: u64
-      low:
-        type: u64
-      close:
-        type: u64
-      volume:
-        type: u64
-      timestamp:
-        type: timestamp
-    retention:
-      duration_days: 365
-
-enums:
-  OrderSide:
-    values: [Buy, Sell]
-  OrderType:
-    values: [Market, Limit, Stop, StopLimit]
-  TimeInForce:
-    values: [GTC, IOC, FOK, DAY]
-  MarketDataInterval:
-    values: [Tick, Sec1, Min1, Min5, Min15, Hour1, Day1]
-```
-
-### 6.3 `esf-carbon` — Carbon Markets Schema Pack
-
-**Component:** `esf-carbon`  
-**Schemas:** CarbonCredit, CarbonAttestation, CarbonMint
-
-```yaml
-# schemas/carbon-credit.esf.yaml
-version: "1.0"
-namespace: estream.carbon
-
-schemas:
-  CarbonCredit:
-    description: "Verified carbon credit"
-    lattice: estream.carbon.credit
-    path: /carbon/credits/{credit_id}
-    fields:
-      credit_id:
-        type: bytes32
-      project_id:
-        type: string(64)
-        description: "Carbon offset project identifier"
-      vintage_year:
-        type: u16
-        description: "Year the offset was generated"
-      credit_type:
-        type: CreditType
-      tonnes_co2e:
-        type: u64
-        description: "Tonnes CO2 equivalent (fixed-point, 6 decimals)"
-      registry:
-        type: string(32)
-        description: "Originating registry (Verra, Gold Standard, etc.)"
-      serial_number:
-        type: string(128)
-        description: "Registry serial number"
-      status:
-        type: CreditStatus
-      owner:
-        type: bytes32
-        privacy:
-          default_level: encrypted
-          audiences:
-            - audience: owner
-              level: public
-            - audience: auditor
-              level: public
-      issued_at:
-        type: timestamp
-      retired_at:
-        type: timestamp
-        optional: true
-    retention:
-      duration_days: 3650
-
-  CarbonAttestation:
-    description: "Third-party verification attestation"
-    lattice: estream.carbon.attestation
-    path: /carbon/attestations/{attestation_id}
-    fields:
-      attestation_id:
-        type: bytes32
-      credit_id:
-        type: bytes32
-      verifier:
-        type: bytes32
-        description: "Verifier public key"
-      methodology:
-        type: string(64)
-        description: "Verification methodology"
-      verified_tonnes:
-        type: u64
-      confidence_pct:
-        type: u8
-        description: "Confidence level (0-100)"
-      attested_at:
-        type: timestamp
-      signature:
-        type: pq_signature
-        description: "ML-DSA-87 attestation signature"
-      evidence_hash:
-        type: bytes32
-        description: "SHA3-256 hash of supporting evidence"
-    retention:
-      duration_days: 3650
-
-  CarbonMint:
-    description: "Minting event for new carbon credits"
-    lattice: estream.carbon.mint
-    path: /carbon/mints/{mint_id}
-    fields:
-      mint_id:
-        type: bytes32
-      project_id:
-        type: string(64)
-      credit_ids:
-        type: "array(bytes32)"
-        description: "Credits minted in this batch"
-      total_tonnes:
-        type: u64
-      minted_at:
-        type: timestamp
-      minter:
-        type: bytes32
-        privacy: encrypted
-      attestation_ids:
-        type: "array(bytes32)"
-        description: "Supporting attestations"
-      governance_approval:
-        type: bytes32
-        description: "Governance approval reference"
-        optional: true
-    retention:
-      duration_days: 3650
-
-enums:
-  CreditType:
-    values:
-      - Avoidance
-      - Removal
-      - Sequestration
-      - Reduction
-  CreditStatus:
-    values:
-      - Active
-      - Retired
-      - Cancelled
-      - Pending
-      - Suspended
-```
-
-### 6.4 Schema Pack Manifest
-
-Each pack uses an `estream-component.toml` of category `esf-schema`:
+### 3.1 Full Schema
 
 ```toml
-# esf-iot/estream-component.toml
+[component]
+name = "estream-wire-fix"
+version = "1.0.0"
+category = "wire-adapter"
+description = "FIX protocol adapter for eStream"
+license = "Apache-2.0"
+repository = "https://github.com/toddrooke/estream-wire-fix"
+homepage = "https://estream.io/components/wire-fix"
+readme = "README.md"
+keywords = ["fix", "trading", "capital-markets", "protocol"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/toddrooke"
+
+[component.marketplace]
+pricing = "free"        # free | one-time | subscription | usage-based | enterprise | freemium
+visibility = "open"     # open | interface | compiled | licensed
+
+[component.estream]
+min_version = "0.8.0"
+max_version = "1.0.0"   # optional
+
+[component.dependencies]
+esf-trading = "^1.0.0"
+
+[component.schemas]
+provides = ["FixNewOrderSingle", "FixExecutionReport", "FixMarketData"]
+requires = ["EStreamOrder", "EStreamFill"]
+
+[component.circuits]
+provides = ["fix_parser_circuit", "fix_order_router"]
+target = ["cpu", "fpga"]
+
+# Wire adapter metadata (category = "wire-adapter" only)
+[component.wire_adapter]
+protocol_family = "financial"
+transports = ["tcp", "tls"]
+bidirectional = true
+request_response = true
+
+# Console widget metadata (category = "console-widget" only)
+[component.widget]
+widget_category = "analytics"
+roles = ["operator", "admin"]
+sizes = ["small", "medium", "large"]
+data_sources = ["eslite"]
+
+# FPGA metadata (category = "fpga-circuit" only)
+[component.fpga]
+device_family = ["xcvu9p", "xcvu13p"]
+resource_estimate = { luts = 50000, brams = 100, dsps = 0 }
+
+[component.include]
+schemas = ["schemas/*.data.yaml"]
+circuits = ["circuits/*.fl"]
+tests = ["tests/golden/**"]
+fpga = ["fpga/*.bit"]
+```
+
+### 3.2 Name Conventions
+
+- **Format**: lowercase alphanumeric with hyphens (`[a-z0-9-]+`)
+- **Official prefixes**: `estream-*` and `esf-*` (reserved for eStream team)
+- **Third-party**: `@publisher/name` format (e.g., `@synergy-carbon/impact-counter`)
+
+### 3.3 Version Requirements
+
+| Syntax | Meaning |
+|--------|---------|
+| `^1.2.3` | Compatible (default): `>=1.2.3, <2.0.0` |
+| `~1.2.3` | Patch-level: `>=1.2.3, <1.3.0` |
+| `>=1.0.0` | Minimum version |
+| `=1.2.3` | Exact version |
+| `*` | Any version |
+
+---
+
+## 4. Package Format
+
+### 4.1 Standard Directory Structure
+
+```
+my-component/
+├── estream-component.toml         # Manifest (required)
+├── README.md                      # Documentation (required)
+├── LICENSE                        # License file
+├── CHANGELOG.md                   # Version history
+├── schemas/
+│   └── *.data.yaml                # ESF schema definitions
+├── circuits/
+│   ├── *.fl                       # FastLang circuit definitions
+│   └── *.circuit.yaml             # ESCIR circuit definitions
+├── src/
+│   └── lib.rs                     # Rust implementation (wire adapters)
+├── tests/
+│   └── golden/
+│       ├── manifest.toml          # Test vector manifest
+│       └── *.json                 # Golden test vectors
+├── fpga/
+│   ├── manifest.toml              # Bitstream manifest
+│   └── *.bit                      # FPGA bitstreams
+├── widgets/
+│   ├── widget.manifest.yaml       # Widget metadata
+│   ├── src/                       # TypeScript/TSX source
+│   └── dist/                      # Built ES module bundle
+└── SIGNATURE.ml-dsa               # ML-DSA-87 signature (generated on publish)
+```
+
+### 4.2 Minimum Viable Package
+
+```
+my-component/
+├── estream-component.toml
+├── README.md
+└── circuits/
+    └── my-circuit.fl
+```
+
+### 4.3 Test Vector Format
+
+Golden test vectors are JSON files defining input/output pairs:
+
+```json
+{
+  "name": "new-order-buy-limit",
+  "description": "Standard buy limit order",
+  "circuit": "fix_parser_circuit",
+  "input": {
+    "fix_message": "8=FIX.4.4|35=D|49=SENDER|56=TARGET|..."
+  },
+  "expected_output": {
+    "order": {
+      "side": "buy",
+      "type": "limit",
+      "quantity": 1000,
+      "price": 150.25
+    }
+  },
+  "expected_witness_tier": 2
+}
+```
+
+Test vector manifest (`tests/golden/manifest.toml`):
+
+```toml
+[test_suite]
+name = "estream-wire-fix golden tests"
+circuit = "fix_parser_circuit"
+version = "1.0.0"
+
+[[vectors]]
+file = "new-order.json"
+tags = ["order", "happy-path"]
+
+[[vectors]]
+file = "execution-report.json"
+tags = ["fill", "happy-path"]
+```
+
+### 4.4 Deterministic Archive
+
+The published package is a deterministic `tar.gz`:
+- Files sorted alphabetically
+- Timestamps zeroed
+- Owner/group set to `0/0`
+- Permissions normalized to `644` (files) / `755` (dirs)
+
+This ensures the SHA3-256 checksum is reproducible.
+
+---
+
+## 5. Stream API
+
+All marketplace operations flow over eStream's native lattice streams, defined in FastLang. See `streams/marketplace_streams.fl` for the full data declarations.
+
+### 5.1 Topic Map
+
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/marketplace/index` | state | Full registry index, real-time updates |
+| `/marketplace/search` | event | Emit search query, receive results |
+| `/marketplace/component/{name}` | state | Component detail |
+| `/marketplace/component/{name}/reviews` | event | Reviews stream |
+| `/marketplace/install/{requestId}` | event | Install progress |
+| `/marketplace/publish/{requestId}` | event | Publish progress |
+| `/marketplace/licenses` | state | User's active licenses |
+| `/marketplace/publishers` | state | Publisher identity registry |
+
+### 5.2 FastLang Data Declarations
+
+The marketplace data interface is defined in `streams/marketplace_streams.fl` using `data` declarations with verbs:
+
+```fastlang
+data ComponentSummary : marketplace v1 {
+    name: ComponentName,
+    version: VersionString,
+    category: CategoryId,
+    publisher: PublisherName,
+    publisher_verified: bool,
+    description: bytes(512),
+    pricing_type: u8,
+    pricing_amount_es: u64,
+    visibility: u8,
+    badges: u32,
+    rating_x100: u32,
+    download_count: u64,
+    source_hash: Checksum,
+    updated_at: u64,
+}
+    encode
+    observe metrics [download_count, rating_x100, pricing_type, category] level adaptive
+```
+
+### 5.3 Browser SDK Integration
+
+The `@estream/sdk-browser` provides typed React hooks for marketplace topics:
+
+```typescript
+import {
+  useMarketplaceIndex,
+  useMarketplaceComponent,
+  useMarketplaceSearch,
+  useMarketplaceInstall,
+  useMarketplaceLicenses,
+} from '@estream/sdk-browser';
+```
+
+These use the same `useSubscription<T>(topic)` / `useEmit(topic)` pattern as topology, circuits, and governance hooks.
+
+### 5.4 Trust Boundary
+
+```
+TypeScript (UI-only, untrusted)      Rust/WASM (trusted)
+├── React components                  ├── ML-DSA-87 verify_signature
+├── Zustand store                     ├── ML-DSA-87 sign_message
+├── ReactFlow canvas                  ├── SHA3-256 hash
+└── useSubscription/useEmit           ├── RBAC verify_token
+    └── WebTransport/QUIC ────────────└── Spark auth verify
+         └── Edge Node (lattice streams)
+```
+
+TypeScript never touches signing keys, session tokens, or signature verification.
+
+---
+
+## 6. Registry Protocol
+
+### 6.1 GitHub-Backed Registry
+
+The registry is a GitHub repository (`estream-io/registry`):
+
+```
+estream-io/registry/
+├── README.md
+├── config.json
+├── index/
+│   ├── esf-schema/
+│   │   └── esf-trading/
+│   │       ├── metadata.json
+│   │       └── 1.0.0/
+│   │           ├── estream-component.toml
+│   │           ├── SIGNATURE.ml-dsa
+│   │           └── checksum.sha3
+│   ├── wire-adapter/
+│   ├── smart-circuit/
+│   ├── fpga-circuit/
+│   ├── integration/
+│   └── console-widget/
+└── publishers/
+    ├── estream.json
+    └── synergy-carbon.json
+```
+
+### 6.2 `metadata.json`
+
+```json
+{
+  "name": "estream-wire-mqtt",
+  "category": "wire-adapter",
+  "publisher": "estream",
+  "description": "MQTT 5.0 protocol adapter for eStream",
+  "versions": [
+    {
+      "version": "1.0.0",
+      "published_at": "2026-02-10T12:00:00Z",
+      "checksum_sha3": "a1b2c3...",
+      "signature_pubkey_id": "estream-signing-key-01",
+      "yanked": false,
+      "estream_min_version": "0.8.0",
+      "archive_url": "https://github.com/estream-io/registry/releases/download/estream-wire-mqtt-1.0.0/package.tar.gz"
+    }
+  ],
+  "latest": "1.0.0",
+  "keywords": ["mqtt", "iot", "messaging"],
+  "badges": ["official", "tested"],
+  "stats": { "downloads": 0, "stars": 0 }
+}
+```
+
+### 6.3 `publishers/{name}.json`
+
+```json
+{
+  "name": "estream",
+  "display_name": "eStream Contributors",
+  "url": "https://github.com/polyquantum",
+  "verified": true,
+  "signing_keys": [
+    {
+      "key_id": "estream-signing-key-01",
+      "algorithm": "ML-DSA-87",
+      "public_key_hex": "abcd1234...",
+      "created_at": "2026-01-01T00:00:00Z",
+      "expires_at": "2028-01-01T00:00:00Z",
+      "status": "active"
+    }
+  ]
+}
+```
+
+### 6.4 Version Resolution
+
+```
+1. Fetch index/{category}/{name}/metadata.json
+2. Parse version requirement (default: latest non-yanked)
+3. Filter: remove yanked, check estream_min_version compatibility
+4. Select highest matching version (semver sort)
+5. Resolve transitive dependencies (depth-first)
+6. Detect version conflicts and circular dependencies
+7. Download package archives in topological order
+8. Verify signatures and checksums
+9. Install to workspace
+```
+
+### 6.5 Local Cache
+
+```
+$HOME/.estream/cache/
+├── registry/
+│   └── index-snapshot.json
+├── packages/
+│   └── estream-wire-fix/1.0.0/
+│       ├── package.tar.gz
+│       └── estream-component.toml
+└── config.toml
+```
+
+Cache TTL defaults to 24 hours. `estream marketplace install --force` bypasses cache.
+
+### 6.6 Installation Targets
+
+| Category | Install Path |
+|----------|-------------|
+| `esf-schema` | `schemas/` |
+| `wire-adapter` | `adapters/` |
+| `smart-circuit` | `circuits/` |
+| `fpga-circuit` | `fpga/` |
+| `integration` | `integrations/` |
+| `console-widget` | `widgets/` |
+
+### 6.7 Workspace Integration
+
+After installation, components are tracked in `estream-workspace.toml`:
+
+```toml
+[dependencies]
+estream-wire-fix = "1.0.0"
+esf-trading = "1.2.0"
+
+[dependencies.estream-wire-fix]
+version = "1.0.0"
+checksum = "a1b2c3d4..."
+installed_at = "2026-02-10T12:00:00Z"
+```
+
+### 6.8 Multiple Registries
+
+Resolution order: local workspace → default registry → additional registries (in declaration order). Scoped names (`@publisher/name`) resolve against the registry where the publisher is registered.
+
+### 6.9 Offline Support
+
+```bash
+estream marketplace export estream-wire-fix --output ./offline-bundle/
+estream marketplace install --from ./offline-bundle/
+```
+
+---
+
+## 7. ML-DSA-87 Signing
+
+All published components are signed with ML-DSA-87 (FIPS 204) for post-quantum integrity. The signing model uses a Merkle tree of individual file hashes for tamper detection.
+
+### 7.1 Signing Process
+
+```
+1. List all files in the package (sorted alphabetically)
+2. Compute SHA3-256 hash of each file
+3. Build a Merkle tree from the file hashes
+4. Sign the Merkle root with ML-DSA-87 private key
+5. Write SIGNATURE.ml-dsa with root, per-file hashes, and signature
+```
+
+### 7.2 Signing Workflow
+
+```
+Publisher                              Registry
+   │                                      │
+   │  1. estream marketplace publish      │
+   │     ├─ Build deterministic archive   │
+   │     ├─ Compute Merkle root           │
+   │     ├─ Sign with ML-DSA-87           │
+   │     └─ Create SIGNATURE.ml-dsa       │
+   │                                      │
+   │  2. Submit PR to registry repo       │
+   │     ├─ index/{cat}/{name}/{ver}/     │
+   │     ├─ estream-component.toml        │
+   │     ├─ SIGNATURE.ml-dsa              │
+   │     └─ checksum.sha3                 │
+   │                                      │
+   │                  ◀──── 3. CI verifies │
+   │                        ├─ Signature valid?
+   │                        ├─ Publisher key in publishers/?
+   │                        ├─ Version increment correct?
+   │                        ├─ Manifest validates?
+   │                        └─ Archive matches checksum?
+   │                                      │
+   │                  ◀──── 4. Merge PR    │
+   │                        (auto or review)
+   │                                      │
+   │  5. Upload archive to GitHub Release │
+```
+
+### 7.3 `SIGNATURE.ml-dsa` Format
+
+```json
+{
+  "algorithm": "ML-DSA-87",
+  "key_id": "estream-signing-key-01",
+  "signed_at": "2026-02-10T12:00:00Z",
+  "merkle_root": "a1b2c3d4...",
+  "file_hashes": {
+    "estream-component.toml": "f1e2d3...",
+    "circuits/fix-parser.fl": "b4c5d6...",
+    "schemas/order.data.yaml": "e7f8a9..."
+  },
+  "signature_hex": "0123456789abcdef..."
+}
+```
+
+### 7.4 Verification
+
+```rust
+pub fn verify_package(
+    signature_file: &SignatureFile,
+    package_dir: &Path,
+    publisher_keys: &PublisherKeys,
+) -> Result<VerificationResult, VerifyError> {
+    // 1. Recompute file hashes
+    for (path, expected_hash) in &signature_file.file_hashes {
+        let content = std::fs::read(package_dir.join(path))?;
+        let actual = estream_kernel::crypto::sha3_256(&content);
+        if hex::encode(&actual) != *expected_hash {
+            return Ok(VerificationResult::TamperedFile(path.clone()));
+        }
+    }
+
+    // 2. Recompute Merkle root
+    let computed_root = compute_merkle_root(&signature_file.file_hashes);
+    if computed_root != signature_file.merkle_root {
+        return Ok(VerificationResult::MerkleRootMismatch);
+    }
+
+    // 3. Verify ML-DSA-87 signature over the Merkle root
+    let pubkey = publisher_keys
+        .get(&signature_file.key_id)
+        .ok_or(VerifyError::UnknownKey(signature_file.key_id.clone()))?;
+
+    let valid = estream_kernel::crypto::verify_mldsa87(
+        pubkey.as_bytes(),
+        computed_root.as_bytes(),
+        &hex::decode(&signature_file.signature_hex)?,
+    );
+
+    if valid {
+        Ok(VerificationResult::Valid {
+            key_id: signature_file.key_id.clone(),
+            signed_at: signature_file.signed_at.clone(),
+        })
+    } else {
+        Ok(VerificationResult::InvalidSignature)
+    }
+}
+```
+
+### 7.5 WASM Trust Boundary
+
+The same Rust crypto code runs in two targets:
+- **CLI**: Native Rust via `estream_kernel::crypto`
+- **Browser**: WASM via `estream-app-wasm` (`verify_signature`, `sign_message`, `hash_sha3_256`)
+
+TypeScript never handles signing keys or performs verification directly.
+
+---
+
+## 8. Pricing and Licensing
+
+### 8.1 Pricing Models
+
+```rust
+pub enum Pricing {
+    Free,
+    OneTime { price_es: u64 },
+    Subscription { monthly_es: u64, annual_discount_pct: u8 },
+    UsageBased { per_execution_es: Fixed64, free_tier_executions: u64 },
+    Enterprise,
+    Freemium { free_features: Vec<String>, premium_price_es: u64, premium_features: Vec<String> },
+}
+```
+
+### 8.2 Revenue Split
+
+| Pricing Type | Creator | Platform | Burn |
+|-------------|---------|----------|------|
+| OneTime | 85% | 10% | 5% |
+| Subscription | 90% | 5% | 5% |
+| UsageBased | 85% | 10% | 5% |
+| Enterprise | 80% | 15% | 5% |
+| Freemium | 85% | 10% | 5% |
+
+### 8.3 License Types
+
+```rust
+pub enum LicenseType {
+    Perpetual,
+    Subscription { period: SubscriptionPeriod },
+    UsageBased { max_executions: u64 },
+    Trial { duration_days: u8 },
+}
+```
+
+### 8.4 Real-Time Metering
+
+Payments happen in real-time, in parallel with execution. Metering runs as a parallel circuit with zero overhead, settled atomically at execution end:
+
+```
+[Input] → [Component A] → [Component B] → [Output]
+               │                  │
+               ▼                  ▼
+    Metering Circuit (parallel, zero overhead)
+    Component A: 0.002 ES  |  Component B: 0.001 ES
+    ──────────────────────────────────────────────
+    Single Atomic Settlement at execution end
+```
+
+### 8.5 Cost Estimation
+
+```rust
+pub fn estimate_cost(circuit: &ESCIR) -> CostEstimate {
+    let mut total = Fixed64::ZERO;
+    for component in circuit.components() {
+        total += component.estimated_cost_per_exec();
+    }
+    total += circuit.witness_tier().cost();
+    total += platform_fee(total);
+    CostEstimate { min: total * 0.9, max: total * 1.1, expected: total }
+}
+```
+
+---
+
+## 9. Quality and Trust
+
+### 9.1 Badges
+
+```rust
+pub enum Badge {
+    Verified,                                    // Identity verified
+    Tested { test_count: u32, coverage_pct: u8 }, // Automated tests pass
+    Audited { auditor: String, report_url: String, date: DateTime<Utc> },
+    Certified { level: CertificationLevel, expires: DateTime<Utc> },
+    Official,                                    // Built by eStream team
+    CommunityChoice { year: u16 },
+    HighPerformance { benchmark_score: u32 },
+    PostQuantum,
+}
+
+pub enum CertificationLevel { Bronze, Silver, Gold }
+```
+
+| Badge | Requirements | Cost |
+|-------|-------------|------|
+| Verified | KYC/identity verification | Free |
+| Tested | CI/CD with >80% coverage | Free |
+| Audited | Third-party audit report | Audit cost |
+| Certified | eStream team review + ongoing | 500 ES/year |
+| Official | Built by eStream team | N/A |
+
+### 9.2 FPGA Badges
+
+```rust
+pub enum FpgaBadge {
+    TimingVerified { fmax_mhz: u32, slack_ns: f32, tool: String },
+    FormallyVerified { tool: String, properties_checked: u32 },
+    ConstantTime,
+    CrossPlatform { targets: Vec<FpgaTarget> },
+    Simulated { tool: String, coverage_pct: u8 },
+    LowPower { watts: f32 },
+}
+```
+
+### 9.3 Reviews and Ratings
+
+```rust
+pub struct Review {
+    pub id: ReviewId,
+    pub component_id: ComponentId,
+    pub reviewer: Publisher,
+    pub rating: u8,  // 1-5
+    pub title: String,
+    pub body: String,
+    pub helpful_count: u32,
+    pub verified_purchase: bool,
+    pub created_at: DateTime<Utc>,
+}
+```
+
+Rating score uses weighted calculation: 40% rating, 30% popularity, 20% freshness, 10% quality badges.
+
+### 9.4 Moderation
+
+Automated checks: malware scanning, license compliance, dependency vulnerabilities, code quality. Manual review triggers: first publish, significant update, reported content, high-risk category.
+
+### 9.5 Dispute Resolution
+
+Dispute reasons: copyright claim, security vulnerability, false advertising, license violation. Status flow: Open → UnderReview → AwaitingResponse → Resolved/Escalated.
+
+---
+
+## 10. Creator Program
+
+### 10.1 Creator Tiers
+
+| Tier | Threshold | Benefits |
+|------|----------|---------|
+| **Starter** | Default | Basic analytics, community support |
+| **Growing** | 100+ ES/mo or 1K+ downloads | Detailed analytics, email support, featured in category |
+| **Established** | 1K+ ES/mo or 10K+ downloads | Advanced analytics, priority support, homepage featuring |
+| **Partner** | 10K+ ES/mo + invitation | Full analytics, dedicated account manager, co-marketing, roadmap input |
+
+---
+
+## 11. Console Widgets
+
+### 11.1 Widget Metadata
+
+Widgets include a `widget.manifest.yaml` alongside the component manifest:
+
+```yaml
+widget:
+  name: impact-counter
+  display_name: "Impact Counter"
+  icon: activity
+  default_size: medium
+  min_size: small
+  max_size: large
+  config_schema:
+    type: object
+    properties:
+      metric:
+        type: string
+        enum: [carbon_offset, energy_saved, revenue]
+        default: carbon_offset
+  data_sources:
+    - type: eslite
+      table: metrics
+      fields: [value, timestamp]
+```
+
+### 11.2 Bundle Format
+
+- **Format**: ES Module (`.mjs`), React component default export
+- **Max size**: 500KB (gzipped)
+- **Externalized peers**: `react`, `react-dom`, `@estream/sdk-browser`
+- **CSP compliant**: No inline scripts, no eval
+
+### 11.3 Trust Levels
+
+| Level | Access | Isolation | Publisher Requirement |
+|-------|--------|-----------|---------------------|
+| **Trusted** | Full Console API | Direct React render | Official eStream |
+| **Verified** | Scoped data via WidgetGateway | Scoped provider | Governance-reviewed |
+| **Community** | postMessage bridge only | Sandboxed iframe | Any publisher |
+
+### 11.4 Security Model
+
+- All widgets verified with ML-DSA-87 via WASM RBAC module
+- Community widgets run in sandboxed iframes with CSP: `default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'`
+- Widget publish requires governance circuit: `estream.marketplace.widget.publish.v1`
+
+---
+
+## 12. FPGA Components
+
+### 12.1 FPGA Resource Requirements
+
+```rust
+pub struct FpgaResources {
+    pub luts: u32,
+    pub bram_kb: u32,
+    pub dsp_slices: u32,
+    pub flip_flops: u32,
+    pub target_fmax_mhz: u32,
+    pub io_pins: u32,
+    pub estimated_power_watts: f32,
+}
+
+pub enum FpgaTarget {
+    Nexus, Artix, Kintex, Virtex,
+    Cyclone, Arria, Stratix, Generic,
+}
+```
+
+### 12.2 FPGA Pricing
+
+```rust
+pub enum FpgaPricing {
+    PerBitstream { price_es: u64 },
+    PerMessage { price_es: Fixed64, includes_per_month: u64 },
+    PerDevice { monthly_es: u64 },
+    SiteLicense { annual_es: u64 },
+}
+```
+
+### 12.3 SKU Tiers
+
+FPGA components commonly ship in multiple tiers with different resource/performance tradeoffs:
+
+| Tier | Typical Profile |
+|------|----------------|
+| **Lite** | Minimal resources, single protocol, no hardware acceleration |
+| **Standard** | Multi-protocol, StreamSight telemetry, moderate FPGA acceleration |
+| **Premium** | Full protocol suite, FPGA-only acceleration, enterprise SLA, formal verification |
+
+### 12.4 Bitstream Packaging
+
+FPGA bitstreams are included in the `fpga/` directory with a `manifest.toml`:
+
+```toml
+[[bitstreams]]
+target = "xcvu9p"
+file = "fix-parser-xcvu9p.bit"
+synthesis_tool = "Vivado 2024.2"
+resource_usage = { luts = 45000, brams = 90, dsps = 0, ffs = 38000 }
+timing = { fmax_mhz = 300, wns_ns = 0.5 }
+```
+
+Bitstreams are licensed under BSL 1.1 (source-available, time-delayed open-source).
+
+---
+
+## 13. Circuit Designer Integration
+
+The visual circuit designer provides an "app store" marketplace experience. See [Phase 4: Circuit Designer UX](https://github.com/polyquantum/estream/issues/133) for implementation details.
+
+### 13.1 Marketplace Panel
+
+The Sidebar gains a tab toggle: **Palette** | **Marketplace**. When Marketplace is active:
+
+```
+┌──────────────────────────────────────┐
+│  [Palette]  [Marketplace]            │
+├──────────────────────────────────────┤
+│  ┌────────────────────────────────┐  │
+│  │ 🔍 Search components...       │  │
+│  └────────────────────────────────┘  │
+│                                      │
+│  Featured                            │
+│  ┌──────────────────────────────┐   │
+│  │ estream-wire-fix    v1.0.0  │   │
+│  │ eStream      Official Free  │   │
+│  │ FIX protocol wire adapter   │   │
+│  │ ★★★★☆  1.2K installs       │   │
+│  │              [Install]      │   │
+│  └──────────────────────────────┘   │
+│                                      │
+│  Categories                          │
+│  ▸ Fintech (3)                      │
+│  ▸ Industrial (1)                   │
+│  ▸ Crypto (0)                       │
+│  ▸ IoT (0)                          │
+└──────────────────────────────────────┘
+```
+
+### 13.2 Component Detail Modal
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  estream-wire-fix v1.0.0                            [Close] │
+│  by eStream Contributors (verified)                         │
+│  ────────────────────────────────────────────────────────── │
+│  [Official] [Tested] [PostQuantum]         Free | Apache-2.0│
+│  ★★★★☆ 4.2 (47 reviews)  |  1,247 installs                │
+│  Source: Open  |  Targets: CPU, FPGA                        │
+│                                                              │
+│  Ports:                                                      │
+│   IN:  fix_raw (bytes)       OUT: orders (Order)            │
+│   IN:  session_cfg (Config)  OUT: executions (Fill)          │
+│                                                              │
+│  Resources: T2 witness, 2K compute, 8KB mem                 │
+│  Est. cost: 0.003 ES/exec                                   │
+│                                                              │
+│  Dependencies: esf-trading ^1.0.0 (auto-installed)          │
+│                                                              │
+│  [Install]  [View Source]  [View Docs]  [Add to Circuit]    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 13.3 Install Flow
+
+1. User clicks [Install]
+2. Browser emits to `/marketplace/install` via `useEmit`
+3. WASM: `verify_signature()` for ML-DSA-87 package signature
+4. WASM: `hash_sha3_256()` for checksum verification
+5. Progress shown via `/marketplace/install/{requestId}` subscription
+6. Installed component appears in Palette tab under "Marketplace" section
+7. Component is draggable onto canvas like any native node
+
+### 13.4 Publish-from-Designer
+
+1. Requires Spark authentication (indicator in toolbar)
+2. [Publish] opens dialog with auto-detected manifest
+3. Visibility selector (4 tiers), pricing model selector
+4. WASM: `sign_message()` signs package hash with ML-DSA-87
+5. Emits to `/marketplace/publish` stream
+
+### 13.5 Branding
+
+The circuit designer follows the [eStream Brand Guidelines](../../business/brand/estream/BRAND_GUIDELINES.md):
+- Primary: eStream Blue `#2F5CD5`, Slate 900 `#0F172A`, Slate 800 `#1E293B`
+- Typography: Inter (headings/body), JetBrains Mono (code/export)
+- Logo: `estream-logo-white.svg` in toolbar
+
+---
+
+## 14. CLI Commands
+
+All commands live under `estream marketplace` (aliased as `estream mp`).
+
+### 14.1 `estream marketplace search`
+
+```
+USAGE:
+    estream marketplace search [OPTIONS] <QUERY>
+
+OPTIONS:
+    -c, --category <CATEGORY>    Filter by category
+    -t, --tag <TAG>              Filter by keyword tag
+        --verified               Only verified publishers
+        --official               Only official eStream components
+        --limit <N>              Maximum results (default: 20)
+    -o, --output <FORMAT>        Output format: table (default), json
+```
+
+```
+$ estream marketplace search "FIX adapter"
+
+  NAME                  VERSION  CATEGORY       PUBLISHER   BADGES
+  estream-wire-fix      1.0.0    wire-adapter   estream     ✓ Official, Tested
+  fix-order-router      0.3.0    smart-circuit  acme-fin    Verified
+
+  2 results found
+```
+
+### 14.2 `estream marketplace install`
+
+```
+USAGE:
+    estream marketplace install [OPTIONS] <COMPONENT>[@VERSION]
+
+OPTIONS:
+        --dry-run    Show what would be installed
+        --force      Bypass cache
+        --no-verify  Skip signature verification (NOT recommended)
+        --save       Add to estream-workspace.toml
+```
+
+```
+$ estream marketplace install estream-wire-fix@^1.0.0
+
+  Resolving dependencies...
+    estream-wire-fix v1.0.0
+    └── esf-trading v1.2.0
+
+  Verifying ML-DSA-87 signatures...
+    estream-wire-fix v1.0.0 ✓ (key: estream-signing-key-01)
+    esf-trading v1.2.0 ✓ (key: estream-signing-key-01)
+
+  Installed 2 components (6 files) in 3.2s
+```
+
+### 14.3 `estream marketplace publish`
+
+```
+USAGE:
+    estream marketplace publish [OPTIONS] [PATH]
+
+OPTIONS:
+        --dry-run        Validate without publishing
+        --key <FILE>     ML-DSA-87 private key file
+        --skip-tests     Skip test vectors
+    -y, --yes            Skip confirmation
+```
+
+### 14.4 `estream marketplace verify`
+
+Verify ML-DSA-87 signature of an installed component.
+
+### 14.5 `estream marketplace scaffold`
+
+```
+$ estream marketplace scaffold wire-adapter estream-wire-amqp
+
+  Created estream-wire-amqp/
+  ├── estream-component.toml
+  ├── README.md
+  ├── schemas/
+  ├── circuits/
+  │   └── amqp-adapter.circuit.yaml
+  ├── tests/golden/
+  └── src/lib.rs
+```
+
+### 14.6 `estream marketplace list`
+
+List installed components from `estream-workspace.toml`.
+
+### 14.7 `estream marketplace info`
+
+Show detailed information for a specific component.
+
+---
+
+## 15. Error Codes
+
+| Code | Name | Description |
+|------|------|-------------|
+| `E001` | `ComponentNotFound` | No component with the given name |
+| `E002` | `VersionNotFound` | No matching version |
+| `E003` | `VersionConflict` | Incompatible version requirements |
+| `E004` | `CircularDependency` | Dependency cycle detected |
+| `E005` | `SignatureInvalid` | ML-DSA-87 verification failed |
+| `E006` | `ChecksumMismatch` | SHA3-256 checksum mismatch |
+| `E007` | `UnknownPublisher` | Publisher key not in registry |
+| `E008` | `ManifestInvalid` | Manifest validation failed |
+| `E009` | `NameReserved` | Uses reserved `estream-*` or `esf-*` prefix |
+| `E010` | `VersionNotIncremented` | Version not higher than latest |
+| `E011` | `PackageTooLarge` | Archive exceeds 50 MB |
+| `E012` | `NetworkError` | Cannot reach registry |
+| `E013` | `CacheCorrupted` | Local cache corrupted |
+| `E014` | `SchemaConflict` | Two components provide same schema |
+| `E015` | `PermissionDenied` | Insufficient publish permissions |
+
+---
+
+## 16. Configuration
+
+### 16.1 Global Config
+
+```toml
+# $HOME/.estream/config.toml
+
+[registry]
+default = "estream-io/registry"
+
+[[registry.sources]]
+name = "enterprise"
+url = "my-org/estream-registry-internal"
+token_env = "ESTREAM_ENTERPRISE_TOKEN"
+
+[cache]
+ttl_hours = 24
+max_size_mb = 500
+
+[signing]
+default_key = "$HOME/.estream/keys/signing-key.pem"
+```
+
+---
+
+## 17. Publishing Flow
+
+### 17.1 Pre-publish Validation
+
+1. Manifest completeness
+2. Name format (`[a-z0-9-]+` or `@[a-z0-9-]+/[a-z0-9-]+`)
+3. Version increment (higher than any published version)
+4. Schema validation (all `provides` schemas exist)
+5. Dependency resolution (all `requires` available)
+6. Circuit validation (all circuits parse as valid ESCIR)
+7. Test vectors pass (if `tests/golden/` exists)
+8. File size limit (< 50 MB)
+
+### 17.2 CI Verification (GitHub Actions)
+
+1. Download package archive from PR
+2. Verify SHA3-256 checksum
+3. Verify ML-DSA-87 signature against publisher key
+4. Validate manifest schema
+5. Check version increment
+6. Run test vectors
+7. Post results as PR comment
+8. Auto-merge for verified publishers
+
+---
+
+## 18. Submission Process
+
+### 18.1 End-to-End Flow
+
+```
+1.  Build circuit (visual designer or FastLang)
+2.  estream marketplace scaffold <category> <name>
+3.  Edit estream-component.toml, add circuits, tests, docs
+4.  Spark authenticate (CLI challenge or visual auth)
+5.  estream marketplace publish (or [Publish] in designer)
+    a. Validate manifest
+    b. Run test vectors
+    c. Build deterministic tar.gz
+    d. Compute Merkle root of file hashes (SHA3-256)
+    e. Sign Merkle root with ML-DSA-87
+    f. Emit to /marketplace/publish stream
+6.  Edge node creates PR against estream-io/registry
+7.  CI: signature, checksum, version, tests → all pass
+8.  Auto-merge (verified publisher) or manual review
+9.  Component appears on /marketplace/index stream
+10. Available to all designer/CLI users
+```
+
+### 18.2 First-Party vs Third-Party
+
+**First-party** (eStream team): Direct commit to `estream-marketplace` repo, publish via CI, auto-verified.
+
+**Third-party** (app developers): Fork registry, submit PR, CI verification, review for first publish, auto-merge after established.
+
+---
+
+## 19. Domain Schema Packs
+
+### 19.1 `esf-iot`
+
+IoT telemetry schemas: SensorReading, DeviceState, CommandEnvelope, AlertEvent, Geolocation.
+
+### 19.2 `esf-trading`
+
+Capital markets schemas: EStreamOrder, EStreamFill, EStreamQuote, EStreamMarketData.
+
+### 19.3 `esf-carbon`
+
+Carbon/ESG schemas: CarbonCredit, EmissionReport, CarbonOffset, MethodologyAttestation.
+
+### 19.4 Schema Pack Manifest
+
+```toml
 [component]
 name = "esf-iot"
 version = "1.0.0"
 category = "esf-schema"
-description = "IoT domain schemas: Telemetry, Command, Alert"
-license = "Apache-2.0"
-keywords = ["iot", "telemetry", "devices", "edge"]
-
-[component.author]
-name = "eStream Contributors"
+description = "IoT telemetry schemas for sensor networks"
 
 [component.schemas]
-provides = ["IoTTelemetry", "IoTCommand", "IoTAlert"]
+provides = ["SensorReading", "DeviceState", "CommandEnvelope", "AlertEvent"]
 requires = []
 
 [component.include]
-schemas = ["schemas/*.esf.yaml"]
+schemas = ["schemas/*.data.yaml"]
 ```
 
 ---
 
-## 7. Phase 4: Enterprise Wire Adapters
+## 20. Wire Adapters
 
-Each adapter implements the `WireAdapter` trait (from [WIRE_ADAPTER_TRAIT_SPEC.md](../protocol/WIRE_ADAPTER_TRAIT_SPEC.md)) and is published as a `wire-adapter` component.
+Future marketplace wire adapters:
 
-### 7.1 `estream-wire-fix` — FIX Protocol Adapter
-
-**Protocol:** FIX 4.2 / 4.4 / 5.0  
-**Market:** Capital markets, trading  
-**Crate:** `crates/estream-wire-fix/`  
-**License:** Apache 2.0
-
-| Property | Value |
-|----------|-------|
-| Protocol family | `Financial` |
-| Transports | TCP, TLS |
-| Bidirectional | Yes |
-| Request/Response | Yes (NewOrderSingle → ExecutionReport) |
-| ESF schemas required | `esf-trading` (EStreamOrder, EStreamFill) |
-| ESF schemas provided | FixNewOrderSingle, FixExecutionReport, FixMarketData |
-
-**Key message mappings:**
-
-| FIX Message | MsgType | ESF Schema |
-|-------------|---------|-----------|
-| NewOrderSingle | D | `FixNewOrderSingle` → `EStreamOrder` |
-| ExecutionReport | 8 | `FixExecutionReport` → `EStreamFill` |
-| MarketDataSnapshotFullRefresh | W | `FixMarketData` → `EStreamMarketData` |
-| OrderCancelRequest | F | `FixOrderCancel` |
-| OrderCancelReject | 9 | `FixOrderCancelReject` |
-
-### 7.2 `estream-wire-hl7` — HL7 FHIR Adapter
-
-**Protocol:** HL7 FHIR R4  
-**Market:** Healthcare  
-**Crate:** `crates/estream-wire-hl7/`  
-**License:** Apache 2.0
-
-| Property | Value |
-|----------|-------|
-| Protocol family | `Healthcare` |
-| Transports | TCP (MLLP), TLS, HTTP (FHIR REST) |
-| Bidirectional | Yes |
-| Request/Response | Yes (FHIR REST) |
-| ESF schemas provided | FhirPatient, FhirObservation, FhirEncounter, FhirConsent |
-
-**Privacy requirements:** Healthcare data requires field-level privacy with HIPAA-compliant audience controls. All patient-identifying fields must use `encrypted` default with explicit `auditor` and `provider` audience grants.
-
-### 7.3 `estream-wire-modbus` — Modbus Adapter
-
-**Protocol:** Modbus TCP / RTU  
-**Market:** Industrial IoT, SCADA  
-**Crate:** `crates/estream-wire-modbus/`  
-**License:** Apache 2.0
-
-Upgrades the existing `ModbusTcpClient` in `crates/estream-industrial/` to implement the `WireAdapter` trait. See [WIRE_ADAPTER_TRAIT_SPEC.md](../protocol/WIRE_ADAPTER_TRAIT_SPEC.md) §13.1 for migration path.
-
-| Property | Value |
-|----------|-------|
-| Protocol family | `Industrial` |
-| Transports | TCP, Serial (RTU) |
-| Bidirectional | Yes |
-| Request/Response | Yes (read/write registers) |
-| ESF schemas provided | ModbusReadResponse, ModbusWriteResponse, ModbusEvent |
-
-### 7.4 `estream-wire-swift` — ISO 20022 / SWIFT Adapter
-
-**Protocol:** ISO 20022 (pacs.008, pacs.002, camt.053, camt.052)  
-**Market:** Banking, payments  
-**Crate:** `crates/estream-wire-swift/`  
-**License:** Apache 2.0
-
-Upgrades the existing `estream-iso20022` crate to implement the `WireAdapter` trait. See [WIRE_ADAPTER_TRAIT_SPEC.md](../protocol/WIRE_ADAPTER_TRAIT_SPEC.md) §13.2 for migration path.
-
-| Property | Value |
-|----------|-------|
-| Protocol family | `Financial` |
-| Transports | TCP, TLS |
-| Bidirectional | Yes |
-| Request/Response | Yes |
-| ESF schemas provided | Pacs008CreditTransfer, Pacs002StatusReport, Camt053Statement |
-
-**Privacy requirements:** Financial data requires field-level privacy with PCI-DSS and regulatory audience controls.
+| Protocol | Package Name | Family | Status |
+|----------|-------------|--------|--------|
+| FIX 4.2/4.4 | `estream-wire-fix` | Financial | Available |
+| ISO 20022 | `estream-wire-iso20022` | Financial | Available |
+| Modbus TCP | `estream-wire-modbus` | Industrial | Available |
+| MQTT 5.0 | `estream-wire-mqtt` | Messaging | Planned |
+| HL7 FHIR | `estream-wire-hl7` | Healthcare | Planned |
+| SWIFT MX | `estream-wire-swift` | Financial | Planned |
+| OPC-UA | `estream-wire-opcua` | Industrial | Planned |
 
 ---
 
-## 8. Implementation Roadmap
+## 21. Performance Targets
 
-### 8.1 Phase Ordering and Dependencies
+### CPU Targets
 
-```
-Phase 1: Marketplace Infrastructure (3 weeks)
-    │
-    ├──▶ Phase 2a: WireAdapter trait + estream-wire-mqtt (2 weeks)
-    │
-    ├──▶ Phase 2b: Queue Stream Circuits + SDK (4 weeks)
-    │       ├── ESCIR circuits: queue-append, queue-compact, queue-replicate
-    │       ├── CPU ComputeCircuit implementations
-    │       ├── estream-queue SDK crate (thin circuit invocation layer)
-    │       └── FPGA synthesis + PRIME signer integration
-    │
-    ├──▶ Phase 2c: State Map Circuits + SDK (4 weeks)
-    │       ├── ESCIR circuits: map-put, map-cas, map-gc, map-sync
-    │       ├── CPU ComputeCircuit implementations
-    │       ├── estream-map SDK crate (direct reads + circuit mutations)
-    │       └── FPGA synthesis + ML-KEM hardware integration
-    │
-    ├──▶ Phase 3: Domain Schema Packs (2 weeks, parallel with Phase 2)
-    │       ├── esf-iot
-    │       ├── esf-trading
-    │       └── esf-carbon
-    │
-    └──▶ Phase 4: Enterprise Wire Adapters (6 weeks, after Phase 2a + Phase 3)
-            ├── estream-wire-fix (requires esf-trading)
-            ├── estream-wire-hl7
-            ├── estream-wire-modbus (upgrade)
-            └── estream-wire-swift (upgrade)
-```
-
-### 8.2 Crate + Circuit Creation Summary
-
-| Deliverable | Type | Phase | Dependencies |
-|-------------|------|-------|-------------|
-| `circuits/queue/append/` | ESCIR circuit | 2b | Lex streams, PRIME signer |
-| `circuits/queue/compact/` | ESCIR circuit | 2b | Lex streams |
-| `circuits/queue/replicate/` | ESCIR circuit | 2b | VRF Scatter |
-| `crates/estream-queue/` | SDK crate | 2b | `estream-kernel` (ComputeCircuit, LexStream) |
-| `circuits/map/put/` | ESCIR circuit | 2c | Lex state, ML-KEM |
-| `circuits/map/cas/` | ESCIR circuit | 2c | Lex state |
-| `circuits/map/gc/` | ESCIR circuit | 2c | Lex state |
-| `circuits/map/sync/` | ESCIR circuit | 2c | VRF Scatter |
-| `crates/estream-map/` | SDK crate | 2c | `estream-kernel` (ComputeCircuit, LexState) |
-| `crates/estream-wire-mqtt/` | Adapter crate | 2a | `estream-kernel` (WireAdapter trait) |
-| `crates/estream-wire-fix/` | Adapter crate | 4 | WireAdapter, `esf-trading` |
-| `crates/estream-wire-hl7/` | Adapter crate | 4 | WireAdapter |
-| `crates/estream-wire-modbus/` | Adapter crate (upgrade) | 4 | WireAdapter, `estream-industrial` |
-| `crates/estream-wire-swift/` | Adapter crate (upgrade) | 4 | WireAdapter, `estream-iso20022` |
-
-### 8.3 Test Strategy
-
-Each component includes:
-1. **Unit tests** — Within the crate (`#[cfg(test)]`)
-2. **Golden test vectors** — In `tests/golden/` per [SMARTCIRCUIT_PACKAGE_FORMAT_SPEC.md](./SMARTCIRCUIT_PACKAGE_FORMAT_SPEC.md) §5
-3. **Journey tests** — Registered in `crates/estream-test/` under `JourneyCategory::Marketplace`
-4. **Integration tests** — Cross-crate tests verifying end-to-end data flow
-
----
-
-## 9. Success Criteria
-
-### 9.1 Ecosystem & Experience
-
-| Criterion | Metric | Target |
+| Component | Metric | Target |
 |-----------|--------|--------|
-| Ecosystem adoption | Community-contributed components | 5+ within 6 months |
-| Developer experience | `estream marketplace install` time | < 30 seconds |
-| Security | Published component signature coverage | 100% ML-DSA-87 signed |
-| Interoperability | Wire adapters integrated without lock-in | 4+ protocol adapters |
-| Enterprise funnel | OSS → BSL → managed conversion rate | Measurable pipeline |
+| Queue append | Throughput | > 1M msg/sec |
+| Map put/get | Latency (p99) | < 1μs |
+| Wire adapter (FIX) | Parse throughput | > 500K msg/sec |
+| ESF serialize | Throughput | > 2M msg/sec |
 
-### 9.2 Performance — CPU Target (SmartCircuit on Rust)
+### FPGA Targets
 
-| Metric | Target | Chronicle Comparison |
-|--------|--------|---------------------|
-| Queue append (unsigned) | < 100 ns | 10× faster than Chronicle Queue |
-| Queue append (ML-DSA-87 signed) | < 400 μs | N/A (Chronicle has no PQ signing) |
-| Queue subscribe latency | < 50 ns | Comparable |
-| Map get (direct read) | < 50 ns | Comparable to Chronicle Map off-heap |
-| Map put (circuit + witness) | < 200 ns | 2× faster (no JVM overhead) |
-| Map CAS (circuit) | < 400 ns | Comparable |
-| Queue throughput (unsigned) | 100M msg/sec | 5× Chronicle's GC-limited ceiling |
-| Map throughput (puts) | 50M ops/sec | 5× Chronicle Map |
-
-### 9.3 Performance — FPGA Target (SmartCircuit on Hardware)
-
-| Metric | Target | vs Chronicle | vs CPU Target |
-|--------|--------|-------------|---------------|
-| Queue append (unsigned) | < 40 ns | **50× faster** | 2.5× faster |
-| Queue append (signed, 4× PRIME) | < 100 μs | N/A | 4× faster |
-| Map get (CAM hit) | < 5 ns | **10× faster** | 10× faster |
-| Map put (pipeline) | < 60 ns | **~2× faster** | 3× faster |
-| Queue throughput (unsigned) | 200M msg/sec | **10× Chronicle** | 2× CPU |
-| Map throughput (puts) | 200M ops/sec | **20× Chronicle** | 4× CPU |
-| Tail latency (p99) | Deterministic | **No GC spikes** | No jitter |
-| Latency variance | 0 ns (constant-time) | ∞× improvement | Orders of magnitude |
+| Component | Metric | Target |
+|-----------|--------|--------|
+| Queue append | Throughput | > 100M msg/sec |
+| Map put/get | Latency | < 100ns |
+| Wire adapter (FIX) | Parse throughput | > 50M msg/sec |
+| ESF serialize | Pipeline rate | 1 msg/clock cycle |
 
 ---
 
 ## References
 
-- [EPIC_ESTREAM_MARKETPLACE.md](../../.github/epics/EPIC_ESTREAM_MARKETPLACE.md) — Epic overview
-- [WIRE_ADAPTER_TRAIT_SPEC.md](../protocol/WIRE_ADAPTER_TRAIT_SPEC.md) — WireAdapter trait (#528)
-- [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) — Registry API (#525)
-- [ESF_SCHEMA_COMPOSITION_SPEC.md](../protocol/ESF_SCHEMA_COMPOSITION_SPEC.md) — Schema composition (#526)
-- [SMARTCIRCUIT_PACKAGE_FORMAT_SPEC.md](./SMARTCIRCUIT_PACKAGE_FORMAT_SPEC.md) — Package format (#527)
-- [CONSOLE_WIDGET_MARKETPLACE_SPEC.md](./CONSOLE_WIDGET_MARKETPLACE_SPEC.md) — Widget marketplace (#533)
-- [MARKETPLACE_SPEC.md](./MARKETPLACE_SPEC.md) — Pricing, visibility, creator program
-- [FPGA_COMPONENT_EXTENSION.md](./FPGA_COMPONENT_EXTENSION.md) — FPGA component metadata
-- [INDUSTRIAL_PROTOCOL_GATEWAY_V2.md](./INDUSTRIAL_PROTOCOL_GATEWAY_V2.md) — Layered adapter architecture
-- [Chronicle Queue](https://github.com/OpenHFT/Chronicle-Queue) — Open source model reference
-- [Chronicle Map](https://github.com/OpenHFT/Chronicle-Map) — Distributed state model
+- [WIRE_ADAPTER_TRAIT_SPEC.md](../protocol/WIRE_ADAPTER_TRAIT_SPEC.md) — `WireAdapter` trait
+- [ESF_SCHEMA_COMPOSITION_SPEC.md](../protocol/ESF_SCHEMA_COMPOSITION_SPEC.md) — Schema dependencies
+- [COMPONENT_SYSTEM_SPEC.md](../protocol/COMPONENT_SYSTEM_SPEC.md) — Core component model
+- [HARDWARE_TIER_SPEC.md](../specs/HARDWARE_TIER_SPEC.md) — FPGA hardware tiers
+- [Brand Guidelines](../../business/brand/estream/BRAND_GUIDELINES.md) — Visual identity
+- [marketplace_streams.fl](../streams/marketplace_streams.fl) — Stream API data declarations
 
 ---
 
-*Created: 2026-02-11*  
-*Updated: 2026-02-12 — Cross-references updated to Stream Architecture Spec v0.8.1*  
-*Status: Draft*  
-*Issue: #524*
+*Created: February 2026*
+*Status: Draft*
+*Epic: [polyquantum/estream#136](https://github.com/polyquantum/estream/issues/136)*
