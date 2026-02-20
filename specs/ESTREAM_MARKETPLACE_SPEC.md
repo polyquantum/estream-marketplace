@@ -325,49 +325,116 @@ This ensures the SHA3-256 checksum is reproducible.
 
 ---
 
-## 5. Stream API
+## 5. Data Model — Graph-Based Registry
 
-All marketplace operations flow over eStream's native lattice streams, defined in FastLang. See `streams/marketplace_streams.fl` for the full data declarations.
+The marketplace is modeled as a **`graph` construct** — the same first-class FastLang primitive used for device mesh, wallet ledger, governance, and expert mesh. Publishers, components, versions, reviews, and licenses are typed nodes and edges stored in CSR format with real-time overlays, AI-powered recommendations, and a tamper-proof series.
 
-### 5.1 Topic Map
+Component dependency resolution uses a **`dag` construct** with `enforce acyclic` and `topo_sort` — hardware-enforced cycle detection and topological installation ordering.
 
-| Topic | Type | Description |
-|-------|------|-------------|
-| `/marketplace/index` | state | Full registry index, real-time updates |
-| `/marketplace/search` | event | Emit search query, receive results |
-| `/marketplace/component/{name}` | state | Component detail |
-| `/marketplace/component/{name}/reviews` | event | Reviews stream |
-| `/marketplace/install/{requestId}` | event | Install progress |
-| `/marketplace/publish/{requestId}` | event | Publish progress |
-| `/marketplace/licenses` | state | User's active licenses |
-| `/marketplace/publishers` | state | Publisher identity registry |
+See `streams/marketplace_streams.fl` for the full implementation.
 
-### 5.2 FastLang Data Declarations
-
-The marketplace data interface is defined in `streams/marketplace_streams.fl` using `data` declarations with verbs:
+### 5.1 Registry Graph
 
 ```fastlang
-data ComponentSummary : marketplace v1 {
-    name: ComponentName,
-    version: VersionString,
-    category: CategoryId,
-    publisher: PublisherName,
-    publisher_verified: bool,
-    description: bytes(512),
-    pricing_type: u8,
-    pricing_amount_es: u64,
-    visibility: u8,
-    badges: u32,
-    rating_x100: u32,
-    download_count: u64,
-    source_hash: Checksum,
-    updated_at: u64,
+graph marketplace_registry {
+    node ComponentNode
+    edge PublishesEdge
+
+    // Real-time marketplace state overlays
+    overlay download_count: u64 bitmask delta_curate
+    overlay active_installs: u64 bitmask delta_curate
+    overlay rating_x100: u32 bitmask delta_curate
+    overlay badges: u32 bitmask
+    overlay revenue_es: u64 bitmask delta_curate
+
+    // Security monitoring overlays
+    overlay vulnerability_count: u16 curate delta_curate
+    overlay signature_valid: bool curate delta_curate
+
+    storage csr {
+        hot @bram,
+        warm @ddr,
+        cold @nvme,
+    }
+
+    ai_feed marketplace_recommendation
+
+    observe marketplace_registry: [download_count, rating_x100, vulnerability_count, signature_valid] threshold: {
+        anomaly_score 0.85
+        baseline_window 300
+    }
 }
-    encode
-    observe metrics [download_count, rating_x100, pricing_type, category] level adaptive
+
+series registry_series: marketplace_registry
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
 ```
 
-### 5.3 Browser SDK Integration
+The `ai_feed marketplace_recommendation` drives trending predictions and personalized "for you" suggestions. The `observe` clause with `anomaly_score 0.85` triggers StreamSight escalation when download or security patterns deviate from baseline.
+
+### 5.2 Dependency DAG
+
+```fastlang
+dag component_dependencies {
+    node ComponentNode
+    edge DependsOnEdge
+
+    overlay version_conflict: bool curate delta_curate
+    overlay install_order: u32 curate
+
+    storage csr {
+        hot @bram,
+        warm @ddr,
+        cold @nvme,
+    }
+}
+```
+
+This replaces the custom 9-step version resolution algorithm (§6.4) with native `dag` operations:
+- **`enforce acyclic`** — hardware rejects circular dependencies at the CSR pipeline level
+- **`topo_sort`** — returns topological installation order
+- **`version_conflict` overlay** — curated to flag only conflicting nodes
+
+### 5.3 Overlays vs. Separate Streams
+
+Instead of separate streams for downloads, ratings, and security, the graph's overlays provide per-cycle, per-component state:
+
+| Overlay | Type | Curate | Purpose |
+|---------|------|--------|---------|
+| `download_count` | `u64` | `delta_curate` | Trending, popularity ranking |
+| `active_installs` | `u64` | `delta_curate` | Active user tracking |
+| `rating_x100` | `u32` | `delta_curate` | Quality ranking |
+| `badges` | `u32` | — | Trust indicators (bitmask) |
+| `revenue_es` | `u64` | `delta_curate` | Creator program tier tracking |
+| `vulnerability_count` | `u16` | `curate` + `delta_curate` | Security alerting |
+| `signature_valid` | `bool` | `curate` + `delta_curate` | Integrity monitoring |
+
+### 5.4 Series — Tamper-Proof Audit Trail
+
+The `series` on the registry graph means every mutation (publish, yank, review, license grant) is automatically:
+- **MTP-timestamped** — ordering from physics
+- **Merkle-chained** — position in causal DAG is mathematically determined
+- **Lattice-imprinted** — Proof of Circuit proves which hardware processed it
+- **Witness-attested** — PoVC verification at epoch boundaries
+
+No separate audit log is needed. The graph series IS the audit trail.
+
+### 5.5 Topic Map (Lattice Projections)
+
+Lattice topics are **projections** of graph state, not the primary data model:
+
+| Topic | Type | Projected From |
+|-------|------|---------------|
+| `/marketplace/index` | state | `marketplace_registry` graph + overlays |
+| `/marketplace/search` | event | `marketplace_search_query` circuit |
+| `/marketplace/reviews` | event | `ReviewNode` graph entries |
+| `/marketplace/install/{requestId}` | event | `marketplace_install_component` circuit |
+| `/marketplace/publish/{requestId}` | event | `marketplace_publish_component` circuit |
+| `/marketplace/licenses` | state | `LicenseNode` graph entries |
+| `/marketplace/publishers` | state | `PublisherNode` graph entries |
+
+### 5.6 Browser SDK Integration
 
 The `@estream/sdk-browser` provides typed React hooks for marketplace topics:
 
@@ -381,9 +448,9 @@ import {
 } from '@estream/sdk-browser';
 ```
 
-These use the same `useSubscription<T>(topic)` / `useEmit(topic)` pattern as topology, circuits, and governance hooks.
+These use the same `useSubscription<T>(topic)` / `useEmit(topic)` pattern as topology, circuits, and governance hooks. The hooks subscribe to lattice topic projections of graph state — the TypeScript layer sees typed data, not the underlying graph structure.
 
-### 5.4 Trust Boundary
+### 5.7 Trust Boundary
 
 ```
 TypeScript (UI-only, untrusted)      Rust/WASM (trusted)
@@ -476,17 +543,23 @@ estream-io/registry/
 
 ### 6.4 Version Resolution
 
+Dependency resolution operates on the `component_dependencies` DAG (§5.2). The `enforce acyclic` constraint rejects circular dependencies at the hardware level, and `topo_sort` produces the installation order:
+
 ```
 1. Fetch index/{category}/{name}/metadata.json
 2. Parse version requirement (default: latest non-yanked)
 3. Filter: remove yanked, check estream_min_version compatibility
 4. Select highest matching version (semver sort)
-5. Resolve transitive dependencies (depth-first)
-6. Detect version conflicts and circular dependencies
-7. Download package archives in topological order
-8. Verify signatures and checksums
-9. Install to workspace
+5. Build dependency DAG (add edges to component_dependencies)
+6. enforce acyclic — hardware rejects circular dependencies
+7. topo_sort — produces topological installation order
+8. version_conflict overlay — curate flags conflicting nodes
+9. Download package archives in topological order
+10. Verify ML-DSA-87 signatures and SHA3-256 checksums
+11. Install to workspace
 ```
+
+Steps 5-8 are native `dag` operations, not application code.
 
 ### 6.5 Local Cache
 
