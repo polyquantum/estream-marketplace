@@ -228,9 +228,9 @@ circuit fix_to_data_order(msg: FixParsedMessage) -> EStreamOrder
     let price = extract_fix_u64(msg.raw, 44, msg.raw_length)
     let tif_raw = extract_fix_u32(msg.raw, 59, msg.raw_length)
 
-    let side = fix_side_to_esf(side_raw)
-    let order_type = fix_ordtype_to_esf(ord_type_raw)
-    let time_in_force = fix_tif_to_esf(tif_raw)
+    let side = fix_side_to_data(side_raw)
+    let order_type = fix_ordtype_to_data(ord_type_raw)
+    let time_in_force = fix_tif_to_data(tif_raw)
 
     EStreamOrder {
         order_id: order_id,

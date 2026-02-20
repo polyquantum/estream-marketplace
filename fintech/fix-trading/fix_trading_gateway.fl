@@ -19,7 +19,7 @@
 // Install: estream marketplace install fix-trading-gateway
 //
 // Data Flow:
-//   FIX TCP → fix_parse → fix_session → fix_to_esf → compliance_check
+//   FIX TCP → fix_parse → fix_session → fix_to_data → compliance_check
 //     → order_validate → order_route → lex stream (trading.orders)
 //   lex stream (trading.fills) → settlement_bridge → data_to_fix → FIX TCP
 

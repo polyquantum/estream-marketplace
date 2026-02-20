@@ -11,7 +11,7 @@
 
 ## 1. Overview
 
-The eStream Marketplace is an open source component exchange — "npm for verifiable circuits" — enabling developers to discover, publish, install, and compose reusable eStream components: ESF schemas, SmartCircuits, protocol adapters, FPGA circuits, console widgets, and full-stack integrations.
+The eStream Marketplace is an open source component exchange — "npm for verifiable circuits" — enabling developers to discover, publish, install, and compose reusable eStream components: data schemas, SmartCircuits, protocol adapters, FPGA circuits, console widgets, and full-stack integrations.
 
 ### 1.1 Design Principles
 
@@ -28,7 +28,7 @@ Chronicle Software proved that open-sourcing high-performance middleware creates
 |-----------------|---------------|-----------------|
 | Chronicle Queue | **Queue Streams** — SmartCircuit-driven lex streams | `queue.append.v1` circuit → Witness → Lex Store |
 | Chronicle Map | **State Maps** — SmartCircuit-driven lex state | `map.put.v1` circuit → State Root → VRF Scatter |
-| Chronicle Wire | ESF — eStream Format | Exists |
+| Chronicle Wire | Data — eStream Data | Exists |
 | Chronicle Services | SmartCircuit runtime (BSL 1.1) | Exists |
 | Chronicle FIX | Wire adapters via `WireAdapter` trait | Circuit-wrapped protocol adapters |
 
@@ -36,7 +36,7 @@ Chronicle Software proved that open-sourcing high-performance middleware creates
 
 | Tier | License | Components |
 |------|---------|-----------|
-| **Open Source** | Apache 2.0 | Queue, Map, Wire adapters, ESF schemas, SDK |
+| **Open Source** | Apache 2.0 | Queue, Map, Wire adapters, data schemas, SDK |
 | **Source Available** | BSL 1.1 | FPGA acceleration, VRF Scatter HA, production runtime |
 | **Commercial** | Enterprise | Managed deployment, SLA, support, custom adapters |
 
@@ -50,7 +50,7 @@ Every publishable component belongs to one infrastructure category:
 
 | Category | Description | Examples |
 |----------|-------------|---------|
-| `esf-schema` | ESF schema packs | `esf-iot`, `esf-trading`, `esf-carbon` |
+| `data-schema` | data schema packs | `data-iot`, `data-trading`, `data-carbon` |
 | `wire-adapter` | Protocol adapters (impl `WireAdapter` trait) | `estream-wire-fix`, `estream-wire-mqtt` |
 | `smart-circuit` | Reusable SmartCircuit packages | `carbon-credit-mint`, `order-matcher` |
 | `fpga-circuit` | FPGA bitstream components | `ntt-accelerator`, `sha3-pipeline` |
@@ -122,7 +122,7 @@ pub enum SourceVisibility {
 
 **Always public** regardless of visibility level: name, version, publisher, input/output ports, resource requirements, estimated cost per execution, source hash.
 
-Visibility is implemented using ESF Filter — the same field-level privacy primitive used throughout the platform:
+Visibility is implemented using Data Filter — the same field-level privacy primitive used throughout the platform:
 
 ```rust
 pub struct FilteredComponentData {
@@ -177,7 +177,7 @@ min_version = "0.8.0"
 max_version = "1.0.0"   # optional
 
 [component.dependencies]
-esf-trading = "^1.0.0"
+data-trading = "^1.0.0"
 
 [component.schemas]
 provides = ["FixNewOrderSingle", "FixExecutionReport", "FixMarketData"]
@@ -216,7 +216,7 @@ fpga = ["fpga/*.bit"]
 ### 3.2 Name Conventions
 
 - **Format**: lowercase alphanumeric with hyphens (`[a-z0-9-]+`)
-- **Official prefixes**: `estream-*` and `esf-*` (reserved for eStream team)
+- **Official prefixes**: `estream-*` and `data-*` (reserved for eStream team)
 - **Third-party**: `@publisher/name` format (e.g., `@synergy-carbon/impact-counter`)
 
 ### 3.3 Version Requirements
@@ -242,7 +242,7 @@ my-component/
 ├── LICENSE                        # License file
 ├── CHANGELOG.md                   # Version history
 ├── schemas/
-│   └── *.data.yaml                # ESF schema definitions
+│   └── *.data.yaml                # data schema definitions
 ├── circuits/
 │   ├── *.fl                       # FastLang circuit definitions
 │   └── *.circuit.yaml             # ESCIR circuit definitions
@@ -477,8 +477,8 @@ estream-io/registry/
 ├── README.md
 ├── config.json
 ├── index/
-│   ├── esf-schema/
-│   │   └── esf-trading/
+│   ├── data-schema/
+│   │   └── data-trading/
 │   │       ├── metadata.json
 │   │       └── 1.0.0/
 │   │           ├── estream-component.toml
@@ -580,7 +580,7 @@ Cache TTL defaults to 24 hours. `estream marketplace install --force` bypasses c
 
 | Category | Install Path |
 |----------|-------------|
-| `esf-schema` | `schemas/` |
+| `data-schema` | `schemas/` |
 | `wire-adapter` | `adapters/` |
 | `smart-circuit` | `circuits/` |
 | `fpga-circuit` | `fpga/` |
@@ -594,7 +594,7 @@ After installation, components are tracked in `estream-workspace.toml`:
 ```toml
 [dependencies]
 estream-wire-fix = "1.0.0"
-esf-trading = "1.2.0"
+data-trading = "1.2.0"
 
 [dependencies.estream-wire-fix]
 version = "1.0.0"
@@ -1038,7 +1038,7 @@ The Sidebar gains a tab toggle: **Palette** | **Marketplace**. When Marketplace 
 │  Resources: T2 witness, 2K compute, 8KB mem                 │
 │  Est. cost: 0.003 ES/exec                                   │
 │                                                              │
-│  Dependencies: esf-trading ^1.0.0 (auto-installed)          │
+│  Dependencies: data-trading ^1.0.0 (auto-installed)          │
 │                                                              │
 │  [Install]  [View Source]  [View Docs]  [Add to Circuit]    │
 └──────────────────────────────────────────────────────────────┘
@@ -1118,11 +1118,11 @@ $ estream marketplace install estream-wire-fix@^1.0.0
 
   Resolving dependencies...
     estream-wire-fix v1.0.0
-    └── esf-trading v1.2.0
+    └── data-trading v1.2.0
 
   Verifying ML-DSA-87 signatures...
     estream-wire-fix v1.0.0 ✓ (key: estream-signing-key-01)
-    esf-trading v1.2.0 ✓ (key: estream-signing-key-01)
+    data-trading v1.2.0 ✓ (key: estream-signing-key-01)
 
   Installed 2 components (6 files) in 3.2s
 ```
@@ -1181,7 +1181,7 @@ Show detailed information for a specific component.
 | `E006` | `ChecksumMismatch` | SHA3-256 checksum mismatch |
 | `E007` | `UnknownPublisher` | Publisher key not in registry |
 | `E008` | `ManifestInvalid` | Manifest validation failed |
-| `E009` | `NameReserved` | Uses reserved `estream-*` or `esf-*` prefix |
+| `E009` | `NameReserved` | Uses reserved `estream-*` or `data-*` prefix |
 | `E010` | `VersionNotIncremented` | Version not higher than latest |
 | `E011` | `PackageTooLarge` | Archive exceeds 50 MB |
 | `E012` | `NetworkError` | Cannot reach registry |
@@ -1275,15 +1275,15 @@ default_key = "$HOME/.estream/keys/signing-key.pem"
 
 ## 19. Domain Schema Packs
 
-### 19.1 `esf-iot`
+### 19.1 `data-iot`
 
 IoT telemetry schemas: SensorReading, DeviceState, CommandEnvelope, AlertEvent, Geolocation.
 
-### 19.2 `esf-trading`
+### 19.2 `data-trading`
 
 Capital markets schemas: EStreamOrder, EStreamFill, EStreamQuote, EStreamMarketData.
 
-### 19.3 `esf-carbon`
+### 19.3 `data-carbon`
 
 Carbon/ESG schemas: CarbonCredit, EmissionReport, CarbonOffset, MethodologyAttestation.
 
@@ -1291,9 +1291,9 @@ Carbon/ESG schemas: CarbonCredit, EmissionReport, CarbonOffset, MethodologyAttes
 
 ```toml
 [component]
-name = "esf-iot"
+name = "data-iot"
 version = "1.0.0"
-category = "esf-schema"
+category = "data-schema"
 description = "IoT telemetry schemas for sensor networks"
 
 [component.schemas]
@@ -1331,7 +1331,7 @@ Future marketplace wire adapters:
 | Queue append | Throughput | > 1M msg/sec |
 | Map put/get | Latency (p99) | < 1μs |
 | Wire adapter (FIX) | Parse throughput | > 500K msg/sec |
-| ESF serialize | Throughput | > 2M msg/sec |
+| Data serialize | Throughput | > 2M msg/sec |
 
 ### FPGA Targets
 
@@ -1340,7 +1340,7 @@ Future marketplace wire adapters:
 | Queue append | Throughput | > 100M msg/sec |
 | Map put/get | Latency | < 100ns |
 | Wire adapter (FIX) | Parse throughput | > 50M msg/sec |
-| ESF serialize | Pipeline rate | 1 msg/clock cycle |
+| Data serialize | Pipeline rate | 1 msg/clock cycle |
 
 ---
 

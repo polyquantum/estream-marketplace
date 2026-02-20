@@ -38,7 +38,7 @@ fpga/rtl/iso20022/
 ├── field_extractor.v            # Field extraction
 ├── field_extractor_parallel.v   # Parallel extraction
 ├── schema_rom.v                 # Field lookup table
-├── esf_output.v                 # ESF formatting
+├── data_output.v                # Data formatting
 ├── iso20022_parser_top.v        # Top-level module
 ├── iso20022_streamsight_bridge.v # Telemetry interface
 └── xml_template_engine.v        # XML generation
@@ -51,7 +51,7 @@ crates/estream-iso20022/
 │   │   ├── pacs008.rs
 │   │   └── pacs002.rs
 │   ├── schema.rs
-│   ├── esf.rs
+│   ├── data.rs
 │   └── types.rs
 └── benches/
     └── parser_benchmark.rs
@@ -69,7 +69,7 @@ The ESCIR circuit (`circuit.v080.escir.yaml`) defines the parser as a dataflow g
                          │                                      │
                          │                                      ▼
                    ┌─────┴─────┐                          ┌──────────────┐
-                   │ Tokenizer │                          │  ESF Output  │
+                   │ Tokenizer │                          │  Data Output  │
                    │   Mux     │                          └──────────────┘
                    └───────────┘                                │
                                                                 ▼
@@ -107,7 +107,7 @@ estream codegen --circuit circuit.v080.escir.yaml --target verilog --output pars
 use estream_fpga_bridge::Iso20022Parser;
 
 let parser = Iso20022Parser::new(FpgaDevice::open()?)?;
-let esf = parser.parse_xml(&xml_bytes)?;
+let data = parser.parse_xml(&xml_bytes)?;
 ```
 
 ### Native Rust
@@ -116,7 +116,7 @@ let esf = parser.parse_xml(&xml_bytes)?;
 use estream_iso20022::{Pacs008, parse_xml};
 
 let msg: Pacs008 = parse_xml(&xml_bytes)?;
-let esf = msg.to_esf()?;
+let data = msg.to_data()?;
 ```
 
 ### ESCIR→Rust (Generated)
@@ -126,14 +126,14 @@ let esf = msg.to_esf()?;
 use iso20022_parser::Iso20022ParserCircuit;
 
 let mut circuit = Iso20022ParserCircuit::new();
-let esf = circuit.execute(&input)?;
+let data = circuit.execute(&input)?;
 ```
 
 ## Testing
 
 ### Cross-Target Verification
 
-All three targets must produce identical ESF output for the same input:
+All three targets must produce identical Data output for the same input:
 
 ```bash
 # Run cross-target tests

@@ -22,7 +22,7 @@ visibility = "open"
 min_version = "0.8.0"
 
 [component.dependencies]
-esf-trading = "^1.0.0"
+data-trading = "^1.0.0"
 
 [component.schemas]
 provides = ["EStreamOrder", "EStreamFill", "EStreamQuote", "EStreamMarketData"]

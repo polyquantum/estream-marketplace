@@ -6,13 +6,13 @@
 # Generate this file: estream marketplace scaffold <category> <name>
 
 [component]
-# Required: unique name (lowercase, hyphens). Official: estream-* or esf-*. Third-party: @publisher/name
+# Required: unique name (lowercase, hyphens). Official: estream-* or data-*. Third-party: @publisher/name
 name = "{{name}}"
 
 # Required: semantic version (major.minor.patch)
 version = "0.1.0"
 
-# Required: one of — esf-schema, wire-adapter, smart-circuit, fpga-circuit, integration, console-widget
+# Required: one of — data-schema, wire-adapter, smart-circuit, fpga-circuit, integration, console-widget
 category = "{{category}}"
 
 # Required: short description (one line)
@@ -44,7 +44,7 @@ min_version = "0.8.0"
 
 # Dependencies on other marketplace components (semver requirements)
 [component.dependencies]
-# esf-trading = "^1.0.0"
+# data-trading = "^1.0.0"
 # estream-kernel = ">=0.8.0"
 
 # Schemas this component provides and requires

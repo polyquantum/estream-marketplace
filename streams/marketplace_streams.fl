@@ -425,7 +425,7 @@ circuit marketplace_install_component(registry: bytes(32), deps: bytes(32), requ
 }
 
 // =============================================================================
-// Audience Declarations — Field-Level Visibility (ESF Filter)
+// Audience Declarations — Field-Level Visibility (Data Filter)
 // =============================================================================
 
 audience marketplace_public inherits authenticated

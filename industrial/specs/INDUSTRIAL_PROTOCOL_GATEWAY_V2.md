@@ -15,7 +15,7 @@
 This specification defines a **layered, composable architecture** for industrial protocol integration:
 
 1. **Transport Layer** - Generic TCP/UDP/Serial clients
-2. **Protocol Layer** - MODBUS, OPC-UA, DNP3 as ESF schemas
+2. **Protocol Layer** - MODBUS, OPC-UA, DNP3 as Data schemas
 3. **StreamSight Layer** - Unified telemetry and observability
 4. **ESCIR Circuits** - Open-source behavior definitions
 5. **Composite Components** - Marketplace SKUs
@@ -32,7 +32,7 @@ This specification defines a **layered, composable architecture** for industrial
 
 1. [Architecture Overview](#1-architecture-overview)
 2. [Transport Layer](#2-transport-layer)
-3. [Protocol Layer - ESF Schemas](#3-protocol-layer---esf-schemas)
+3. [Protocol Layer - Data Schemas](#3-protocol-layer---data-schemas)
 4. [StreamSight Integration](#4-streamsight-integration)
 5. [ESCIR Circuit Definitions](#5-escir-circuit-definitions)
 6. [Composite Components](#6-composite-components)
@@ -92,12 +92,12 @@ This specification defines a **layered, composable architecture** for industrial
 │  └────────────────────────────────────────────────────────────────────────┘ │
 │                                                                              │
 │  ┌────────────────────────────────────────────────────────────────────────┐ │
-│  │                      ESF Schema Layer (Open Source)                     │ │
+│  │                      Data Schema Layer (Open Source)                     │ │
 │  │                                                                         │ │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐   │ │
-│  │  │ modbus.esf  │  │ opcua.esf   │  │ dnp3.esf    │  │ industrial- │   │ │
+│  │  │ modbus.data  │  │ opcua.data   │  │ dnp3.data    │  │ industrial- │   │ │
 │  │  │             │  │             │  │             │  │ telemetry   │   │ │
-│  │  │ • MBAP      │  │ • UA Binary │  │ • Link      │  │ .esf        │   │ │
+│  │  │ • MBAP      │  │ • UA Binary │  │ • Link      │  │ .data        │   │ │
 │  │  │ • PDU       │  │ • Services  │  │ • Transport │  │             │   │ │
 │  │  │ • Functions │  │ • Types     │  │ • App       │  │ • Events    │   │ │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘   │ │
@@ -371,13 +371,13 @@ streamsight:
 
 ---
 
-## 3. Protocol Layer - ESF Schemas
+## 3. Protocol Layer - Data Schemas
 
 ### 3.1 MODBUS Protocol Schema
 
 ```yaml
-# schemas/modbus.esf.yaml
-esf: "1.0"
+# schemas/modbus.data.yaml
+data: "1.0"
 name: modbus
 version: "1.0.0"
 license: "Apache-2.0"
@@ -571,8 +571,8 @@ enums:
 ### 3.2 Industrial Telemetry Schema
 
 ```yaml
-# schemas/industrial-telemetry.esf.yaml
-esf: "1.0"
+# schemas/industrial-telemetry.data.yaml
+data: "1.0"
 name: industrial_telemetry
 version: "1.0.0"
 license: "Apache-2.0"
@@ -813,7 +813,7 @@ compute:
       
     - id: event_serializer
       type: transform
-      operation: esf_serialize
+      operation: data_serialize
       
     - id: topic_router
       type: lookup
@@ -1606,7 +1606,7 @@ pub struct ModbusSlaveSimulator {
 
 - [Component Marketplace Spec](./MARKETPLACE_SPEC.md)
 - [ESCIR Language Spec](../protocol/ESCIR_LANGUAGE_SPEC.md)
-- [ESF Schema Spec](../protocol/ESF_SCHEMA_SPEC.md)
+- [Data Schema Spec](../protocol/ESF_SCHEMA_SPEC.md)
 - [StreamSight Spec](../protocol/STREAMSIGHT_SPEC.md)
 - [ISO 20022 Parser Component](../../fpga/rtl/iso20022/COMPONENT_MARKETPLACE.md)
 
