@@ -1,0 +1,379 @@
+# Marketplace Transaction Circuit Template
+# ESCIR v0.8.0
+
+escir: "0.8.0"
+name: "{{CIRCUIT_NAME}}_marketplace"
+version: "1.0.0"
+
+metadata:
+  circuit_id: "{{CIRCUIT_ID}}"
+  name: "{{DISPLAY_NAME}} Marketplace Transaction"
+  description: |
+    Marketplace transaction circuit for buying/selling items.
+    Supports escrow, atomic swaps, and multi-party transactions.
+  category: marketplace
+  
+  marketplace:
+    visibility: private
+    publisher: "{{PUBLISHER_ID}}"
+    tags: ["marketplace", "escrow", "trade", "nft"]
+
+# =============================================================================
+# Type Definitions
+# =============================================================================
+
+types:
+  ListingType:
+    kind: enum
+    variants:
+      - name: FixedPrice
+        value: 1
+      - name: Auction
+        value: 2
+      - name: MakeOffer
+        value: 3
+
+  TransactionPhase:
+    kind: enum
+    variants:
+      - name: Listed
+        value: 1
+      - name: InEscrow
+        value: 2
+      - name: Completed
+        value: 3
+      - name: Cancelled
+        value: 4
+      - name: Disputed
+        value: 5
+
+  Listing:
+    kind: struct
+    description: "Marketplace listing"
+    fields:
+      - name: listing_id
+        type: "bytes(32)"
+      - name: seller
+        type: "bytes(32)"
+      - name: item_id
+        type: "bytes(32)"
+        description: "Token/NFT ID being sold"
+      - name: item_type
+        type: u8
+        description: "0=fungible, 1=nft"
+      - name: quantity
+        type: u64
+      - name: price
+        type: u64
+      - name: currency_token
+        type: "bytes(32)"
+      - name: listing_type
+        type: ListingType
+      - name: expires_at
+        type: u64
+        description: "Listing expiration timestamp"
+
+  PurchaseRequest:
+    kind: struct
+    description: "Purchase request"
+    fields:
+      - name: listing_id
+        type: "bytes(32)"
+      - name: buyer
+        type: "bytes(32)"
+      - name: quantity
+        type: u64
+      - name: offered_price
+        type: u64
+        description: "For auctions/offers"
+
+  TransactionResult:
+    kind: struct
+    description: "Transaction result"
+    fields:
+      - name: success
+        type: bool
+      - name: tx_id
+        type: "bytes(32)"
+      - name: phase
+        type: TransactionPhase
+      - name: seller_proceeds
+        type: u64
+      - name: platform_fee
+        type: u64
+      - name: buyer_spent
+        type: u64
+
+  MarketplaceError:
+    kind: enum
+    variants:
+      - name: ListingNotFound
+        value: 1
+      - name: ListingExpired
+        value: 2
+      - name: InsufficientFunds
+        value: 3
+      - name: InsufficientQuantity
+        value: 4
+      - name: PriceMismatch
+        value: 5
+      - name: Unauthorized
+        value: 6
+      - name: AlreadySold
+        value: 7
+
+# =============================================================================
+# Circuit Interface
+# =============================================================================
+
+inputs:
+  - name: listing
+    type: Listing
+    description: "Current listing state"
+    
+  - name: purchase
+    type: PurchaseRequest
+    description: "Purchase request"
+    
+  - name: buyer_signature
+    type: "bytes(4627)"
+    
+  - name: buyer_balance
+    type: u64
+    description: "Buyer's currency balance"
+    
+  - name: seller_item_balance
+    type: u64
+    description: "Seller's item balance"
+    
+  - name: current_timestamp
+    type: u64
+
+outputs:
+  - name: result
+    type: TransactionResult
+    
+  - name: error
+    type: MarketplaceError
+    
+  - name: valid
+    type: bool
+    
+  # State updates
+  - name: new_buyer_currency
+    type: u64
+    
+  - name: new_seller_currency
+    type: u64
+    
+  - name: new_buyer_item
+    type: u64
+    
+  - name: new_seller_item
+    type: u64
+
+# =============================================================================
+# Annotations
+# =============================================================================
+
+annotations:
+  witness_tier: "payment"
+  precision_class: "exact"
+  hardware_required: false
+  streamsight_emit: true
+  offline_capable: false  # Marketplace requires real-time state
+  privacy_level: "standard"
+  
+  # Platform fee configuration
+  platform_fee_basis_points: 250  # 2.5%
+
+# =============================================================================
+# StreamSight Integration
+# =============================================================================
+
+streamsight:
+  namespace: "io.estream.marketplace"
+  
+  emit:
+    - event: "purchase_initiated"
+      topic: "lex://{{LEX_ID}}/marketplace/transactions"
+      severity: info
+      fields:
+        - name: listing_id
+          source: listing.listing_id
+        - name: buyer
+          source: purchase.buyer
+        - name: quantity
+          source: purchase.quantity
+          
+    - event: "purchase_completed"
+      topic: "lex://{{LEX_ID}}/marketplace/transactions"
+      severity: info
+      fields:
+        - name: tx_id
+          source: result.tx_id
+        - name: seller_proceeds
+          source: result.seller_proceeds
+        - name: platform_fee
+          source: result.platform_fee
+          
+    - event: "purchase_failed"
+      topic: "lex://{{LEX_ID}}/marketplace/errors"
+      severity: warning
+      fields:
+        - name: error
+          source: error
+
+# =============================================================================
+# Compute Graph
+# =============================================================================
+
+compute:
+  nodes:
+    # -------------------------------------------------------------------------
+    # Validation
+    # -------------------------------------------------------------------------
+    - id: verify_buyer
+      type: verify_mldsa
+      
+    - id: check_expiration
+      type: compare
+      operation: "current_timestamp < listing.expires_at"
+      
+    - id: check_quantity
+      type: compare
+      operation: "purchase.quantity <= listing.quantity && purchase.quantity <= seller_item_balance"
+      
+    - id: check_price
+      type: conditional
+      condition: "listing.listing_type == FixedPrice"
+      operation: "purchase.offered_price >= listing.price * purchase.quantity"
+      
+    # -------------------------------------------------------------------------
+    # Fee Calculation
+    # -------------------------------------------------------------------------
+    - id: calculate_total
+      type: arithmetic
+      operation: "listing.price * purchase.quantity"
+      
+    - id: calculate_platform_fee
+      type: arithmetic
+      operation: "total * platform_fee_basis_points / 10000"
+      
+    - id: calculate_seller_proceeds
+      type: arithmetic
+      operation: "total - platform_fee"
+      
+    # -------------------------------------------------------------------------
+    # Balance Checks
+    # -------------------------------------------------------------------------
+    - id: check_buyer_funds
+      type: compare
+      operation: "buyer_balance >= total"
+      
+    # -------------------------------------------------------------------------
+    # Atomic Swap
+    # -------------------------------------------------------------------------
+    - id: debit_buyer
+      type: arithmetic
+      operation: "buyer_balance - total"
+      
+    - id: credit_seller
+      type: arithmetic
+      operation: "seller_currency_balance + seller_proceeds"
+      
+    - id: transfer_item_from_seller
+      type: arithmetic
+      operation: "seller_item_balance - purchase.quantity"
+      
+    - id: transfer_item_to_buyer
+      type: arithmetic
+      operation: "buyer_item_balance + purchase.quantity"
+      
+    # -------------------------------------------------------------------------
+    # Result
+    # -------------------------------------------------------------------------
+    - id: generate_tx_id
+      type: hash
+      algorithm: blake3
+      
+    - id: assemble_result
+      type: struct_build
+
+  flows:
+    # Validation chain
+    - buyer_signature -> verify_buyer
+    - listing, current_timestamp -> check_expiration
+    - purchase, listing, seller_item_balance -> check_quantity
+    - purchase, listing -> check_price
+    
+    # Fee calculation
+    - listing.price, purchase.quantity -> calculate_total
+    - calculate_total -> calculate_platform_fee
+    - calculate_total, calculate_platform_fee -> calculate_seller_proceeds
+    
+    # Balance check
+    - buyer_balance, calculate_total -> check_buyer_funds
+    
+    # Execute swap (only if all checks pass)
+    - check_buyer_funds.pass -> debit_buyer, credit_seller
+    - check_buyer_funds.pass -> transfer_item_from_seller, transfer_item_to_buyer
+    
+    # Outputs
+    - debit_buyer -> new_buyer_currency
+    - credit_seller -> new_seller_currency
+    - transfer_item_to_buyer -> new_buyer_item
+    - transfer_item_from_seller -> new_seller_item
+
+# =============================================================================
+# Invariants
+# =============================================================================
+
+invariants:
+  - name: "atomic_swap"
+    description: "Items and currency fully exchanged or nothing"
+    formula: |
+      (result.success && 
+        new_buyer_item == buyer_item_balance + purchase.quantity &&
+        new_seller_item == seller_item_balance - purchase.quantity) ||
+      (!result.success &&
+        new_buyer_item == buyer_item_balance &&
+        new_seller_item == seller_item_balance)
+        
+  - name: "fee_conservation"
+    description: "Total funds conserved with platform fee"
+    formula: |
+      buyer_spent == seller_proceeds + platform_fee
+
+# =============================================================================
+# Test Vectors
+# =============================================================================
+
+tests:
+  - name: "Successful fixed price purchase"
+    steps:
+      - input:
+          listing:
+            listing_id: [0x01; 32]
+            seller: [0x02; 32]
+            item_id: [0x03; 32]
+            quantity: 10
+            price: 100
+            listing_type: 1  # FixedPrice
+            expires_at: 99999999999
+          purchase:
+            buyer: [0x04; 32]
+            quantity: 5
+            offered_price: 500
+          buyer_balance: 1000
+          seller_item_balance: 10
+          current_timestamp: 1000
+      - expect:
+          valid: true
+          result:
+            success: true
+            buyer_spent: 500
+            platform_fee: 12  # 2.5% of 500
+            seller_proceeds: 488
+          new_buyer_item: 5
+          new_seller_item: 5

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
+  <FIToFIPmtStsRpt>
+    <GrpHdr>
+      <MsgId>STATUS-20240115-001</MsgId>
+      <CreDtTm>2024-01-15T10:31:00Z</CreDtTm>
+    </GrpHdr>
+    <TxInfAndSts>
+      <OrgnlMsgId>MSG-20240115-001</OrgnlMsgId>
+      <OrgnlInstrId>INSTR001</OrgnlInstrId>
+      <OrgnlEndToEndId>E2E001</OrgnlEndToEndId>
+      <TxSts>ACSC</TxSts>
+    </TxInfAndSts>
+  </FIToFIPmtStsRpt>
+</Document>

@@ -1,0 +1,557 @@
+# MODBUS TCP Client Circuit
+# Open Source under Apache-2.0
+
+escir: "0.8.0"
+name: modbus_tcp_client
+version: "1.0.0"
+license: "Apache-2.0"
+
+metadata:
+  circuit_id: industrial_modbus_tcp_client
+  name: "MODBUS TCP Client"
+  description: |
+    Full-featured MODBUS TCP master/client implementation.
+    Supports all standard function codes with automatic transaction ID
+    management and response correlation.
+  category: industrial
+  
+  marketplace:
+    visibility: source
+    publisher: estream-official
+    tags: ["modbus", "tcp", "industrial", "plc", "scada"]
+    
+  implementation:
+    software:
+      crate: estream-industrial
+      module: protocol::modbus_tcp
+    hardware:
+      path: fpga/rtl/industrial/modbus_tcp_master.v
+      license: commercial
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+
+imports:
+  - circuit: transport/tcp_client
+    as: tcp
+    
+  - schema: industrial/modbus.esf.yaml
+    as: modbus
+
+# =============================================================================
+# Type Definitions
+# =============================================================================
+
+types:
+  ModbusConfig:
+    kind: struct
+    description: "MODBUS device/connection configuration"
+    fields:
+      - name: device_id
+        type: "string(32)"
+        description: "Logical device identifier"
+      - name: remote_ip
+        type: "bytes(4)"
+        description: "Device IP address"
+      - name: remote_port
+        type: u16
+        description: "MODBUS port (default 502)"
+        default: 502
+      - name: unit_id
+        type: u8
+        description: "MODBUS unit/slave ID"
+        default: 1
+      - name: connect_timeout_ms
+        type: u32
+        default: 5000
+      - name: response_timeout_ms
+        type: u32
+        default: 1000
+      - name: retry_count
+        type: u8
+        default: 3
+      - name: retry_delay_ms
+        type: u32
+        default: 100
+
+  ModbusRequest:
+    kind: struct
+    description: "MODBUS request"
+    fields:
+      - name: request_id
+        type: u32
+        description: "Application-level request ID"
+      - name: function_code
+        type: u8
+        description: "MODBUS function code"
+      - name: register_address
+        type: u16
+        description: "Starting register/coil address"
+      - name: quantity
+        type: u16
+        description: "Number of registers/coils"
+      - name: write_data
+        type: "bytes(250)"
+        description: "Data for write operations"
+      - name: write_data_len
+        type: u8
+        description: "Length of write data"
+
+  ModbusResponse:
+    kind: struct
+    description: "MODBUS response"
+    fields:
+      - name: request_id
+        type: u32
+        description: "Correlated request ID"
+      - name: transaction_id
+        type: u16
+        description: "MBAP transaction ID"
+      - name: function_code
+        type: u8
+      - name: success
+        type: bool
+      - name: data
+        type: "bytes(250)"
+        description: "Response data"
+      - name: data_len
+        type: u8
+      - name: exception_code
+        type: u8
+        description: "Exception code if !success"
+      - name: latency_us
+        type: u32
+      - name: timestamp_ns
+        type: u64
+
+  ModbusError:
+    kind: struct
+    fields:
+      - name: request_id
+        type: u32
+      - name: error_type
+        type: u8
+        description: "0=timeout, 1=exception, 2=connection, 3=internal"
+      - name: error_code
+        type: u8
+      - name: error_message
+        type: "string(128)"
+      - name: timestamp_ns
+        type: u64
+
+  ModbusState:
+    kind: enum
+    variants:
+      - name: Disconnected
+        value: 0
+      - name: Connecting
+        value: 1
+      - name: Ready
+        value: 2
+      - name: Busy
+        value: 3
+      - name: Error
+        value: 4
+
+  # High-level register operations
+  RegisterRead:
+    kind: struct
+    description: "High-level register read request"
+    fields:
+      - name: request_id
+        type: u32
+      - name: register_type
+        type: u8
+        description: "0=holding, 1=input, 2=coil, 3=discrete"
+      - name: address
+        type: u16
+      - name: count
+        type: u16
+
+  RegisterWrite:
+    kind: struct
+    description: "High-level register write request"
+    fields:
+      - name: request_id
+        type: u32
+      - name: register_type
+        type: u8
+        description: "0=holding, 2=coil"
+      - name: address
+        type: u16
+      - name: values
+        type: "[u16; 125]"
+      - name: count
+        type: u16
+
+  RegisterValues:
+    kind: struct
+    description: "Register values response"
+    fields:
+      - name: request_id
+        type: u32
+      - name: register_type
+        type: u8
+      - name: address
+        type: u16
+      - name: values
+        type: "[u16; 125]"
+      - name: count
+        type: u16
+      - name: latency_us
+        type: u32
+
+# =============================================================================
+# Circuit Interface
+# =============================================================================
+
+inputs:
+  - name: config
+    type: ModbusConfig
+    description: "Device configuration"
+    
+  - name: connect
+    type: bool
+    trigger: rising_edge
+    
+  - name: disconnect
+    type: bool
+    trigger: rising_edge
+    
+  # Low-level interface
+  - name: request
+    type: ModbusRequest
+    description: "Raw MODBUS request"
+    
+  - name: request_valid
+    type: bool
+    
+  # High-level interface
+  - name: read_registers
+    type: RegisterRead
+    
+  - name: read_valid
+    type: bool
+    
+  - name: write_registers
+    type: RegisterWrite
+    
+  - name: write_valid
+    type: bool
+
+outputs:
+  - name: state
+    type: ModbusState
+    
+  - name: connected
+    type: bool
+    
+  - name: ready
+    type: bool
+    description: "Ready to accept requests"
+    
+  # Low-level interface
+  - name: response
+    type: ModbusResponse
+    
+  - name: response_valid
+    type: bool
+    
+  # High-level interface
+  - name: register_values
+    type: RegisterValues
+    
+  - name: register_values_valid
+    type: bool
+    
+  # Errors
+  - name: error
+    type: ModbusError
+    
+  - name: error_valid
+    type: bool
+
+# =============================================================================
+# Annotations
+# =============================================================================
+
+annotations:
+  witness_tier: "industrial"
+  precision_class: "standard"
+  hardware_accelerated: true
+  no_std_compatible: true
+  streamsight_emit: true
+
+# =============================================================================
+# StreamSight Integration
+# =============================================================================
+
+streamsight:
+  namespace: "io.estream.industrial.modbus"
+  
+  emit:
+    - event: "request"
+      topic: "lex://estream/sys/industrial/{gateway_id}/protocol/modbus/request"
+      severity: debug
+      fields:
+        - name: device_id
+          source: config.device_id
+        - name: transaction_id
+          source: internal.transaction_id
+        - name: function_code
+          source: request.function_code
+        - name: address
+          source: request.register_address
+        - name: quantity
+          source: request.quantity
+          
+    - event: "response"
+      topic: "lex://estream/sys/industrial/{gateway_id}/protocol/modbus/response"
+      severity: debug
+      fields:
+        - name: device_id
+          source: config.device_id
+        - name: transaction_id
+          source: response.transaction_id
+        - name: success
+          source: response.success
+        - name: latency_us
+          source: response.latency_us
+          
+    - event: "exception"
+      topic: "lex://estream/sys/industrial/{gateway_id}/protocol/modbus/exception"
+      severity: warning
+      fields:
+        - name: device_id
+          source: config.device_id
+        - name: function_code
+          source: response.function_code
+        - name: exception_code
+          source: response.exception_code
+
+# =============================================================================
+# Sub-Circuits
+# =============================================================================
+
+subcircuits:
+  - id: tcp
+    circuit: transport/tcp_client
+    config:
+      from_parent:
+        - remote_ip: config.remote_ip
+        - remote_port: config.remote_port
+        - connect_timeout_ms: config.connect_timeout_ms
+        - read_timeout_ms: config.response_timeout_ms
+
+# =============================================================================
+# Compute Graph
+# =============================================================================
+
+compute:
+  nodes:
+    # -------------------------------------------------------------------------
+    # State Machine
+    # -------------------------------------------------------------------------
+    - id: modbus_fsm
+      type: state_machine
+      initial_state: Disconnected
+      states: [Disconnected, Connecting, Ready, Busy, Error]
+      transitions:
+        - from: Disconnected
+          to: Connecting
+          trigger: connect
+        - from: Connecting
+          to: Ready
+          trigger: tcp.connected
+        - from: Connecting
+          to: Error
+          trigger: tcp.error
+        - from: Ready
+          to: Busy
+          trigger: request_valid
+        - from: Ready
+          to: Busy
+          trigger: read_valid
+        - from: Ready
+          to: Busy
+          trigger: write_valid
+        - from: Busy
+          to: Ready
+          trigger: response_complete
+        - from: Busy
+          to: Error
+          trigger: timeout
+        - from: "*"
+          to: Disconnected
+          trigger: disconnect
+          
+    # -------------------------------------------------------------------------
+    # Transaction Management
+    # -------------------------------------------------------------------------
+    - id: transaction_id_gen
+      type: counter
+      description: "Generate MODBUS transaction IDs"
+      width: 16
+      wrap: true
+      
+    - id: inflight_tracker
+      type: map
+      description: "Track in-flight transactions"
+      capacity: 4
+      key_type: u16
+      value_type: { request_id: u32, timestamp: u64 }
+      
+    # -------------------------------------------------------------------------
+    # Request Building
+    # -------------------------------------------------------------------------
+    - id: high_level_translator
+      type: transform
+      description: "Convert high-level read/write to raw requests"
+      operations:
+        read_holding: "function_code = 0x03"
+        read_input: "function_code = 0x04"
+        read_coil: "function_code = 0x01"
+        read_discrete: "function_code = 0x02"
+        write_holding_single: "function_code = 0x06"
+        write_holding_multi: "function_code = 0x10"
+        write_coil_single: "function_code = 0x05"
+        write_coil_multi: "function_code = 0x0F"
+        
+    - id: mbap_builder
+      type: transform
+      description: "Build MBAP header"
+      output_format: |
+        [
+          transaction_id[15:8], transaction_id[7:0],  // Transaction ID
+          0x00, 0x00,                                  // Protocol ID (MODBUS)
+          length[7:0], length[15:8],                   // Length
+          unit_id                                      // Unit ID
+        ]
+        
+    - id: pdu_builder
+      type: transform
+      description: "Build Protocol Data Unit"
+      
+    # -------------------------------------------------------------------------
+    # Response Parsing
+    # -------------------------------------------------------------------------
+    - id: mbap_parser
+      type: transform
+      description: "Parse MBAP header from response"
+      
+    - id: pdu_parser
+      type: transform
+      description: "Parse PDU from response"
+      
+    - id: exception_handler
+      type: transform
+      description: "Handle MODBUS exceptions"
+      operation: |
+        if function_code & 0x80:
+          exception_code = pdu[1]
+          success = false
+        else:
+          success = true
+          
+    - id: response_translator
+      type: transform
+      description: "Convert raw response to high-level RegisterValues"
+      
+    # -------------------------------------------------------------------------
+    # Retry Logic
+    # -------------------------------------------------------------------------
+    - id: retry_controller
+      type: retry_controller
+      max_attempts: config.retry_count
+      delay_ms: config.retry_delay_ms
+      
+    # -------------------------------------------------------------------------
+    # Timeout
+    # -------------------------------------------------------------------------
+    - id: response_timeout
+      type: timer
+      timeout_ms: config.response_timeout_ms
+
+  # ---------------------------------------------------------------------------
+  # Data Flow
+  # ---------------------------------------------------------------------------
+  flows:
+    # Connect/disconnect
+    - connect -> tcp.connect
+    - disconnect -> tcp.disconnect
+    - tcp.state -> state_mapper -> state
+    
+    # High-level -> low-level translation
+    - read_registers -> high_level_translator
+    - write_registers -> high_level_translator
+    - high_level_translator -> request_queue
+    
+    # Request building
+    - request -> request_queue
+    - request_queue -> transaction_id_gen
+    - transaction_id_gen -> mbap_builder
+    - request -> pdu_builder
+    - mbap_builder, pdu_builder -> packet_assembler
+    
+    # Send via TCP
+    - packet_assembler -> tcp.send_request
+    - packet_assembler -> inflight_tracker.add
+    - packet_assembler -> response_timeout.start
+    
+    # Receive from TCP
+    - tcp.response -> mbap_parser
+    - mbap_parser -> pdu_parser
+    - pdu_parser -> exception_handler
+    - exception_handler -> inflight_tracker.lookup
+    - inflight_tracker.found -> response_timeout.stop
+    - inflight_tracker.found -> response
+    
+    # High-level response
+    - response -> response_translator -> register_values
+    
+    # Timeout/retry
+    - response_timeout.expired -> retry_controller
+    - retry_controller.retry -> request_queue.requeue
+    - retry_controller.exhausted -> error
+
+# =============================================================================
+# Test Vectors
+# =============================================================================
+
+tests:
+  - name: "Read holding registers"
+    steps:
+      - setup: { state: Ready, config: { unit_id: 1 } }
+      - input:
+          read_registers: { request_id: 1, register_type: 0, address: 100, count: 10 }
+          read_valid: true
+      - expect:
+          state: Busy
+          tcp.send_valid: true
+      - mock:
+          tcp.response:
+            payload: [0x00, 0x01, 0x00, 0x00, 0x00, 0x17, 0x01, 0x03, 0x14,
+                      0x00, 0x0A, 0x00, 0x0B, 0x00, 0x0C, 0x00, 0x0D, 0x00, 0x0E,
+                      0x00, 0x0F, 0x00, 0x10, 0x00, 0x11, 0x00, 0x12, 0x00, 0x13]
+      - expect:
+          state: Ready
+          register_values_valid: true
+          register_values:
+            request_id: 1
+            count: 10
+            
+  - name: "Exception response"
+    steps:
+      - setup: { state: Ready }
+      - input:
+          read_registers: { request_id: 2, register_type: 0, address: 65535, count: 10 }
+          read_valid: true
+      - mock:
+          tcp.response:
+            payload: [0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x01, 0x83, 0x02]
+      - expect:
+          response_valid: true
+          response:
+            success: false
+            exception_code: 2  # Illegal Data Address

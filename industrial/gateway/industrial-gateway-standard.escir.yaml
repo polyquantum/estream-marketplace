@@ -1,0 +1,202 @@
+# Industrial Gateway Standard - Marketplace Composite Component
+# Commercial License
+
+escir: "0.8.0"
+name: industrial_gateway_standard
+version: "1.0.0"
+license: "commercial"
+
+metadata:
+  circuit_id: marketplace_industrial_gateway_standard
+  name: "Industrial Gateway Standard"
+  description: |
+    Production-grade industrial protocol gateway with multi-protocol support.
+    Suitable for mid-sized deployments with up to 50 devices.
+    
+    Features:
+    - MODBUS TCP master
+    - MODBUS RTU master (serial)
+    - OPC-UA client (coming soon)
+    - Advanced polling with priority scheduling
+    - Register-to-stream conversion with full data types
+    - Comprehensive alarm management
+    - Full StreamSight telemetry
+    - Historian buffer for offline operation
+    - FPGA acceleration available
+    
+    Extends gateway-lite with:
+    - Serial/RTU support
+    - 50 device limit (up from 10)
+    - 2048 register limit (up from 256)
+    - Historian buffer (24h)
+    - Priority scheduling
+    - FPGA bitstream option
+  
+  category: marketplace
+  
+  marketplace:
+    sku: "industrial-gateway-standard"
+    visibility: compiled
+    publisher: estream-official
+    pricing:
+      model: subscription
+      price_monthly: 100
+      currency: "ES"
+    license: "commercial"
+    tags: ["industrial", "modbus", "opc-ua", "gateway", "commercial"]
+    documentation: "docs/marketplace/INDUSTRIAL_GATEWAY_STANDARD.md"
+    support: standard
+    sla:
+      response_time: "24h"
+      uptime: "99.5%"
+    
+  implementation:
+    software:
+      crate: estream-industrial
+      module: gateway::standard
+      binary: estream-gateway-standard
+      visibility: binary
+    hardware:
+      path: fpga/rtl/industrial/gateway_standard.v
+      visibility: bitstream
+      devices:
+        - "XC7A100T"
+        - "XC7A200T"
+        - "XCZU3EG"
+
+# =============================================================================
+# Limits
+# =============================================================================
+
+limits:
+  max_devices: 50
+  max_registers: 2048
+  max_alarms: 512
+  max_polls_per_second: 1000
+  historian_buffer_hours: 24
+
+# =============================================================================
+# Composed Circuits (Extends Lite)
+# =============================================================================
+
+extends: industrial_gateway_lite
+
+composition:
+  # Additional instances for larger scale
+  - id: tcp_pool
+    circuit: transport/tcp_client
+    instances: 50
+    
+  - id: modbus_tcp_pool
+    circuit: industrial/modbus_tcp_client
+    instances: 50
+    
+  # Serial support
+  - id: serial_pool
+    circuit: transport/serial_uart
+    instances: 8
+    description: "Serial ports for RTU"
+    
+  - id: modbus_rtu_pool
+    circuit: industrial/modbus_rtu_client
+    instances: 8
+    note: "Requires serial_uart transport - defined in standard tier"
+    
+  # Enhanced scheduler
+  - id: scheduler
+    circuit: industrial/poll_scheduler
+    instances: 1
+    config:
+      max_polls_per_second: 1000
+      adaptive_enabled: true
+      priority_levels: 4
+      
+  # Enhanced emitter
+  - id: emitter
+    circuit: industrial/stream_emitter
+    instances: 1
+    config:
+      batch_enabled: true
+      batch_size: 64
+      change_detection: true
+      
+  # Historian buffer
+  - id: historian
+    circuit: industrial/historian_buffer
+    instances: 1
+    note: "Store-and-forward buffer for offline operation"
+    config:
+      buffer_size_mb: 256
+      retention_hours: 24
+      
+  # Alarm manager (enhanced)
+  - id: alarm_manager
+    circuit: industrial/alarm_manager
+    instances: 1
+    note: "Enhanced alarm management with shelving, grouping"
+
+# =============================================================================
+# Additional Types
+# =============================================================================
+
+types:
+  GatewayStandardConfig:
+    kind: struct
+    extends: GatewayLiteConfig
+    additional_fields:
+      - name: serial_ports
+        type: "[SerialPortConfig; 8]"
+      - name: serial_port_count
+        type: u8
+      - name: historian
+        type: HistorianConfig
+      - name: priority_scheduling
+        type: bool
+        default: true
+        
+  SerialPortConfig:
+    kind: struct
+    fields:
+      - name: port_path
+        type: "string(64)"
+      - name: baud_rate
+        type: u32
+        default: 9600
+      - name: parity
+        type: u8
+        default: 0
+      - name: stop_bits
+        type: u8
+        default: 1
+      - name: rs485_mode
+        type: bool
+        default: false
+        
+  HistorianConfig:
+    kind: struct
+    fields:
+      - name: enabled
+        type: bool
+        default: true
+      - name: buffer_size_mb
+        type: u32
+        default: 256
+      - name: retention_hours
+        type: u32
+        default: 24
+      - name: compression
+        type: bool
+        default: true
+
+# =============================================================================
+# Annotations
+# =============================================================================
+
+annotations:
+  witness_tier: "production"
+  marketplace_sku: "industrial-gateway-standard"
+  open_source: false
+  hardware_accelerated: true
+  streamsight_emit: true
+  compliance:
+    - "IEC 62443"

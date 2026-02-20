@@ -1,0 +1,1039 @@
+# =============================================================================
+# ISO 20022 Parser Circuit (ESCIR v0.8.0)
+# =============================================================================
+# Streaming ISO 20022 XML/JSON parser that converts financial messages to
+# eStream Format (ESF) with privacy tier annotations.
+#
+# This is the ESCIR representation of the FPGA parser, enabling:
+#   - Rust code generation for software fallback
+#   - Bit-identical behavior between Rust and FPGA
+#   - Single source of truth for parsing logic
+#
+# Related:
+#   - FPGA: fpga/rtl/iso20022/*.v
+#   - Rust: crates/estream-iso20022/
+#   - Spec: specs/protocol/ISO20022_FPGA_PARSER_SPEC.md
+# =============================================================================
+
+name: iso20022-parser
+version: 1
+format: v0.8.0
+description: |
+  Hardware-accelerated ISO 20022 financial message parser with support for
+  pacs.008 (Credit Transfer), pacs.002 (Status Report), camt.053 (Statement),
+  and camt.052 (Account Report). Converts XML/JSON to eStream Format (ESF)
+  for privacy-preserving payment processing.
+
+# =============================================================================
+# v0.8.0 Annotations
+# =============================================================================
+annotations:
+  precision_class: B            # 10ns precision for payment timestamping
+  witness_tier: 2               # Full witness attestation for compliance
+  streamsight_emit: true        # Emit telemetry on parse events
+  alert_on_error: E5001         # ISO 20022 parse error
+  
+  resource_metering:
+    hardware_base: 0.001        # Base cost per message
+    operations_base: 0.0001     # Per-field cost
+    storage_base: 0.00001       # Per-byte storage cost
+    budget: 1000000000
+  
+  # Hardware tier compatibility
+  hardware_required: false      # Can run in software mode
+  degradation_allowed: true     # Performance degrades gracefully
+  
+  # Memory hints
+  memory_tier: L1               # Fast path in L1 cache
+  memory_budget: 16384          # 16KB working memory
+
+# =============================================================================
+# Type Definitions
+# =============================================================================
+types:
+  # Format selection
+  InputFormat:
+    kind: enum
+    values: [xml, json]
+  
+  # Privacy tiers (matches PrivacyTier enum in Rust crate)
+  PrivacyTier:
+    kind: enum
+    values: [public, restricted, private, stealth, encrypted]
+  
+  # ESF field types (matches EsfFieldType enum)
+  EsfFieldType:
+    kind: enum
+    values: [none, string, u8, u16, u32, u64, u128, i64, bytes, date, datetime, decimal, bic, iban, currency, enum_type]
+  
+  # Token types from tokenizer
+  TokenType:
+    kind: enum
+    values: [
+      none, tag_open, tag_close, tag_self_close, attr_name, attr_value,
+      text, cdata, comment, pi, whitespace, error,
+      # JSON-specific tokens
+      obj_start, obj_end, arr_start, arr_end, key, str_value,
+      num_value, bool_value, null_value
+    ]
+  
+  # Transaction status codes
+  TransactionStatus:
+    kind: enum
+    values: [accp, actc, acsp, acsc, acwc, part, rcvd, pdng, rjct]
+  
+  # Message types
+  MessageType:
+    kind: enum
+    values: [pacs008, pacs002, camt053, camt052]
+  
+  # Token from tokenizer stage
+  Token:
+    kind: struct
+    fields:
+      - name: token_type
+        type: TokenType
+      - name: content
+        type: bytes(256)
+      - name: content_len
+        type: u16
+      - name: depth
+        type: u8
+  
+  # ESF field output
+  EsfField:
+    kind: struct
+    fields:
+      - name: field_id
+        type: u16
+      - name: field_type
+        type: EsfFieldType
+      - name: privacy_tier
+        type: PrivacyTier
+      - name: value
+        type: bytes(256)
+      - name: value_len
+        type: u16
+  
+  # Parsed pacs.008 message
+  Pacs008Message:
+    kind: struct
+    fields:
+      - name: message_id
+        type: string(35)
+      - name: creation_datetime
+        type: datetime
+      - name: num_transactions
+        type: u32
+      - name: settlement_method
+        type: string(4)
+      - name: instruction_id
+        type: string(35)
+      - name: end_to_end_id
+        type: string(35)
+      - name: transaction_id
+        type: string(35)
+      - name: amount
+        type: u128
+      - name: currency
+        type: string(3)
+      - name: charge_bearer
+        type: string(4)
+      - name: debtor_name
+        type: string(140)
+      - name: debtor_country
+        type: string(2)
+      - name: creditor_name
+        type: string(140)
+      - name: debtor_iban
+        type: string(34)
+      - name: debtor_bic
+        type: string(11)
+      - name: creditor_iban
+        type: string(34)
+      - name: creditor_bic
+        type: string(11)
+      - name: remittance_info
+        type: string(140)
+  
+  # Parsed pacs.002 message
+  Pacs002Message:
+    kind: struct
+    fields:
+      - name: message_id
+        type: string(35)
+      - name: creation_datetime
+        type: datetime
+      - name: original_message_id
+        type: string(35)
+      - name: original_instruction_id
+        type: string(35)
+      - name: transaction_status
+        type: TransactionStatus
+      - name: status_reason_code
+        type: string(4)
+  
+  # PoVC witness data
+  PovcWitness:
+    kind: struct
+    fields:
+      - name: message_hash
+        type: bytes(32)         # SHA3-256 of raw input
+      - name: parsed_fields_hash
+        type: bytes(32)         # SHA3-256 of ESF output
+      - name: timestamp
+        type: u64               # HTU timestamp
+      - name: parser_version
+        type: u16
+      - name: schema_id
+        type: string(20)        # e.g., "pacs.008.001.08"
+
+# =============================================================================
+# Component Definitions
+# =============================================================================
+components:
+  # ---------------------------------------------------------------------------
+  # Byte Stream Ingress (AXI-Stream input)
+  # ---------------------------------------------------------------------------
+  - id: byte_stream_ingress
+    type: processor
+    label: Byte Stream Ingress
+    description: AXI-Stream input with backpressure and byte alignment
+    
+    ports:
+      - id: s_axis_data
+        type: Stream<bytes(8)>
+        direction: input
+        annotations:
+          - "@fifo(depth: 64, policy: stall)"
+      
+      - id: byte_out
+        type: Stream<u8>
+        direction: output
+    
+    state:
+      - name: byte_index
+        type: u8
+        annotations: ["@atomic"]
+    
+    annotations:
+      - "@streaming(depth: 8)"
+    
+    targets:
+      ideal:
+        throughput_bytes_per_cycle: 8
+      nexus_40k:
+        throughput_bytes_per_cycle: 8
+    
+    process: |
+      let word = s_axis_data.recv()
+      for i in 0..8 {
+        byte_out.send(word[i])
+      }
+  
+  # ---------------------------------------------------------------------------
+  # Tokenizer Multiplexer
+  # ---------------------------------------------------------------------------
+  - id: tokenizer_mux
+    type: router
+    label: Tokenizer Mux
+    description: Routes bytes to appropriate tokenizer based on format
+    
+    ports:
+      - id: byte_in
+        type: Stream<u8>
+        direction: input
+      
+      - id: format_select
+        type: InputFormat
+        direction: input
+      
+      - id: xml_out
+        type: Stream<u8>
+        direction: output
+      
+      - id: json_out
+        type: Stream<u8>
+        direction: output
+    
+    process: |
+      let byte = byte_in.recv()
+      match format_select {
+        InputFormat::xml => xml_out.send(byte)
+        InputFormat::json => json_out.send(byte)
+      }
+  
+  # ---------------------------------------------------------------------------
+  # XML Tokenizer
+  # ---------------------------------------------------------------------------
+  - id: xml_tokenizer
+    type: processor
+    label: XML Tokenizer
+    description: |
+      Streaming SAX-style XML tokenizer with 4-stage pipeline:
+      - Stage 1: Character classification (parallel 8-byte)
+      - Stage 2: State machine (tag/attr/text detection)
+      - Stage 3: Token assembly
+      - Stage 4: Token emit with validation
+    
+    ports:
+      - id: byte_in
+        type: Stream<u8>
+        direction: input
+        annotations:
+          - "@fifo(depth: 32, policy: stall)"
+      
+      - id: token_out
+        type: Stream<Token>
+        direction: output
+      
+      - id: error_out
+        type: u8
+        direction: output
+        fire_and_forget: true
+        overflow_policy: sample
+    
+    state:
+      - name: state
+        type: u8
+        annotations: ["@atomic"]
+        description: FSM state (idle, in_tag, in_attr, in_text, etc.)
+      
+      - name: token_buffer
+        type: bytes(256)
+        annotations: ["@streaming(depth: 256)"]
+      
+      - name: token_len
+        type: u16
+      
+      - name: depth
+        type: u8
+        description: XML nesting depth
+      
+      - name: in_escape
+        type: bool
+      
+      - name: quote_char
+        type: u8
+        description: Current quote character (single or double)
+    
+    uses:
+      - id: char_classifier
+        type: CharacterClassifier
+        description: Parallel 8-byte character classification
+    
+    targets:
+      ideal:
+        latency_cycles: 4
+        throughput_bytes_per_cycle: 1
+      nexus_40k:
+        latency_cycles: 4
+        throughput_bytes_per_cycle: 1
+    
+    annotations:
+      - "@precision_class: C"
+    
+    process: |
+      let byte = byte_in.recv()
+      let char_class = char_classifier.classify(byte)
+      
+      match state {
+        STATE_IDLE => {
+          if byte == '<' {
+            state = STATE_TAG_START
+          } else if !is_whitespace(byte) {
+            state = STATE_TEXT
+            token_buffer[token_len] = byte
+            token_len = token_len + 1
+          }
+        }
+        STATE_TAG_START => {
+          if byte == '/' {
+            state = STATE_CLOSE_TAG
+          } else if byte == '!' {
+            state = STATE_MARKUP
+          } else if byte == '?' {
+            state = STATE_PI
+          } else {
+            state = STATE_TAG_NAME
+            token_buffer[token_len] = byte
+            token_len = token_len + 1
+          }
+        }
+        STATE_TAG_NAME => {
+          if byte == '>' {
+            token_out.send(Token { 
+              token_type: TokenType::tag_open, 
+              content: token_buffer,
+              content_len: token_len,
+              depth: depth
+            })
+            depth = depth + 1
+            token_len = 0
+            state = STATE_IDLE
+          } else if byte == '/' {
+            state = STATE_SELF_CLOSE
+          } else if is_whitespace(byte) {
+            token_out.send(Token {
+              token_type: TokenType::tag_open,
+              content: token_buffer,
+              content_len: token_len,
+              depth: depth
+            })
+            depth = depth + 1
+            token_len = 0
+            state = STATE_ATTR_SPACE
+          } else {
+            token_buffer[token_len] = byte
+            token_len = token_len + 1
+          }
+        }
+        // ... additional states for attributes, text, CDATA, etc.
+      }
+  
+  # ---------------------------------------------------------------------------
+  # JSON Tokenizer
+  # ---------------------------------------------------------------------------
+  - id: json_tokenizer
+    type: processor
+    label: JSON Tokenizer
+    description: |
+      Streaming JSON tokenizer with unified token interface.
+      4-stage pipeline matching XML tokenizer for consistent timing.
+    
+    ports:
+      - id: byte_in
+        type: Stream<u8>
+        direction: input
+        annotations:
+          - "@fifo(depth: 32, policy: stall)"
+      
+      - id: token_out
+        type: Stream<Token>
+        direction: output
+      
+      - id: error_out
+        type: u8
+        direction: output
+        fire_and_forget: true
+    
+    state:
+      - name: state
+        type: u8
+      - name: token_buffer
+        type: bytes(256)
+      - name: token_len
+        type: u16
+      - name: depth
+        type: u8
+      - name: in_string
+        type: bool
+      - name: in_escape
+        type: bool
+      - name: is_key
+        type: bool
+    
+    targets:
+      ideal:
+        latency_cycles: 4
+        throughput_bytes_per_cycle: 1
+      nexus_40k:
+        latency_cycles: 4
+        throughput_bytes_per_cycle: 1
+    
+    process: |
+      let byte = byte_in.recv()
+      
+      if in_string {
+        if in_escape {
+          token_buffer[token_len] = unescape(byte)
+          token_len = token_len + 1
+          in_escape = false
+        } else if byte == '\\' {
+          in_escape = true
+        } else if byte == '"' {
+          let token_type = if is_key { TokenType::key } else { TokenType::str_value }
+          token_out.send(Token {
+            token_type: token_type,
+            content: token_buffer,
+            content_len: token_len,
+            depth: depth
+          })
+          token_len = 0
+          in_string = false
+        } else {
+          token_buffer[token_len] = byte
+          token_len = token_len + 1
+        }
+      } else {
+        match byte {
+          '{' => {
+            token_out.send(Token { token_type: TokenType::obj_start, depth: depth, ... })
+            depth = depth + 1
+            is_key = true
+          }
+          '}' => {
+            depth = depth - 1
+            token_out.send(Token { token_type: TokenType::obj_end, depth: depth, ... })
+          }
+          '[' => {
+            token_out.send(Token { token_type: TokenType::arr_start, depth: depth, ... })
+            depth = depth + 1
+            is_key = false
+          }
+          ']' => {
+            depth = depth - 1
+            token_out.send(Token { token_type: TokenType::arr_end, depth: depth, ... })
+          }
+          ':' => { is_key = false }
+          ',' => { is_key = (depth > 0) }  // Next token is key if inside object
+          '"' => { in_string = true }
+          // Numbers, true, false, null handled similarly
+        }
+      }
+  
+  # ---------------------------------------------------------------------------
+  # Tree Walker FSM
+  # ---------------------------------------------------------------------------
+  - id: tree_walker
+    type: processor
+    label: Tree Walker FSM
+    description: |
+      Tracks document structure and computes path hashes for field lookup.
+      Uses FNV-1a hash for constant-time path matching.
+    
+    ports:
+      - id: token_in
+        type: Stream<Token>
+        direction: input
+      
+      - id: path_hash_out
+        type: u32
+        direction: output
+      
+      - id: depth_out
+        type: u8
+        direction: output
+      
+      - id: token_out
+        type: Stream<Token>
+        direction: output
+    
+    state:
+      - name: path_stack
+        type: Array<bytes(64), 16>
+        annotations: ["@warm(16)"]
+        description: Element name stack for path computation
+      
+      - name: path_hash
+        type: u32
+        annotations: ["@atomic"]
+        description: Running FNV-1a hash of current path
+      
+      - name: depth
+        type: u8
+    
+    uses:
+      - id: hasher
+        type: FNV1aHasher
+    
+    process: |
+      let token = token_in.recv()
+      
+      match token.token_type {
+        TokenType::tag_open | TokenType::key => {
+          // Push element name to stack
+          path_stack[depth] = token.content
+          depth = depth + 1
+          
+          // Update path hash: hash("/" + element_name)
+          path_hash = hasher.update(path_hash, '/')
+          for i in 0..token.content_len {
+            path_hash = hasher.update(path_hash, token.content[i])
+          }
+          
+          path_hash_out = path_hash
+          depth_out = depth
+          token_out.send(token)
+        }
+        TokenType::tag_close | TokenType::obj_end => {
+          // Pop from stack
+          depth = depth - 1
+          
+          // Recompute hash by replaying stack
+          path_hash = FNV_OFFSET_BASIS
+          for i in 0..depth {
+            path_hash = hasher.update(path_hash, '/')
+            for j in 0..path_stack[i].len {
+              path_hash = hasher.update(path_hash, path_stack[i][j])
+            }
+          }
+          
+          path_hash_out = path_hash
+          depth_out = depth
+          token_out.send(token)
+        }
+        _ => {
+          token_out.send(token)
+        }
+      }
+  
+  # ---------------------------------------------------------------------------
+  # Field Extractor
+  # ---------------------------------------------------------------------------
+  - id: field_extractor
+    type: processor
+    label: Field Extractor
+    description: |
+      Extracts fields based on path hash lookup in schema ROM.
+      Converts raw text to typed ESF values.
+    
+    ports:
+      - id: token_in
+        type: Stream<Token>
+        direction: input
+      
+      - id: path_hash_in
+        type: u32
+        direction: input
+      
+      - id: esf_field_out
+        type: Stream<EsfField>
+        direction: output
+      
+      - id: message_type_out
+        type: MessageType
+        direction: output
+    
+    state:
+      - name: current_field_id
+        type: u16
+      - name: current_field_type
+        type: EsfFieldType
+      - name: current_privacy_tier
+        type: PrivacyTier
+      - name: message_type
+        type: MessageType
+    
+    uses:
+      - id: schema_rom
+        type: SchemaROM
+        description: Pre-compiled field lookup table
+    
+    process: |
+      let token = token_in.recv()
+      let path_hash = path_hash_in
+      
+      // Look up field in schema ROM
+      let schema_entry = schema_rom.lookup(path_hash)
+      
+      if schema_entry.valid {
+        current_field_id = schema_entry.field_id
+        current_field_type = schema_entry.field_type
+        current_privacy_tier = schema_entry.privacy_tier
+        
+        // Detect message type from root element
+        if schema_entry.is_root {
+          message_type = schema_entry.message_type
+          message_type_out = message_type
+        }
+      }
+      
+      // Extract value from text/value tokens
+      if token.token_type == TokenType::text || 
+         token.token_type == TokenType::str_value ||
+         token.token_type == TokenType::num_value {
+        
+        if current_field_id != 0 {
+          let esf_value = convert_to_esf(token.content, current_field_type)
+          
+          esf_field_out.send(EsfField {
+            field_id: current_field_id,
+            field_type: current_field_type,
+            privacy_tier: current_privacy_tier,
+            value: esf_value,
+            value_len: esf_value.len
+          })
+          
+          current_field_id = 0
+        }
+      }
+  
+  # ---------------------------------------------------------------------------
+  # Schema ROM
+  # ---------------------------------------------------------------------------
+  - id: schema_rom
+    type: memory
+    label: Schema ROM
+    description: |
+      Pre-compiled lookup table for field paths.
+      Format: path_hash -> (field_id, field_type, privacy_tier)
+    
+    annotations:
+      - "@warm(4096)"          # 4KB ROM
+      - "@memory_tier: L1"
+    
+    state:
+      - name: entries
+        type: Array<SchemaEntry, 256>
+        annotations: ["@hot(256)"]
+    
+    # Pre-compiled entries (generated from PACS008_FIELDS, PACS002_FIELDS)
+    initial_data:
+      # pacs.008 fields
+      - path_hash: 0x12345678  # FNV-1a of "/Document/FIToFICstmrCdtTrf/GrpHdr/MsgId"
+        field_id: 0x0001
+        field_type: string
+        privacy_tier: public
+      # ... additional entries generated at compile time
+  
+  # ---------------------------------------------------------------------------
+  # ESF Output
+  # ---------------------------------------------------------------------------
+  - id: esf_output
+    type: processor
+    label: ESF Output
+    description: Formats extracted fields into ESF wire format
+    
+    ports:
+      - id: field_in
+        type: Stream<EsfField>
+        direction: input
+      
+      - id: esf_out
+        type: Stream<bytes(8)>
+        direction: output
+        annotations:
+          - "@fifo(depth: 64, policy: stall)"
+    
+    state:
+      - name: field_count
+        type: u32
+        annotations: ["@atomic"]
+    
+    process: |
+      let field = field_in.recv()
+      
+      // ESF header: field_id (2) + type (1) + privacy (1) + len (2) + reserved (2)
+      let header = pack_esf_header(field)
+      esf_out.send(header)
+      
+      // ESF value (padded to 8-byte boundary)
+      let value_words = (field.value_len + 7) / 8
+      for i in 0..value_words {
+        esf_out.send(field.value[i*8..(i+1)*8])
+      }
+      
+      field_count = field_count + 1
+  
+  # ---------------------------------------------------------------------------
+  # PoVC Witness Generator
+  # ---------------------------------------------------------------------------
+  - id: povc_witness
+    type: processor
+    label: PoVC Witness Generator
+    description: Generates proof-of-verifiable-computation witness for each message
+    
+    ports:
+      - id: raw_input
+        type: Stream<bytes(8)>
+        direction: input
+        description: Tap of raw input for hashing
+      
+      - id: esf_input
+        type: Stream<bytes(8)>
+        direction: input
+        description: Tap of ESF output for hashing
+      
+      - id: htu_timestamp
+        type: u64
+        direction: input
+      
+      - id: witness_out
+        type: Stream<PovcWitness>
+        direction: output
+    
+    state:
+      - name: input_hasher
+        type: Sha3State
+      - name: output_hasher
+        type: Sha3State
+      - name: message_complete
+        type: bool
+    
+    uses:
+      - id: sha3
+        type: SHA3_256
+    
+    annotations:
+      - "@witness_tier: 2"
+    
+    process: |
+      // Accumulate input hash
+      let input_word = raw_input.recv()
+      input_hasher = sha3.update(input_hasher, input_word)
+      
+      // Accumulate output hash
+      let output_word = esf_input.recv()
+      output_hasher = sha3.update(output_hasher, output_word)
+      
+      // On message complete, emit witness
+      if message_complete {
+        witness_out.send(PovcWitness {
+          message_hash: sha3.finalize(input_hasher),
+          parsed_fields_hash: sha3.finalize(output_hasher),
+          timestamp: htu_timestamp,
+          parser_version: 0x0001,
+          schema_id: current_schema_id
+        })
+        
+        input_hasher = sha3.init()
+        output_hasher = sha3.init()
+      }
+
+# =============================================================================
+# Connections
+# =============================================================================
+connections:
+  # Input -> Tokenizer Mux
+  - source: byte_stream_ingress
+    sourceHandle: byte_out
+    target: tokenizer_mux
+    targetHandle: byte_in
+  
+  # Tokenizer Mux -> Tokenizers
+  - source: tokenizer_mux
+    sourceHandle: xml_out
+    target: xml_tokenizer
+    targetHandle: byte_in
+  
+  - source: tokenizer_mux
+    sourceHandle: json_out
+    target: json_tokenizer
+    targetHandle: byte_in
+  
+  # Tokenizers -> Tree Walker (with mux)
+  - source: xml_tokenizer
+    sourceHandle: token_out
+    target: tree_walker
+    targetHandle: token_in
+    condition: "format_select == InputFormat::xml"
+  
+  - source: json_tokenizer
+    sourceHandle: token_out
+    target: tree_walker
+    targetHandle: token_in
+    condition: "format_select == InputFormat::json"
+  
+  # Tree Walker -> Field Extractor
+  - source: tree_walker
+    sourceHandle: token_out
+    target: field_extractor
+    targetHandle: token_in
+  
+  - source: tree_walker
+    sourceHandle: path_hash_out
+    target: field_extractor
+    targetHandle: path_hash_in
+  
+  # Field Extractor -> ESF Output
+  - source: field_extractor
+    sourceHandle: esf_field_out
+    target: esf_output
+    targetHandle: field_in
+  
+  # ESF Output -> PoVC Witness
+  - source: esf_output
+    sourceHandle: esf_out
+    target: povc_witness
+    targetHandle: esf_input
+
+# =============================================================================
+# Resource Bindings
+# =============================================================================
+bindings:
+  - component: xml_tokenizer
+    resource: char_classifier
+    port: char_classifier
+  
+  - component: json_tokenizer
+    resource: char_classifier
+    port: char_classifier
+  
+  - component: tree_walker
+    resource: fnv1a_hasher
+    port: hasher
+  
+  - component: povc_witness
+    resource: sha3_core
+    port: sha3
+
+# =============================================================================
+# Shared Resources
+# =============================================================================
+resources:
+  - id: char_classifier
+    type: CharacterClassifier
+    description: Parallel 8-byte character classification
+    instances: 1
+  
+  - id: fnv1a_hasher
+    type: FNV1aHasher
+    description: FNV-1a hash for path matching
+    params:
+      width: 32
+    instances: 1
+  
+  - id: sha3_core
+    type: SHA3_256
+    description: SHA3-256 hash for witness generation
+    instances: 1
+
+# =============================================================================
+# External Interfaces
+# =============================================================================
+external:
+  - id: s_axis
+    type: AXIStream
+    width: 64
+    direction: input
+    description: AXI-Stream XML/JSON input (8 bytes parallel)
+  
+  - id: m_axis_esf
+    type: AXIStream
+    width: 64
+    direction: output
+    description: AXI-Stream ESF output with privacy tier
+  
+  - id: format_select
+    type: Wire
+    width: 2
+    direction: input
+    description: "Format selection: 00=XML, 01=JSON"
+  
+  - id: htu_timestamp
+    type: Wire
+    width: 64
+    direction: input
+    description: Hardware timestamp from HTU
+
+# =============================================================================
+# StreamSight Emissions
+# =============================================================================
+emissions:
+  # Telemetry spans
+  - path: lex://estream/sys/telemetry
+    schema: TelemetrySpan
+    condition: true
+    description: Per-message parsing telemetry
+  
+  # Parse events
+  - path: lex://estream/iso20022/parsed
+    schema: ParsedMessage
+    fields:
+      - message_type
+      - field_count
+      - parse_time_ns
+  
+  # Error events
+  - path: lex://estream/iso20022/errors
+    schema: ParseError
+    condition: error_count > 0
+  
+  # Witness attestations
+  - path: lex://estream/iso20022/witness
+    schema: PovcWitness
+    condition: message_complete
+
+# =============================================================================
+# Resource Estimates
+# =============================================================================
+resources_estimate:
+  # Sequential (Lite) variant
+  lite:
+    luts: 14000
+    ffs: 6300
+    brams: 19
+    dsps: 0
+    description: Sequential processing, 125 MB/s
+  
+  # Parallel (Standard) variant  
+  standard:
+    luts: 18000
+    ffs: 8000
+    brams: 20
+    dsps: 0
+    description: 4-byte parallel, 500 MB/s
+  
+  # Full parallel (Premium) variant
+  premium:
+    luts: 22000
+    ffs: 10000
+    brams: 21
+    dsps: 0
+    description: 8-byte parallel, 1 GB/s
+
+# =============================================================================
+# Pipeline Configuration
+# =============================================================================
+pipeline:
+  target_ii: 1                  # Initiation interval of 1 cycle
+  target_latency: 16            # 16 cycles end-to-end
+  target_fmax_mhz: 125          # 125 MHz target
+  
+  stages:
+    - name: ingress
+      latency: 1
+    - name: tokenize
+      latency: 4
+    - name: tree_walk
+      latency: 4
+    - name: field_extract
+      latency: 4
+    - name: esf_output
+      latency: 2
+    - name: povc_witness
+      latency: 1
+
+# =============================================================================
+# Test Vectors
+# =============================================================================
+test_vectors:
+  - name: pacs008_minimal
+    input_format: xml
+    input: |
+      <?xml version="1.0"?>
+      <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+        <FIToFICstmrCdtTrf>
+          <GrpHdr>
+            <MsgId>MSG001</MsgId>
+            <CreDtTm>2024-01-15T10:30:00Z</CreDtTm>
+            <NbOfTxs>1</NbOfTxs>
+          </GrpHdr>
+        </FIToFICstmrCdtTrf>
+      </Document>
+    expected_fields:
+      - field_id: 0x0001
+        value: "MSG001"
+      - field_id: 0x0002
+        value: "2024-01-15T10:30:00Z"
+      - field_id: 0x0003
+        value: 1
+  
+  - name: pacs008_json
+    input_format: json
+    input: |
+      {
+        "Document": {
+          "FIToFICstmrCdtTrf": {
+            "GrpHdr": {
+              "MsgId": "MSG002",
+              "CreDtTm": "2024-01-15T10:30:00Z",
+              "NbOfTxs": 1
+            }
+          }
+        }
+      }
+    expected_fields:
+      - field_id: 0x0001
+        value: "MSG002"

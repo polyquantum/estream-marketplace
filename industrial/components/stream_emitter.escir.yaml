@@ -1,0 +1,556 @@
+# Industrial Stream Emitter Circuit
+# Open Source under Apache-2.0
+
+escir: "0.8.0"
+name: stream_emitter
+version: "1.0.0"
+license: "Apache-2.0"
+
+metadata:
+  circuit_id: industrial_stream_emitter
+  name: "Industrial Stream Emitter"
+  description: |
+    Converts industrial register values to estream events.
+    Handles data type conversion, scaling, change detection, and alarm evaluation.
+  category: industrial
+  
+  marketplace:
+    visibility: source
+    publisher: estream-official
+    tags: ["telemetry", "stream", "industrial", "conversion"]
+    
+  implementation:
+    software:
+      crate: estream-industrial
+      module: emitter::stream
+    hardware:
+      path: fpga/rtl/industrial/stream_emitter.v
+      license: commercial
+
+# =============================================================================
+# Type Definitions
+# =============================================================================
+
+types:
+  EmitterConfig:
+    kind: struct
+    description: "Global emitter configuration"
+    fields:
+      - name: gateway_id
+        type: "bytes(32)"
+        description: "Gateway identifier for topic generation"
+      - name: emit_on_change_only
+        type: bool
+        description: "Default: only emit when value changes"
+        default: false
+      - name: change_threshold
+        type: f64
+        description: "Minimum change to trigger emit (for analog values)"
+        default: 0.0
+      - name: batch_enabled
+        type: bool
+        description: "Enable batching multiple values"
+        default: true
+      - name: batch_size
+        type: u16
+        description: "Max values per batch"
+        default: 32
+      - name: batch_timeout_ms
+        type: u32
+        description: "Max time to wait for batch"
+        default: 100
+      - name: quality_enabled
+        type: bool
+        description: "Include OPC-style quality"
+        default: true
+
+  RegisterMapping:
+    kind: struct
+    description: "Mapping from raw register to stream"
+    fields:
+      - name: mapping_id
+        type: u32
+        description: "Unique mapping ID"
+      - name: device_id
+        type: "string(32)"
+      - name: name
+        type: "string(64)"
+        description: "Tag name"
+      - name: address
+        type: u16
+        description: "Register address"
+      - name: register_type
+        type: u8
+        description: "0=holding, 1=input, 2=coil, 3=discrete"
+      - name: data_type
+        type: u8
+        description: "0=u16, 1=i16, 2=u32, 3=i32, 4=f32, 5=f64, 6=bool, 7=string"
+      - name: word_count
+        type: u8
+        description: "Number of 16-bit words (1, 2, or 4)"
+        default: 1
+      - name: word_order
+        type: u8
+        description: "For multi-word: 0=big-endian, 1=little-endian"
+        default: 0
+      - name: bit_offset
+        type: u8
+        description: "Bit offset within word (for packed booleans)"
+        default: 0
+      - name: scale
+        type: f64
+        description: "Scale factor: scaled = raw * scale + offset"
+        default: 1.0
+      - name: offset
+        type: f64
+        default: 0.0
+      - name: unit
+        type: "string(16)"
+        description: "Engineering unit"
+      - name: emit_on_change
+        type: bool
+        description: "Override global setting"
+        default: true
+      - name: change_threshold
+        type: f64
+        description: "Override global threshold"
+        default: 0.0
+      - name: stream_topic
+        type: "string(128)"
+        description: "Custom LEX topic (empty = auto-generate)"
+
+  RawRegisterInput:
+    kind: struct
+    description: "Raw register values from protocol client"
+    fields:
+      - name: device_id
+        type: "string(32)"
+      - name: register_type
+        type: u8
+      - name: start_address
+        type: u16
+      - name: values
+        type: "[u16; 125]"
+      - name: count
+        type: u16
+      - name: quality
+        type: u8
+        description: "OPC quality code"
+      - name: source_timestamp_ns
+        type: u64
+        description: "Device timestamp (0 if unavailable)"
+      - name: server_timestamp_ns
+        type: u64
+
+  StreamEvent:
+    kind: struct
+    description: "Output stream event"
+    fields:
+      - name: event_id
+        type: u64
+      - name: mapping_id
+        type: u32
+      - name: device_id
+        type: "string(32)"
+      - name: name
+        type: "string(64)"
+      - name: value_type
+        type: u8
+        description: "0=integer, 1=float, 2=bool, 3=string"
+      - name: value_int
+        type: i64
+      - name: value_float
+        type: f64
+      - name: value_bool
+        type: bool
+      - name: value_string
+        type: "string(64)"
+      - name: unit
+        type: "string(16)"
+      - name: quality
+        type: u8
+      - name: source_timestamp_ns
+        type: u64
+      - name: server_timestamp_ns
+        type: u64
+      - name: topic
+        type: "string(128)"
+
+  StreamBatch:
+    kind: struct
+    description: "Batch of stream events"
+    fields:
+      - name: batch_id
+        type: u64
+      - name: device_id
+        type: "string(32)"
+      - name: event_count
+        type: u16
+      - name: events
+        type: "[StreamEvent; 64]"
+      - name: timestamp_ns
+        type: u64
+
+  AlarmConfig:
+    kind: struct
+    description: "Alarm definition"
+    fields:
+      - name: alarm_id
+        type: u32
+      - name: mapping_id
+        type: u32
+        description: "Associated register mapping"
+      - name: name
+        type: "string(64)"
+      - name: condition
+        type: u8
+        description: "0=gt, 1=lt, 2=eq, 3=neq, 4=ge, 5=le, 6=between, 7=outside"
+      - name: threshold_lo
+        type: f64
+      - name: threshold_hi
+        type: f64
+      - name: hysteresis
+        type: f64
+        default: 0.0
+      - name: debounce_ms
+        type: u32
+        default: 0
+      - name: severity
+        type: u8
+        description: "0=info, 1=warning, 2=critical"
+      - name: enabled
+        type: bool
+        default: true
+
+  AlarmEvent:
+    kind: struct
+    description: "Alarm state change event"
+    fields:
+      - name: alarm_id
+        type: u32
+      - name: name
+        type: "string(64)"
+      - name: state
+        type: u8
+        description: "0=normal, 1=active"
+      - name: severity
+        type: u8
+      - name: current_value
+        type: f64
+      - name: threshold_value
+        type: f64
+      - name: message
+        type: "string(128)"
+      - name: timestamp_ns
+        type: u64
+
+# =============================================================================
+# Circuit Interface
+# =============================================================================
+
+inputs:
+  - name: config
+    type: EmitterConfig
+    
+  - name: add_mapping
+    type: RegisterMapping
+    
+  - name: add_mapping_valid
+    type: bool
+    
+  - name: remove_mapping_id
+    type: u32
+    
+  - name: remove_mapping_valid
+    type: bool
+    
+  - name: add_alarm
+    type: AlarmConfig
+    
+  - name: add_alarm_valid
+    type: bool
+    
+  - name: raw_input
+    type: RawRegisterInput
+    description: "Raw register values from protocol"
+    
+  - name: raw_input_valid
+    type: bool
+
+outputs:
+  - name: stream_event
+    type: StreamEvent
+    description: "Individual stream event"
+    
+  - name: stream_event_valid
+    type: bool
+    
+  - name: stream_batch
+    type: StreamBatch
+    description: "Batched stream events"
+    
+  - name: stream_batch_valid
+    type: bool
+    
+  - name: alarm_event
+    type: AlarmEvent
+    
+  - name: alarm_event_valid
+    type: bool
+
+# =============================================================================
+# Annotations
+# =============================================================================
+
+annotations:
+  witness_tier: "telemetry"
+  deterministic: true
+  no_std_compatible: true
+  streamsight_emit: true
+
+# =============================================================================
+# StreamSight Integration
+# =============================================================================
+
+streamsight:
+  namespace: "io.estream.industrial.emitter"
+  
+  emit:
+    - event: "value_emitted"
+      topic: "lex://estream/sys/industrial/{gateway_id}/device/{device_id}/telemetry"
+      severity: debug
+      fields: ["mapping_id", "name", "value_float", "quality"]
+      
+    - event: "alarm_triggered"
+      topic: "lex://estream/sys/industrial/{gateway_id}/alarm"
+      severity: warning
+      fields: ["alarm_id", "name", "severity", "current_value", "threshold_value"]
+      
+    - event: "alarm_cleared"
+      topic: "lex://estream/sys/industrial/{gateway_id}/alarm"
+      severity: info
+      fields: ["alarm_id", "name"]
+
+# =============================================================================
+# Compute Graph
+# =============================================================================
+
+compute:
+  nodes:
+    # -------------------------------------------------------------------------
+    # Mapping Registry
+    # -------------------------------------------------------------------------
+    - id: mapping_registry
+      type: map
+      capacity: 512
+      key_type: u32
+      value_type: RegisterMapping
+      
+    - id: address_index
+      type: multimap
+      description: "Index mappings by (device_id, address)"
+      capacity: 512
+      
+    # -------------------------------------------------------------------------
+    # Value Extraction
+    # -------------------------------------------------------------------------
+    - id: value_extractor
+      type: transform
+      description: "Extract raw value from register array"
+      operation: |
+        // Find mapping by device_id and address
+        mapping = address_index.lookup(device_id, address)
+        raw_word = values[address - start_address]
+        if word_count == 2:
+          raw_u32 = combine_words(raw_word, next_word, word_order)
+        
+    # -------------------------------------------------------------------------
+    # Data Type Conversion
+    # -------------------------------------------------------------------------
+    - id: type_converter
+      type: transform
+      description: "Convert raw value to target data type"
+      operations:
+        u16_to_u16: identity
+        u16_to_i16: "reinterpret_signed"
+        u32_to_f32: "reinterpret_f32"
+        words_to_f64: "combine_and_reinterpret_f64"
+        bit_to_bool: "(value >> bit_offset) & 1"
+        
+    # -------------------------------------------------------------------------
+    # Scaling
+    # -------------------------------------------------------------------------
+    - id: scaler
+      type: transform
+      description: "Apply scale and offset"
+      operation: "scaled = raw * scale + offset"
+      
+    # -------------------------------------------------------------------------
+    # Change Detection
+    # -------------------------------------------------------------------------
+    - id: last_values
+      type: map
+      description: "Store last emitted values"
+      capacity: 512
+      key_type: u32
+      value_type: f64
+      
+    - id: change_detector
+      type: comparator
+      description: "Detect if value changed beyond threshold"
+      operation: |
+        if emit_on_change:
+          delta = abs(new_value - last_value)
+          emit = delta > change_threshold
+        else:
+          emit = true
+          
+    # -------------------------------------------------------------------------
+    # Alarm Evaluation
+    # -------------------------------------------------------------------------
+    - id: alarm_registry
+      type: map
+      capacity: 256
+      key_type: u32
+      value_type: AlarmConfig
+      
+    - id: alarm_state
+      type: map
+      description: "Current state of each alarm"
+      capacity: 256
+      key_type: u32
+      value_type: u8  # 0=normal, 1=pending, 2=active
+      
+    - id: alarm_evaluator
+      type: transform
+      description: "Evaluate alarm conditions"
+      operation: |
+        match condition:
+          GT: active = value > threshold_hi
+          LT: active = value < threshold_lo
+          BETWEEN: active = value >= threshold_lo && value <= threshold_hi
+          OUTSIDE: active = value < threshold_lo || value > threshold_hi
+        // Apply hysteresis on clearing
+        
+    - id: alarm_debouncer
+      type: debounce
+      description: "Debounce alarm transitions"
+      
+    # -------------------------------------------------------------------------
+    # Event Formatting
+    # -------------------------------------------------------------------------
+    - id: event_formatter
+      type: transform
+      description: "Format StreamEvent"
+      
+    - id: event_id_gen
+      type: counter
+      width: 64
+      
+    - id: topic_generator
+      type: transform
+      description: "Generate LEX topic from mapping"
+      operation: |
+        if mapping.stream_topic:
+          topic = mapping.stream_topic
+        else:
+          topic = "lex://estream/sys/industrial/{gateway_id}/device/{device_id}/{name}"
+          
+    # -------------------------------------------------------------------------
+    # Batching
+    # -------------------------------------------------------------------------
+    - id: batch_buffer
+      type: fifo
+      depth: 64
+      
+    - id: batch_timer
+      type: timer
+      timeout_ms: config.batch_timeout_ms
+      
+    - id: batch_assembler
+      type: accumulator
+      description: "Collect events into batches"
+      max_count: config.batch_size
+
+  # ---------------------------------------------------------------------------
+  # Data Flow
+  # ---------------------------------------------------------------------------
+  flows:
+    # Mapping management
+    - add_mapping -> mapping_registry.upsert
+    - add_mapping -> address_index.insert
+    - remove_mapping_id -> mapping_registry.remove
+    
+    # Alarm management
+    - add_alarm -> alarm_registry.upsert
+    
+    # Value processing pipeline
+    - raw_input -> value_extractor
+    - value_extractor -> type_converter
+    - type_converter -> scaler
+    - scaler -> change_detector
+    - change_detector.changed -> event_formatter
+    
+    # Event output
+    - event_formatter -> event_id_gen
+    - event_formatter -> topic_generator
+    - event_id_gen, topic_generator, event_formatter -> stream_event
+    
+    # Batching (optional)
+    - stream_event -> batch_buffer
+    - batch_buffer -> batch_assembler
+    - batch_timer.tick -> batch_assembler.flush
+    - batch_assembler.full -> stream_batch
+    
+    # Alarm processing
+    - scaler -> alarm_evaluator
+    - alarm_evaluator -> alarm_debouncer
+    - alarm_debouncer.transitioned -> alarm_event
+
+# =============================================================================
+# Test Vectors
+# =============================================================================
+
+tests:
+  - name: "Basic register to stream"
+    steps:
+      - input:
+          add_mapping:
+            mapping_id: 1
+            device_id: "plc1"
+            name: "temperature"
+            address: 100
+            data_type: 1  # i16
+            scale: 0.1
+            unit: "°C"
+          add_mapping_valid: true
+      - input:
+          raw_input:
+            device_id: "plc1"
+            register_type: 0
+            start_address: 100
+            values: [250]  # 25.0°C
+            count: 1
+            quality: 0
+          raw_input_valid: true
+      - expect:
+          stream_event_valid: true
+          stream_event:
+            name: "temperature"
+            value_float: 25.0
+            unit: "°C"
+            
+  - name: "Alarm trigger"
+    steps:
+      - setup:
+          mapping: { mapping_id: 1, name: "pressure" }
+          alarm: { alarm_id: 1, mapping_id: 1, condition: 0, threshold_hi: 100.0, severity: 2 }
+      - input:
+          raw_input: { values: [1100] }  # 110.0 (scaled)
+          raw_input_valid: true
+      - expect:
+          alarm_event_valid: true
+          alarm_event:
+            alarm_id: 1
+            state: 1  # Active
+            severity: 2

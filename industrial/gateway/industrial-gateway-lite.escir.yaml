@@ -1,0 +1,363 @@
+# Industrial Gateway Lite - Marketplace Composite Component
+# Open Source under Apache-2.0
+
+escir: "0.8.0"
+name: industrial_gateway_lite
+version: "1.0.0"
+license: "Apache-2.0"
+
+metadata:
+  circuit_id: marketplace_industrial_gateway_lite
+  name: "Industrial Gateway Lite"
+  description: |
+    Entry-level industrial protocol gateway with MODBUS TCP support.
+    Ideal for basic PLC/SCADA integration with up to 10 devices.
+    
+    Features:
+    - MODBUS TCP master
+    - Configurable polling scheduler
+    - Register-to-stream conversion
+    - Basic alarm evaluation
+    - Full StreamSight telemetry
+    
+    Limitations:
+    - TCP only (no RTU/serial)
+    - Single protocol (MODBUS only)
+    - 10 device limit
+    - 256 register limit
+  
+  category: marketplace
+  
+  marketplace:
+    sku: "industrial-gateway-lite"
+    visibility: source
+    publisher: estream-official
+    pricing:
+      model: free
+      price: 0
+    license: "Apache-2.0"
+    tags: ["industrial", "modbus", "gateway", "free", "open-source"]
+    documentation: "docs/marketplace/INDUSTRIAL_GATEWAY_LITE.md"
+    support: community
+    
+  implementation:
+    software:
+      crate: estream-industrial
+      module: gateway::lite
+      binary: estream-gateway-lite
+    hardware:
+      available: false
+      note: "Upgrade to Standard or Premium for FPGA acceleration"
+
+# =============================================================================
+# Limits
+# =============================================================================
+
+limits:
+  max_devices: 10
+  max_registers: 256
+  max_alarms: 64
+  max_polls_per_second: 100
+
+# =============================================================================
+# Composed Circuits
+# =============================================================================
+
+composition:
+  # ---------------------------------------------------------------------------
+  # TCP Client Pool
+  # ---------------------------------------------------------------------------
+  - id: tcp_pool
+    circuit: transport/tcp_client
+    instances: 10
+    description: "Pool of TCP connections for devices"
+    
+  # ---------------------------------------------------------------------------
+  # MODBUS TCP Client Pool
+  # ---------------------------------------------------------------------------
+  - id: modbus_pool
+    circuit: industrial/modbus_tcp_client
+    instances: 10
+    description: "MODBUS TCP client per device"
+    bindings:
+      - from: tcp_pool[n]
+        to: modbus_pool[n].tcp
+        
+  # ---------------------------------------------------------------------------
+  # Poll Scheduler
+  # ---------------------------------------------------------------------------
+  - id: scheduler
+    circuit: industrial/poll_scheduler
+    instances: 1
+    config:
+      max_polls_per_second: 100
+      adaptive_enabled: true
+      
+  # ---------------------------------------------------------------------------
+  # Stream Emitter
+  # ---------------------------------------------------------------------------
+  - id: emitter
+    circuit: industrial/stream_emitter
+    instances: 1
+    config:
+      batch_enabled: true
+      batch_size: 32
+      
+  # ---------------------------------------------------------------------------
+  # StreamSight Bridge
+  # ---------------------------------------------------------------------------
+  - id: streamsight
+    circuit: industrial/industrial_streamsight_bridge
+    instances: 1
+
+# =============================================================================
+# Internal Wiring
+# =============================================================================
+
+wiring:
+  # Scheduler triggers polls
+  - from: scheduler.trigger
+    to: modbus_router.input
+    
+  # Router directs to correct device
+  - from: modbus_router.output[n]
+    to: modbus_pool[n].read_registers
+    
+  # MODBUS responses to emitter
+  - from: modbus_pool[*].register_values
+    to: emitter.raw_input
+    
+  # All telemetry to StreamSight
+  - from: tcp_pool[*].error
+    to: streamsight.connection_event
+    
+  - from: modbus_pool[*].response
+    to: streamsight.protocol_response
+    
+  - from: modbus_pool[*].error
+    to: streamsight.protocol_exception
+    
+  - from: emitter.stream_event
+    to: streamsight.register_value
+    
+  - from: emitter.alarm_event
+    to: streamsight.alarm_event
+
+# =============================================================================
+# Gateway Configuration Schema
+# =============================================================================
+
+types:
+  GatewayLiteConfig:
+    kind: struct
+    description: "Complete gateway configuration"
+    fields:
+      - name: gateway_id
+        type: "bytes(32)"
+        description: "Unique gateway identifier"
+      - name: name
+        type: "string(64)"
+        description: "Human-readable name"
+      - name: devices
+        type: "[DeviceConfig; 10]"
+      - name: device_count
+        type: u8
+      - name: registers
+        type: "[RegisterConfig; 256]"
+      - name: register_count
+        type: u16
+      - name: alarms
+        type: "[AlarmConfig; 64]"
+      - name: alarm_count
+        type: u8
+      - name: streamsight
+        type: StreamSightConfig
+        
+  DeviceConfig:
+    kind: struct
+    fields:
+      - name: device_id
+        type: "string(32)"
+      - name: name
+        type: "string(64)"
+      - name: ip_address
+        type: "string(16)"
+      - name: port
+        type: u16
+        default: 502
+      - name: unit_id
+        type: u8
+        default: 1
+      - name: enabled
+        type: bool
+        default: true
+        
+  RegisterConfig:
+    kind: struct
+    fields:
+      - name: device_id
+        type: "string(32)"
+      - name: name
+        type: "string(64)"
+      - name: address
+        type: u16
+      - name: register_type
+        type: u8
+      - name: data_type
+        type: u8
+      - name: scale
+        type: f64
+        default: 1.0
+      - name: offset
+        type: f64
+        default: 0.0
+      - name: unit
+        type: "string(16)"
+      - name: poll_interval_ms
+        type: u32
+        default: 1000
+      - name: emit_on_change
+        type: bool
+        default: true
+        
+  AlarmConfig:
+    kind: struct
+    fields:
+      - name: register_name
+        type: "string(64)"
+      - name: name
+        type: "string(64)"
+      - name: condition
+        type: u8
+      - name: threshold
+        type: f64
+      - name: severity
+        type: u8
+        
+  StreamSightConfig:
+    kind: struct
+    fields:
+      - name: enabled
+        type: bool
+        default: true
+      - name: severity_filter
+        type: u8
+        default: 0
+      - name: batch_interval_ms
+        type: u32
+        default: 100
+
+# =============================================================================
+# External Interface
+# =============================================================================
+
+inputs:
+  - name: config
+    type: GatewayLiteConfig
+    description: "Gateway configuration"
+    
+  - name: start
+    type: bool
+    description: "Start the gateway"
+    trigger: rising_edge
+    
+  - name: stop
+    type: bool
+    description: "Stop the gateway"
+    trigger: rising_edge
+    
+  - name: alarm_acknowledge
+    type: "string(64)"
+    description: "Alarm ID to acknowledge"
+    
+  - name: alarm_acknowledge_valid
+    type: bool
+
+outputs:
+  - name: running
+    type: bool
+    description: "Gateway is running"
+    
+  - name: device_status
+    type: "[DeviceStatus; 10]"
+    description: "Status of each device"
+    
+  - name: stream_output
+    type: StreamEvent
+    description: "Stream events for external consumption"
+    
+  - name: stream_output_valid
+    type: bool
+    
+  - name: alarm_output
+    type: AlarmEvent
+    description: "Alarm events"
+    
+  - name: alarm_output_valid
+    type: bool
+    
+  - name: lex_output
+    type: SerializedEvent
+    description: "StreamSight events for LEX"
+    
+  - name: lex_output_valid
+    type: bool
+    
+  - name: metrics
+    type: GatewayMetrics
+
+# =============================================================================
+# Annotations
+# =============================================================================
+
+annotations:
+  witness_tier: "infrastructure"
+  marketplace_sku: "industrial-gateway-lite"
+  open_source: true
+  hardware_accelerated: false
+  streamsight_emit: true
+
+# =============================================================================
+# Example Configuration
+# =============================================================================
+
+example_config:
+  gateway_id: "01020304050607080910111213141516"
+  name: "Factory Floor Gateway"
+  devices:
+    - device_id: "plc-01"
+      name: "Main PLC"
+      ip_address: "192.168.1.10"
+      port: 502
+      unit_id: 1
+    - device_id: "plc-02"
+      name: "Secondary PLC"
+      ip_address: "192.168.1.11"
+      port: 502
+      unit_id: 1
+  registers:
+    - device_id: "plc-01"
+      name: "temperature_tank1"
+      address: 100
+      register_type: 0
+      data_type: 1
+      scale: 0.1
+      unit: "°C"
+      poll_interval_ms: 1000
+    - device_id: "plc-01"
+      name: "pressure_tank1"
+      address: 102
+      register_type: 0
+      data_type: 4
+      scale: 1.0
+      unit: "bar"
+      poll_interval_ms: 500
+  alarms:
+    - register_name: "temperature_tank1"
+      name: "High Temperature"
+      condition: 0
+      threshold: 85.0
+      severity: 2
+  streamsight:
+    enabled: true
+    severity_filter: 1

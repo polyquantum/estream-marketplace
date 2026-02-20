@@ -1,0 +1,475 @@
+# Industrial StreamSight Bridge Circuit
+# Open Source under Apache-2.0
+
+escir: "0.8.0"
+name: industrial_streamsight_bridge
+version: "1.0.0"
+license: "Apache-2.0"
+
+metadata:
+  circuit_id: industrial_streamsight_bridge
+  name: "Industrial StreamSight Bridge"
+  description: |
+    Unified telemetry bridge for industrial protocol gateways.
+    Aggregates events from connection, protocol, device, and alarm
+    subsystems into StreamSight-compatible LEX streams.
+  category: industrial
+  
+  marketplace:
+    visibility: source
+    publisher: estream-official
+    tags: ["streamsight", "telemetry", "observability", "industrial"]
+    
+  implementation:
+    software:
+      crate: estream-industrial
+      module: streamsight::bridge
+    hardware:
+      path: fpga/rtl/industrial/streamsight_bridge.v
+      license: commercial
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+
+imports:
+  - schema: industrial/industrial-telemetry.esf.yaml
+    as: telemetry
+
+# =============================================================================
+# Type Definitions
+# =============================================================================
+
+types:
+  BridgeConfig:
+    kind: struct
+    description: "StreamSight bridge configuration"
+    fields:
+      - name: gateway_id
+        type: "bytes(32)"
+        description: "Gateway identifier"
+      - name: lex_namespace
+        type: "string(64)"
+        description: "LEX namespace prefix"
+        default: "lex://estream/sys/industrial"
+      - name: buffer_size
+        type: u16
+        description: "Event buffer size"
+        default: 256
+      - name: batch_size
+        type: u16
+        description: "Max events per batch"
+        default: 32
+      - name: flush_interval_ms
+        type: u32
+        description: "Max time between flushes"
+        default: 100
+      - name: severity_filter
+        type: u8
+        description: "Minimum severity to emit (0=debug, 1=info, 2=warn, 3=error)"
+        default: 0
+      - name: sampling_rate
+        type: f32
+        description: "Sampling rate for debug events (0.0-1.0)"
+        default: 1.0
+      - name: compress_enabled
+        type: bool
+        description: "Enable event compression"
+        default: false
+
+  # Union of all telemetry event types
+  TelemetryEvent:
+    kind: union
+    description: "Any industrial telemetry event"
+    discriminant: event_type
+    variants:
+      - name: ConnectionStateChange
+        value: 1
+        type: telemetry.ConnectionStateChange
+      - name: ConnectionMetrics
+        value: 2
+        type: telemetry.ConnectionMetrics
+      - name: ProtocolRequest
+        value: 3
+        type: telemetry.ProtocolRequest
+      - name: ProtocolResponse
+        value: 4
+        type: telemetry.ProtocolResponse
+      - name: ProtocolException
+        value: 5
+        type: telemetry.ProtocolException
+      - name: DeviceStatus
+        value: 6
+        type: telemetry.DeviceStatus
+      - name: RegisterValue
+        value: 7
+        type: telemetry.RegisterValue
+      - name: RegisterBatch
+        value: 8
+        type: telemetry.RegisterBatch
+      - name: AlarmEvent
+        value: 9
+        type: telemetry.AlarmEvent
+      - name: AlarmAcknowledge
+        value: 10
+        type: telemetry.AlarmAcknowledge
+      - name: GatewayHealth
+        value: 11
+        type: telemetry.GatewayHealth
+      - name: GatewayDiagnostics
+        value: 12
+        type: telemetry.GatewayDiagnostics
+
+  TopicRoute:
+    kind: struct
+    description: "Topic routing rule"
+    fields:
+      - name: event_type
+        type: u8
+      - name: topic_template
+        type: "string(128)"
+        description: "Topic template with placeholders"
+      - name: severity
+        type: u8
+      - name: sample_rate
+        type: f32
+
+  SerializedEvent:
+    kind: struct
+    description: "Event ready for LEX emission"
+    fields:
+      - name: topic
+        type: "string(128)"
+      - name: payload
+        type: "bytes(2048)"
+      - name: payload_len
+        type: u16
+      - name: severity
+        type: u8
+      - name: timestamp_ns
+        type: u64
+      - name: sequence_number
+        type: u64
+
+  BridgeMetrics:
+    kind: struct
+    fields:
+      - name: events_received
+        type: u64
+      - name: events_emitted
+        type: u64
+      - name: events_filtered
+        type: u64
+      - name: events_sampled_out
+        type: u64
+      - name: batches_sent
+        type: u64
+      - name: bytes_sent
+        type: u64
+      - name: buffer_high_water
+        type: u16
+      - name: buffer_overflows
+        type: u32
+      - name: avg_batch_size
+        type: f32
+
+# =============================================================================
+# Circuit Interface
+# =============================================================================
+
+inputs:
+  - name: config
+    type: BridgeConfig
+    
+  # Event inputs from various subsystems
+  - name: connection_event
+    type: telemetry.ConnectionStateChange
+    
+  - name: connection_event_valid
+    type: bool
+    
+  - name: connection_metrics
+    type: telemetry.ConnectionMetrics
+    
+  - name: connection_metrics_valid
+    type: bool
+    
+  - name: protocol_request
+    type: telemetry.ProtocolRequest
+    
+  - name: protocol_request_valid
+    type: bool
+    
+  - name: protocol_response
+    type: telemetry.ProtocolResponse
+    
+  - name: protocol_response_valid
+    type: bool
+    
+  - name: protocol_exception
+    type: telemetry.ProtocolException
+    
+  - name: protocol_exception_valid
+    type: bool
+    
+  - name: device_status
+    type: telemetry.DeviceStatus
+    
+  - name: device_status_valid
+    type: bool
+    
+  - name: register_value
+    type: telemetry.RegisterValue
+    
+  - name: register_value_valid
+    type: bool
+    
+  - name: alarm_event
+    type: telemetry.AlarmEvent
+    
+  - name: alarm_event_valid
+    type: bool
+    
+  - name: gateway_health
+    type: telemetry.GatewayHealth
+    
+  - name: gateway_health_valid
+    type: bool
+
+outputs:
+  - name: lex_event
+    type: SerializedEvent
+    description: "Event ready for LEX emission"
+    
+  - name: lex_event_valid
+    type: bool
+    
+  - name: metrics
+    type: BridgeMetrics
+
+# =============================================================================
+# Annotations
+# =============================================================================
+
+annotations:
+  witness_tier: "telemetry"
+  deterministic: true
+  no_std_compatible: true
+
+# =============================================================================
+# Topic Routing Configuration
+# =============================================================================
+
+topic_routes:
+  - event_type: ConnectionStateChange
+    topic_template: "{namespace}/{gateway_id}/connection"
+    severity: info
+    
+  - event_type: ConnectionMetrics
+    topic_template: "{namespace}/{gateway_id}/connection"
+    severity: debug
+    sample_rate: 0.1
+    
+  - event_type: ProtocolRequest
+    topic_template: "{namespace}/{gateway_id}/protocol/{protocol}"
+    severity: debug
+    sample_rate: 0.01
+    
+  - event_type: ProtocolResponse
+    topic_template: "{namespace}/{gateway_id}/protocol/{protocol}"
+    severity: debug
+    sample_rate: 0.01
+    
+  - event_type: ProtocolException
+    topic_template: "{namespace}/{gateway_id}/protocol/{protocol}"
+    severity: warning
+    
+  - event_type: DeviceStatus
+    topic_template: "{namespace}/{gateway_id}/device/{device_id}/status"
+    severity: info
+    
+  - event_type: RegisterValue
+    topic_template: "{namespace}/{gateway_id}/device/{device_id}/telemetry"
+    severity: debug
+    sample_rate: 0.1
+    
+  - event_type: AlarmEvent
+    topic_template: "{namespace}/{gateway_id}/alarm"
+    severity: warning
+    
+  - event_type: GatewayHealth
+    topic_template: "{namespace}/{gateway_id}/health"
+    severity: info
+
+# =============================================================================
+# Compute Graph
+# =============================================================================
+
+compute:
+  nodes:
+    # -------------------------------------------------------------------------
+    # Event Multiplexer
+    # -------------------------------------------------------------------------
+    - id: event_mux
+      type: multiplexer
+      description: "Multiplex all input event streams"
+      inputs:
+        - connection_event
+        - connection_metrics
+        - protocol_request
+        - protocol_response
+        - protocol_exception
+        - device_status
+        - register_value
+        - alarm_event
+        - gateway_health
+        
+    # -------------------------------------------------------------------------
+    # Severity Filter
+    # -------------------------------------------------------------------------
+    - id: severity_filter
+      type: filter
+      description: "Filter by minimum severity"
+      predicate: "event.severity >= config.severity_filter"
+      
+    # -------------------------------------------------------------------------
+    # Sampling
+    # -------------------------------------------------------------------------
+    - id: sampler
+      type: probabilistic_filter
+      description: "Probabilistic sampling for high-volume events"
+      rate_source: topic_routes
+      
+    # -------------------------------------------------------------------------
+    # Topic Resolution
+    # -------------------------------------------------------------------------
+    - id: topic_resolver
+      type: transform
+      description: "Resolve topic template with actual values"
+      operation: |
+        template = topic_routes[event.event_type].topic_template
+        topic = template
+          .replace("{namespace}", config.lex_namespace)
+          .replace("{gateway_id}", hex(config.gateway_id))
+          .replace("{device_id}", event.device_id)
+          .replace("{protocol}", protocol_name(event.protocol))
+          
+    # -------------------------------------------------------------------------
+    # Serialization
+    # -------------------------------------------------------------------------
+    - id: serializer
+      type: transform
+      description: "Serialize event to ESF binary"
+      format: esf_binary
+      
+    # -------------------------------------------------------------------------
+    # Sequence Number
+    # -------------------------------------------------------------------------
+    - id: sequence_gen
+      type: counter
+      width: 64
+      
+    # -------------------------------------------------------------------------
+    # Buffering & Batching
+    # -------------------------------------------------------------------------
+    - id: event_buffer
+      type: fifo
+      depth: config.buffer_size
+      overflow_policy: drop_oldest
+      
+    - id: batch_timer
+      type: timer
+      interval_ms: config.flush_interval_ms
+      
+    - id: batch_accumulator
+      type: accumulator
+      max_count: config.batch_size
+      
+    # -------------------------------------------------------------------------
+    # LEX Emitter
+    # -------------------------------------------------------------------------
+    - id: lex_emitter
+      type: output_formatter
+      description: "Format for LEX stream emission"
+      
+    # -------------------------------------------------------------------------
+    # Metrics
+    # -------------------------------------------------------------------------
+    - id: metrics_collector
+      type: accumulator
+      fields:
+        - name: events_received
+          operation: count
+        - name: events_emitted
+          operation: count_after_filter
+        - name: bytes_sent
+          operation: sum
+
+  # ---------------------------------------------------------------------------
+  # Data Flow
+  # ---------------------------------------------------------------------------
+  flows:
+    # All inputs -> mux
+    - connection_event -> event_mux
+    - connection_metrics -> event_mux
+    - protocol_request -> event_mux
+    - protocol_response -> event_mux
+    - protocol_exception -> event_mux
+    - device_status -> event_mux
+    - register_value -> event_mux
+    - alarm_event -> event_mux
+    - gateway_health -> event_mux
+    
+    # Processing pipeline
+    - event_mux -> severity_filter
+    - severity_filter.pass -> sampler
+    - sampler.pass -> topic_resolver
+    - topic_resolver -> serializer
+    - serializer -> sequence_gen
+    - sequence_gen -> event_buffer
+    
+    # Batching
+    - event_buffer -> batch_accumulator
+    - batch_timer.tick -> batch_accumulator.flush
+    - batch_accumulator.batch -> lex_emitter
+    
+    # Output
+    - lex_emitter -> lex_event
+    
+    # Metrics
+    - event_mux -> metrics_collector.events_received
+    - sampler.pass -> metrics_collector.events_emitted
+    - serializer -> metrics_collector.bytes_sent
+
+# =============================================================================
+# Test Vectors
+# =============================================================================
+
+tests:
+  - name: "Route connection event"
+    steps:
+      - input:
+          config:
+            gateway_id: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32]
+            lex_namespace: "lex://estream/sys/industrial"
+          connection_event:
+            gateway_id: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32]
+            old_state: 0
+            new_state: 2
+          connection_event_valid: true
+      - expect:
+          lex_event_valid: true
+          lex_event:
+            topic: "lex://estream/sys/industrial/0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20/connection"
+            severity: 1  # info
+            
+  - name: "Filter debug events"
+    steps:
+      - input:
+          config:
+            severity_filter: 1  # info and above
+          protocol_request:
+            function_code: 3
+          protocol_request_valid: true
+      - expect:
+          lex_event_valid: false  # Filtered out (debug severity)

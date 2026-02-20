@@ -1,0 +1,432 @@
+# Industrial Poll Scheduler Circuit
+# Open Source under Apache-2.0
+
+escir: "0.8.0"
+name: poll_scheduler
+version: "1.0.0"
+license: "Apache-2.0"
+
+metadata:
+  circuit_id: industrial_poll_scheduler
+  name: "Industrial Poll Scheduler"
+  description: |
+    Manages periodic polling of industrial devices/registers.
+    Supports configurable intervals, priority levels, and adaptive scheduling
+    based on device responsiveness.
+  category: industrial
+  
+  marketplace:
+    visibility: source
+    publisher: estream-official
+    tags: ["polling", "scheduler", "industrial", "scada"]
+    
+  implementation:
+    software:
+      crate: estream-industrial
+      module: scheduler::poll
+    hardware:
+      path: fpga/rtl/industrial/poll_scheduler.v
+      license: commercial
+
+# =============================================================================
+# Type Definitions
+# =============================================================================
+
+types:
+  PollConfig:
+    kind: struct
+    description: "Global scheduler configuration"
+    fields:
+      - name: max_polls_per_second
+        type: u32
+        description: "Rate limit for polls"
+        default: 100
+      - name: min_interval_ms
+        type: u32
+        description: "Minimum allowed poll interval"
+        default: 100
+      - name: adaptive_enabled
+        type: bool
+        description: "Enable adaptive scheduling"
+        default: true
+      - name: backoff_on_error
+        type: bool
+        description: "Increase interval on errors"
+        default: true
+      - name: backoff_factor
+        type: f32
+        default: 1.5
+      - name: max_backoff_interval_ms
+        type: u32
+        default: 60000
+
+  PollItem:
+    kind: struct
+    description: "Single poll item configuration"
+    fields:
+      - name: poll_id
+        type: u32
+        description: "Unique poll item ID"
+      - name: device_id
+        type: "string(32)"
+        description: "Target device"
+      - name: name
+        type: "string(64)"
+        description: "Human-readable name"
+      - name: register_type
+        type: u8
+        description: "0=holding, 1=input, 2=coil, 3=discrete"
+      - name: address
+        type: u16
+        description: "Starting address"
+      - name: count
+        type: u16
+        description: "Number of registers"
+      - name: interval_ms
+        type: u32
+        description: "Base poll interval"
+      - name: priority
+        type: u8
+        description: "0=low, 1=normal, 2=high, 3=critical"
+        default: 1
+      - name: enabled
+        type: bool
+        default: true
+      - name: on_change_only
+        type: bool
+        description: "Only emit if value changed"
+        default: false
+
+  PollTrigger:
+    kind: struct
+    description: "Trigger output when poll is due"
+    fields:
+      - name: poll_id
+        type: u32
+      - name: device_id
+        type: "string(32)"
+      - name: register_type
+        type: u8
+      - name: address
+        type: u16
+      - name: count
+        type: u16
+      - name: sequence_number
+        type: u64
+      - name: scheduled_time_ns
+        type: u64
+      - name: actual_time_ns
+        type: u64
+
+  PollComplete:
+    kind: struct
+    description: "Feedback when poll completes"
+    fields:
+      - name: poll_id
+        type: u32
+      - name: sequence_number
+        type: u64
+      - name: success
+        type: bool
+      - name: latency_us
+        type: u32
+      - name: timestamp_ns
+        type: u64
+
+  PollStatus:
+    kind: struct
+    description: "Current status of a poll item"
+    fields:
+      - name: poll_id
+        type: u32
+      - name: enabled
+        type: bool
+      - name: current_interval_ms
+        type: u32
+        description: "Effective interval (may differ from base due to adaptive)"
+      - name: last_poll_time_ns
+        type: u64
+      - name: next_poll_time_ns
+        type: u64
+      - name: polls_total
+        type: u64
+      - name: polls_success
+        type: u64
+      - name: polls_failed
+        type: u64
+      - name: avg_latency_us
+        type: u32
+      - name: consecutive_failures
+        type: u16
+
+  SchedulerMetrics:
+    kind: struct
+    fields:
+      - name: polls_scheduled
+        type: u64
+      - name: polls_completed
+        type: u64
+      - name: polls_overdue
+        type: u64
+        description: "Polls that ran late"
+      - name: polls_skipped
+        type: u64
+        description: "Polls skipped due to rate limit"
+      - name: avg_jitter_us
+        type: u32
+        description: "Average scheduling jitter"
+      - name: queue_depth
+        type: u16
+
+# =============================================================================
+# Circuit Interface
+# =============================================================================
+
+inputs:
+  - name: config
+    type: PollConfig
+    description: "Global scheduler configuration"
+    
+  - name: add_poll
+    type: PollItem
+    description: "Add or update a poll item"
+    
+  - name: add_poll_valid
+    type: bool
+    
+  - name: remove_poll_id
+    type: u32
+    description: "Remove a poll item by ID"
+    
+  - name: remove_poll_valid
+    type: bool
+    
+  - name: enable_poll_id
+    type: u32
+    description: "Enable a poll item"
+    
+  - name: enable_poll_valid
+    type: bool
+    
+  - name: disable_poll_id
+    type: u32
+    description: "Disable a poll item"
+    
+  - name: disable_poll_valid
+    type: bool
+    
+  - name: poll_complete
+    type: PollComplete
+    description: "Feedback from poll execution"
+    
+  - name: poll_complete_valid
+    type: bool
+    
+  - name: clock_ns
+    type: u64
+    description: "Current time in nanoseconds"
+
+outputs:
+  - name: trigger
+    type: PollTrigger
+    description: "Poll trigger output"
+    
+  - name: trigger_valid
+    type: bool
+    
+  - name: poll_status
+    type: PollStatus
+    description: "Status update for a poll item"
+    
+  - name: poll_status_valid
+    type: bool
+    
+  - name: metrics
+    type: SchedulerMetrics
+
+# =============================================================================
+# Annotations
+# =============================================================================
+
+annotations:
+  witness_tier: "industrial"
+  precision_class: "high"
+  deterministic: true
+  no_std_compatible: true
+  streamsight_emit: true
+
+# =============================================================================
+# StreamSight Integration
+# =============================================================================
+
+streamsight:
+  namespace: "io.estream.industrial.scheduler"
+  
+  emit:
+    - event: "poll_scheduled"
+      topic: "lex://estream/sys/industrial/{gateway_id}/scheduler"
+      severity: debug
+      fields: ["poll_id", "device_id", "sequence_number"]
+      
+    - event: "poll_overdue"
+      topic: "lex://estream/sys/industrial/{gateway_id}/scheduler"
+      severity: warning
+      fields: ["poll_id", "delay_ms"]
+      
+    - event: "poll_skipped"
+      topic: "lex://estream/sys/industrial/{gateway_id}/scheduler"
+      severity: warning
+      fields: ["poll_id", "reason"]
+      
+    - event: "interval_adjusted"
+      topic: "lex://estream/sys/industrial/{gateway_id}/scheduler"
+      severity: info
+      fields: ["poll_id", "old_interval_ms", "new_interval_ms", "reason"]
+
+# =============================================================================
+# Compute Graph
+# =============================================================================
+
+compute:
+  nodes:
+    # -------------------------------------------------------------------------
+    # Poll Item Storage
+    # -------------------------------------------------------------------------
+    - id: poll_registry
+      type: map
+      description: "Registry of all poll items"
+      capacity: 256
+      key_type: u32
+      value_type: PollItem
+      
+    - id: poll_state
+      type: map
+      description: "Runtime state for each poll"
+      capacity: 256
+      key_type: u32
+      value_type: PollStatus
+      
+    # -------------------------------------------------------------------------
+    # Timer Management
+    # -------------------------------------------------------------------------
+    - id: timer_heap
+      type: min_heap
+      description: "Priority queue ordered by next poll time"
+      capacity: 256
+      key_type: u64  # next_poll_time_ns
+      value_type: u32  # poll_id
+      
+    - id: next_poll_timer
+      type: comparator
+      description: "Compare current time with next scheduled poll"
+      
+    # -------------------------------------------------------------------------
+    # Priority Arbiter
+    # -------------------------------------------------------------------------
+    - id: priority_arbiter
+      type: arbiter
+      description: "Select highest priority poll when multiple are due"
+      levels: 4
+      policy: strict_priority
+      
+    - id: rate_limiter
+      type: token_bucket
+      description: "Enforce max polls per second"
+      rate: config.max_polls_per_second
+      burst: 10
+      
+    # -------------------------------------------------------------------------
+    # Adaptive Scheduling
+    # -------------------------------------------------------------------------
+    - id: latency_tracker
+      type: accumulator
+      description: "Track latency statistics per poll"
+      window_size: 10
+      
+    - id: interval_adjuster
+      type: transform
+      description: "Adjust interval based on success/failure"
+      operations:
+        on_success: |
+          if consecutive_failures > 0:
+            interval = base_interval  # Reset to base
+          consecutive_failures = 0
+        on_failure: |
+          consecutive_failures += 1
+          if config.backoff_on_error:
+            interval = min(interval * config.backoff_factor, config.max_backoff_interval_ms)
+            
+    # -------------------------------------------------------------------------
+    # Sequence Number Generator
+    # -------------------------------------------------------------------------
+    - id: sequence_gen
+      type: counter
+      width: 64
+      
+  # ---------------------------------------------------------------------------
+  # Data Flow
+  # ---------------------------------------------------------------------------
+  flows:
+    # Add/remove polls
+    - add_poll -> poll_registry.upsert
+    - add_poll -> timer_heap.insert
+    - remove_poll_id -> poll_registry.remove
+    - remove_poll_id -> timer_heap.remove
+    
+    # Enable/disable
+    - enable_poll_id -> poll_state.enable
+    - disable_poll_id -> poll_state.disable
+    
+    # Timer management
+    - clock_ns -> next_poll_timer
+    - timer_heap.peek -> next_poll_timer
+    - next_poll_timer.ready -> priority_arbiter
+    
+    # Trigger generation
+    - priority_arbiter.selected -> rate_limiter
+    - rate_limiter.allow -> sequence_gen
+    - sequence_gen, priority_arbiter.selected -> trigger_builder -> trigger
+    
+    # Reschedule after trigger
+    - trigger -> timer_heap.update_next_time
+    
+    # Feedback processing
+    - poll_complete -> latency_tracker
+    - poll_complete -> interval_adjuster
+    - interval_adjuster -> poll_state.update
+    - interval_adjuster.interval_changed -> timer_heap.update
+
+# =============================================================================
+# Test Vectors
+# =============================================================================
+
+tests:
+  - name: "Basic polling"
+    steps:
+      - input:
+          add_poll:
+            poll_id: 1
+            device_id: "plc1"
+            register_type: 0
+            address: 100
+            count: 10
+            interval_ms: 1000
+          add_poll_valid: true
+      - input: { clock_ns: 1000000000 }  # 1 second
+      - expect:
+          trigger_valid: true
+          trigger:
+            poll_id: 1
+            
+  - name: "Priority scheduling"
+    steps:
+      - input:
+          add_poll: { poll_id: 1, interval_ms: 1000, priority: 1 }
+          add_poll_valid: true
+      - input:
+          add_poll: { poll_id: 2, interval_ms: 1000, priority: 3 }
+          add_poll_valid: true
+      - input: { clock_ns: 1000000000 }
+      - expect:
+          trigger:
+            poll_id: 2  # Higher priority triggered first

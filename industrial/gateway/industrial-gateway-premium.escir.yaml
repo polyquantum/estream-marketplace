@@ -1,0 +1,296 @@
+# Industrial Gateway Premium - Marketplace Composite Component
+# Commercial License
+
+escir: "0.8.0"
+name: industrial_gateway_premium
+version: "1.0.0"
+license: "commercial"
+
+metadata:
+  circuit_id: marketplace_industrial_gateway_premium
+  name: "Industrial Gateway Premium"
+  description: |
+    Enterprise-grade industrial protocol gateway with full protocol suite.
+    Designed for large-scale, mission-critical deployments.
+    
+    Features:
+    - MODBUS TCP/RTU master
+    - OPC-UA client with full security
+    - DNP3 master (power/utilities)
+    - Advanced polling with priority and adaptive scheduling
+    - Full data type support including strings and arrays
+    - Comprehensive alarm management with ISA-18.2 compliance
+    - Full StreamSight telemetry with compliance reporting
+    - Extended historian (7 days)
+    - Redundancy support (hot standby)
+    - Audit logging with tamper detection
+    - FPGA acceleration included
+    - PoVC attestation for data integrity
+    
+    Extends gateway-standard with:
+    - DNP3 protocol
+    - OPC-UA Historical Data Access (HDA)
+    - 200 device limit (up from 50)
+    - 8192 register limit (up from 2048)
+    - Extended historian (7 days)
+    - Hot standby redundancy
+    - Audit logging
+    - Compliance reporting
+  
+  category: marketplace
+  
+  marketplace:
+    sku: "industrial-gateway-premium"
+    visibility: compiled
+    publisher: estream-official
+    pricing:
+      model: subscription
+      price_monthly: 300
+      currency: "ES"
+    license: "commercial"
+    tags: ["industrial", "modbus", "opc-ua", "dnp3", "gateway", "enterprise"]
+    documentation: "docs/marketplace/INDUSTRIAL_GATEWAY_PREMIUM.md"
+    support: premium
+    sla:
+      response_time: "4h"
+      uptime: "99.9%"
+    
+  implementation:
+    software:
+      crate: estream-industrial
+      module: gateway::premium
+      binary: estream-gateway-premium
+      visibility: binary
+    hardware:
+      path: fpga/rtl/industrial/gateway_premium.v
+      visibility: bitstream
+      devices:
+        - "XCZU3EG"
+        - "XCZU7EV"
+        - "XCZU9EG"
+
+# =============================================================================
+# Limits
+# =============================================================================
+
+limits:
+  max_devices: 200
+  max_registers: 8192
+  max_alarms: 2048
+  max_polls_per_second: 5000
+  historian_buffer_days: 7
+  max_redundant_pairs: 4
+
+# =============================================================================
+# Composed Circuits (Extends Standard)
+# =============================================================================
+
+extends: industrial_gateway_standard
+
+composition:
+  # Scale up
+  - id: tcp_pool
+    circuit: transport/tcp_client
+    instances: 200
+    
+  - id: modbus_tcp_pool
+    circuit: industrial/modbus_tcp_client
+    instances: 200
+    
+  - id: serial_pool
+    circuit: transport/serial_uart
+    instances: 16
+    
+  - id: modbus_rtu_pool
+    circuit: industrial/modbus_rtu_client
+    instances: 16
+    
+  # DNP3 support
+  - id: dnp3_pool
+    circuit: industrial/dnp3_client
+    instances: 50
+    note: "DNP3 master for power/utility applications"
+    
+  # OPC-UA with HDA
+  - id: opcua_pool
+    circuit: industrial/opcua_client
+    instances: 50
+    note: "OPC-UA client with Historical Data Access"
+    config:
+      hda_enabled: true
+      security_mode: sign_and_encrypt
+      
+  # Extended historian
+  - id: historian
+    circuit: industrial/historian_buffer
+    instances: 1
+    config:
+      buffer_size_mb: 2048
+      retention_days: 7
+      compression: true
+      
+  # Redundancy manager
+  - id: redundancy
+    circuit: industrial/redundancy_manager
+    instances: 1
+    note: "Hot standby redundancy with automatic failover"
+    config:
+      heartbeat_interval_ms: 100
+      failover_timeout_ms: 500
+      
+  # Audit logger
+  - id: audit
+    circuit: industrial/audit_logger
+    instances: 1
+    note: "Tamper-evident audit logging"
+    config:
+      povc_enabled: true
+      retention_days: 90
+
+# =============================================================================
+# Additional Types
+# =============================================================================
+
+types:
+  GatewayPremiumConfig:
+    kind: struct
+    extends: GatewayStandardConfig
+    additional_fields:
+      - name: dnp3_devices
+        type: "[Dnp3DeviceConfig; 50]"
+      - name: dnp3_device_count
+        type: u8
+      - name: opcua_devices
+        type: "[OpcuaDeviceConfig; 50]"
+      - name: opcua_device_count
+        type: u8
+      - name: redundancy
+        type: RedundancyConfig
+      - name: audit
+        type: AuditConfig
+      - name: compliance
+        type: ComplianceConfig
+        
+  Dnp3DeviceConfig:
+    kind: struct
+    fields:
+      - name: device_id
+        type: "string(32)"
+      - name: name
+        type: "string(64)"
+      - name: ip_address
+        type: "string(16)"
+      - name: port
+        type: u16
+        default: 20000
+      - name: master_address
+        type: u16
+      - name: outstation_address
+        type: u16
+      - name: unsolicited_enabled
+        type: bool
+        default: true
+        
+  OpcuaDeviceConfig:
+    kind: struct
+    fields:
+      - name: device_id
+        type: "string(32)"
+      - name: name
+        type: "string(64)"
+      - name: endpoint_url
+        type: "string(256)"
+      - name: security_mode
+        type: u8
+        description: "0=none, 1=sign, 2=sign_encrypt"
+      - name: username
+        type: "string(64)"
+      - name: certificate_path
+        type: "string(256)"
+        
+  RedundancyConfig:
+    kind: struct
+    fields:
+      - name: enabled
+        type: bool
+        default: false
+      - name: mode
+        type: u8
+        description: "0=cold, 1=warm, 2=hot"
+        default: 2
+      - name: peer_address
+        type: "string(16)"
+      - name: peer_port
+        type: u16
+        default: 5100
+      - name: heartbeat_interval_ms
+        type: u32
+        default: 100
+      - name: failover_timeout_ms
+        type: u32
+        default: 500
+        
+  AuditConfig:
+    kind: struct
+    fields:
+      - name: enabled
+        type: bool
+        default: true
+      - name: povc_enabled
+        type: bool
+        description: "Enable PoVC attestation for audit entries"
+        default: true
+      - name: retention_days
+        type: u32
+        default: 90
+      - name: remote_sync
+        type: bool
+        default: true
+        
+  ComplianceConfig:
+    kind: struct
+    fields:
+      - name: isa_18_2_enabled
+        type: bool
+        description: "ISA-18.2 alarm management compliance"
+        default: true
+      - name: iec_62443_enabled
+        type: bool
+        description: "IEC 62443 security compliance"
+        default: true
+      - name: reporting_interval_hours
+        type: u32
+        default: 24
+
+# =============================================================================
+# Additional Outputs
+# =============================================================================
+
+outputs:
+  - name: redundancy_status
+    type: RedundancyStatus
+    description: "Current redundancy state"
+    
+  - name: compliance_report
+    type: ComplianceReport
+    description: "Periodic compliance report"
+    
+  - name: audit_event
+    type: AuditEvent
+    description: "Audit trail events"
+
+# =============================================================================
+# Annotations
+# =============================================================================
+
+annotations:
+  witness_tier: "sovereign"
+  marketplace_sku: "industrial-gateway-premium"
+  open_source: false
+  hardware_accelerated: true
+  streamsight_emit: true
+  povc_enabled: true
+  compliance:
+    - "IEC 62443"
+    - "ISA-18.2"
+    - "NERC CIP"

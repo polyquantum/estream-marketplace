@@ -1,0 +1,52 @@
+// PCI-DSS: Cardholder Data Governance
+// Lex: esn/fin/pci/org/processor
+// Demonstrates: field_governance for PCI-DSS, filtered fan_out with tokenization
+
+type TransactionId = bytes(32)
+type CardData = bytes(512)
+type ProcessedTransaction = struct {
+    tx_hash: bytes(32),
+    amount: u64,
+    status: bytes(8),
+}
+
+// --- PCI Zone: full cardholder data, governs field visibility ---
+circuit pci_processor(tx_id: TransactionId, card: CardData) -> ProcessedTransaction
+    lex esn/fin/pci/org/processor/pci_zone {
+        governance hierarchical
+        audit_trail true
+        compliance [pci_dss_v4, soc2]
+
+        field_governance {
+            PAN -> encrypted(audience: processor)
+            CVV -> hidden
+            CARDHOLDER -> encrypted(audience: merchant)
+            EXPIRY -> encrypted(audience: processor)
+            TOKENIZED -> public
+            AGGREGATED -> public
+        }
+
+        sub_lex processing fan_out
+            share [tx_hash, amount, status, token, merchant_id, timestamp]
+            redact [pan, cvv, cardholder_name, expiry, billing_address]
+        sub_lex analytics fan_out
+            share [tx_hash, amount, status, merchant_category, timestamp, region]
+            redact [pan, cvv, cardholder_name, expiry, billing_address, token, merchant_id]
+        sub_lex public fan_out
+            share [tx_hash, status, timestamp]
+            redact [pan, cvv, cardholder_name, expiry, billing_address, token, merchant_id, amount, merchant_category, region]
+    }
+    precision A
+    constant_time true
+    observe metrics: [transactions_processed, tokenization_ops]
+    invariant "sad_never_stored" { cvv_persisted == false }
+    invariant "pan_masked_in_logs" { pan_visible_in_logs == false }
+{
+    let tx_hash = sha3_256(card)
+    let token = blake3(tx_id)
+    ProcessedTransaction {
+        tx_hash: tx_hash,
+        amount: 0,
+        status: token,
+    }
+}

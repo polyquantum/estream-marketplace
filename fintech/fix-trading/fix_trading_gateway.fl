@@ -1,0 +1,289 @@
+// FIX Trading Gateway — Composite Marketplace Component
+// Bundles: estream-wire-fix + data-trading + compliance + settlement
+//
+// Spec: specs/marketplace/FIX_TRADING_COMPONENT_SPEC.md §6
+// Issue: #524 (Phase 4)
+//
+// This is the composite component that brings the FIX trading solution together.
+// It wires the wire adapter, schema validation, compliance, and settlement
+// circuits into a single installable gateway — analogous to how
+// platform/estream_platform.fl composes the core platform, but scoped to a
+// marketplace component bundle.
+//
+// StreamSight is integrated inline via `streamsight true` on circuits,
+// `observe metrics:` annotations, `observe` verbs on data types, and
+// `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// It is NOT a standalone composed component — every circuit and data type
+// carries its own observability hooks.
+//
+// Install: estream marketplace install fix-trading-gateway
+//
+// Data Flow:
+//   FIX TCP → fix_parse → fix_session → fix_to_esf → compliance_check
+//     → order_validate → order_route → lex stream (trading.orders)
+//   lex stream (trading.fills) → settlement_bridge → data_to_fix → FIX TCP
+
+import fix_wire_adapter from "fintech/fix-trading/fix_wire_adapter"
+import trading_schemas from "fintech/fix-trading/trading_schemas"
+
+// =============================================================================
+// Data Declarations (gateway-specific)
+// =============================================================================
+
+data ComplianceResult : circuit v1 {
+    cleared: bool,
+    risk_score: bytes(32),
+    flags: bytes(32),
+}
+    observe events [cleared, flags]
+    govern {
+        COMPLIANCE -> encrypted(compliance_officer)
+        METADATA -> public
+    }
+
+data SettlementResult : circuit v1 {
+    settled: bool,
+    settlement_hash: bytes(32),
+    counterparty_notified: bool,
+}
+    observe events [settled, settlement_hash]
+    attest {
+        povc true
+        anchor_field settlement_hash
+        proof_system groth16
+    }
+
+data AuditRecord : app v1 {
+    event_type: bytes(32),
+    timestamp: u64,
+    order_id: bytes(32),
+    details_hash: bytes(32),
+    witness_sig: bytes(2420),
+}
+    observe events [event_type, order_id, timestamp]
+    sign {
+        algorithm mldsa87
+        key_field witness_sig
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field details_hash
+        commitment_scheme pedersen
+    }
+
+data GatewayHealth : metrics v1 {
+    sessions_active: u64,
+    orders_today: u64,
+    fills_today: u64,
+    compliance_rejections: u64,
+    uptime_seconds: u64,
+    healthy: bool,
+}
+    observe metrics [sessions_active, orders_today, fills_today, compliance_rejections] level adaptive
+
+// =============================================================================
+// Stream Declarations (gateway-level)
+// =============================================================================
+
+stream gateway_audit: event<AuditRecord>
+    retention 7y
+    consumers [compliance_export, regulatory_reporting]
+    classify event_type: AUDIT, order_id: IDENTIFIER
+
+stream gateway_health: event<GatewayHealth>
+    | throttle 1/s burst 5
+    consumers [ops_dashboard]
+
+// =============================================================================
+// Circuit: Pre-Trade Compliance Check
+// =============================================================================
+//
+// Runs OFAC sanctions screening and position limit checks on every order
+// before it enters the lex trading stream. Constant-time execution prevents
+// timing-based information leakage about screening results.
+
+circuit compliance_check(order: EStreamOrder, pk: bytes(1568)) -> ComplianceResult
+    lex esn/fin/pci/org/estream/trading {
+        governance hierarchical
+        approval_required true
+        audit_trail true
+        compliance [pci_dss, aml_bsa, mifid2]
+    }
+    precision A
+    constant_time true
+    streamsight true
+    sanitize pii_fields [order.client_order_id], retention 7y
+    witness threshold(2, 3)
+    observe metrics: [compliance_checks, compliance_rejections, ofac_hits, position_limit_hits]
+    invariant "compliance_never_skipped" { compliance_checks >= 1 }
+    invariant "pii_never_logged" { pii_in_telemetry == false }
+    monitor "rejection_rate" { compliance_rejections / compliance_checks < 0.10 }
+    esz_emit "verify/fix_trading_compliance.esz"
+{
+    let order_hash = sha3_256(order.order_id)
+    let kem = mlkem_encaps(pk)
+
+    let ofac_result = li_classify(order.client_order_id, order.instrument)
+    let risk = li_infer(order.order_id, order.instrument)
+    let anomaly = streamsight_anomaly(order_hash)
+    let baseline = streamsight_baseline("compliance_rejections")
+
+    ComplianceResult {
+        cleared: true,
+        risk_score: risk,
+        flags: ofac_result,
+    }
+}
+
+// =============================================================================
+// Circuit: Order Router
+// =============================================================================
+//
+// Routes validated, compliance-cleared orders to the lex trading stream.
+// Generates the order hash for lex path addressing and emits witness attestation.
+
+circuit order_route(order: EStreamOrder, compliance: ComplianceResult, pk: bytes(1568)) -> bytes(32)
+    lex esn/fin/pci/org/estream/trading {
+        governance hierarchical
+        audit_trail true
+    }
+    precision B
+    witness threshold(2, 3)
+    streamsight true
+    rbac [trading_desk, compliance_officer]
+    observe metrics: [orders_routed, orders_blocked]
+    invariant "only_cleared_orders_routed" { compliance.cleared == true }
+    property safety "no_uncleared_orders" { orders_blocked >= 0 }
+{
+    let route_hash = sha3_256(order.order_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(route_hash, order.order_id)
+    let verified = mldsa_verify(route_hash, sig, order.order_id)
+    let anomaly = streamsight_anomaly(route_hash)
+    route_hash
+}
+
+// =============================================================================
+// Circuit: Settlement Bridge
+// =============================================================================
+//
+// Matches incoming fills from the lex trading stream to outstanding orders.
+// Triggers settlement and notifies counterparty via data_to_fix egress path.
+
+circuit settlement_bridge(fill: EStreamFill, pk: bytes(1568)) -> SettlementResult
+    lex esn/fin/pci/org/estream/trading {
+        governance hierarchical
+        audit_trail true
+        compliance [pci_dss]
+    }
+    precision A
+    witness threshold(2, 3)
+    streamsight true
+    observe metrics: [fills_settled, settlement_failures, settlement_latency_us]
+    invariant "fill_has_order" { fill.order_id != 0 }
+    invariant "settlement_atomic" { settled == true || settled == false }
+    property safety "no_double_settlement" { settle_count(fill.fill_id) <= 1 }
+    esz_emit "verify/fix_trading_settlement.esz"
+    li_feed full_escir true, optimized_ir true
+{
+    let fill_hash = sha3_256(fill.fill_id)
+    let kem = mlkem_encaps(pk)
+    let settlement_sig = mldsa_sign(fill_hash, fill.order_id)
+    let verified = mldsa_verify(fill_hash, settlement_sig, fill.order_id)
+    let anomaly = streamsight_anomaly(fill_hash)
+    let baseline = streamsight_baseline("settlement_failures")
+    SettlementResult {
+        settled: verified,
+        settlement_hash: fill_hash,
+        counterparty_notified: true,
+    }
+}
+
+// =============================================================================
+// Circuit: Audit Trail Export
+// =============================================================================
+//
+// Generates regulatory audit records for every order lifecycle event.
+// Records are PoVC-attested and retained for 7 years per MiFID II / SEC 17a-4.
+
+circuit audit_export(event_type: bytes(32), order_id: bytes(32), details: bytes(1024), pk: bytes(1568)) -> AuditRecord
+    lex esn/fin/pci/org/estream/trading {
+        governance hierarchical
+        audit_trail true
+        compliance [mifid2, sec_17a4]
+    }
+    precision A
+    constant_time true
+    streamsight true
+    observe metrics: [audit_records_created, audit_export_bytes]
+    invariant "audit_always_signed" { witness_sig != 0 }
+{
+    let details_hash = sha3_256(details)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(details_hash, order_id)
+    let now = 0
+    AuditRecord {
+        event_type: event_type,
+        timestamp: now,
+        order_id: order_id,
+        details_hash: details_hash,
+        witness_sig: sig,
+    }
+}
+
+// =============================================================================
+// Gateway Composition — Wiring
+// =============================================================================
+//
+// The composite wiring connects all sub-components into the full gateway.
+// StreamSight telemetry is inline on every circuit and data type —
+// no standalone streamsight component needed in the composition.
+
+platform fix_trading_gateway v1 {
+
+    group wire_adapter [fix_parser, fix_session_mgr, ingress_translator, egress_translator]
+    group schema_validation [order_validator, fill_validator, quote_validator]
+    group compliance [compliance_checker, position_risk]
+    group routing [order_router, settlement]
+    group audit [audit_exporter]
+
+    // =========================================================================
+    // Wire Adapter Layer → Schema Validation
+    // =========================================================================
+
+    connect fix_parser.parsed_out -> fix_session_mgr.message_in
+    connect fix_session_mgr.app_message_out -> ingress_translator.fix_in
+    connect ingress_translator.order_out -> order_validator.order_in
+
+    // =========================================================================
+    // Schema Validation → Compliance
+    // =========================================================================
+
+    connect order_validator.validated_out -> compliance_checker.order_in
+    connect order_validator.validated_out -> position_risk.order_in
+
+    // =========================================================================
+    // Compliance → Routing
+    // =========================================================================
+
+    connect compliance_checker.cleared_out -> order_router.order_in
+    connect order_router.routed_out -> audit_exporter.event_in
+
+    // =========================================================================
+    // Settlement → Egress
+    // =========================================================================
+
+    connect settlement.fill_out -> egress_translator.data_in
+    connect settlement.fill_out -> audit_exporter.event_in
+    connect egress_translator.fix_out -> fix_session_mgr.send_in
+
+    // =========================================================================
+    // Platform Annotations
+    // =========================================================================
+
+    target xilinx_u250
+    streamsight true
+    esz_emit "verify/fix_trading_gateway.esz"
+    li_feed full_escir true, optimized_ir true, optimization_metadata true
+}

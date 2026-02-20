@@ -1,0 +1,341 @@
+// FIX Wire Adapter — Marketplace Component
+// FIX 4.2/4.4/5.0 protocol parsing, session management, data translation
+//
+// Spec: specs/marketplace/FIX_TRADING_COMPONENT_SPEC.md
+// Issue: #524 (Phase 4)
+//
+// This file defines the core wire adapter circuits for FIX protocol integration.
+// Each circuit handles one layer of the FIX → data translation pipeline:
+//
+//   TCP bytes → fix_parse → fix_session → fix_to_data → data (lex stream)
+//   data (lex stream) → data_to_fix → fix_session → TCP bytes
+//
+// Data types use `data` declarations with verbs (encode, observe, govern, attest)
+// for wire layout, inline StreamSight hooks, privacy masks, and PoVC attestation.
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` — not as a standalone component.
+//
+// The adapter implements the WireAdapter trait via ESCIR codegen.
+// Same circuits compile to CPU (Rust/WASM) or FPGA (Verilog) via dual-target ESCIR.
+
+import data_trading from "fintech/fix-trading/trading_schemas"
+
+// =============================================================================
+// Data Declarations — FIX Protocol Types
+// =============================================================================
+
+data FixParsedMessage : circuit v1 {
+    msg_type: bytes(2),
+    sender_comp_id: bytes(64),
+    target_comp_id: bytes(64),
+    msg_seq_num: u64,
+    sending_time: u64,
+    body_length: u32,
+    checksum: u32,
+    field_count: u32,
+    raw: bytes(8192),
+    raw_length: u32,
+}
+    encode @ bytes(8340) {
+        msg_type        @ le,
+        sender_comp_id  @ le,
+        target_comp_id  @ le,
+        msg_seq_num     @ le,
+        sending_time    @ le,
+        body_length     @ le,
+        checksum        @ le,
+        field_count     @ le,
+        raw             @ le,
+        raw_length      @ le,
+    }
+    observe metrics [msg_type, msg_seq_num, body_length] level adaptive
+    observe events [sender_comp_id, target_comp_id, msg_type]
+
+data FixSessionState : circuit v1 {
+    sender_comp_id: bytes(64),
+    target_comp_id: bytes(64),
+    next_send_seq: u64,
+    next_recv_seq: u64,
+    heartbeat_interval: u32,
+    last_sent: u64,
+    last_recv: u64,
+    state: u8,
+    test_req_id: bytes(32),
+}
+    observe metrics [next_send_seq, next_recv_seq, state] level adaptive
+    govern {
+        SESSION -> encrypted(trading_admin)
+        METADATA -> public
+    }
+
+// Session FSM states
+// 0 = Disconnected, 1 = Connecting, 2 = LogonSent, 3 = Active,
+// 4 = LogoutSent, 5 = Resending
+
+data FixSessionEvent : metrics v1 {
+    event_type: u8,
+    session_id: bytes(32),
+    seq_num: u64,
+    timestamp: u64,
+}
+    observe events [event_type, session_id, seq_num]
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream fix_ingress: event<FixParsedMessage>
+    | throttle 100000/s burst 200000
+    classify msg_type: PROTOCOL, sender_comp_id: SESSION
+
+stream fix_egress: event<FixParsedMessage>
+    | throttle 100000/s burst 200000
+    classify msg_type: PROTOCOL, target_comp_id: SESSION
+
+stream fix_session_events: event<FixSessionEvent>
+    retention 30d
+    consumers [ops_dashboard, compliance_audit]
+
+// =============================================================================
+// Circuit: FIX Message Parser
+// =============================================================================
+//
+// Parses raw FIX tag=value|SOH format into structured fields.
+// FIX wire format: "8=FIX.4.2\x019=123\x0135=D\x01...10=nnn\x01"
+//
+// The parser is a streaming state machine:
+//   1. Extract tag (digits before '=')
+//   2. Extract value (bytes between '=' and SOH \x01)
+//   3. Accumulate fields, validate checksum (tag 10)
+//   4. Dispatch based on MsgType (tag 35)
+
+circuit fix_parse(raw: bytes(8192), raw_length: u32) -> FixParsedMessage
+    lex esn/fin/pci/org/estream/trading
+    precision C
+    clock_domain 125mhz
+    constant_time true
+    critical_path
+    streamsight true
+    observe metrics: [messages_parsed, parse_errors, checksum_failures]
+    invariant "checksum_valid" { checksum_failures == 0 || checksum_failures < messages_parsed * 0.001 }
+    invariant "body_length_matches" { body_length > 0 }
+    monitor "parse_error_rate" { parse_errors / messages_parsed < 0.001 }
+    fuzz_target
+{
+    let msg_hash = sha3_256(raw)
+    let msg_type = extract_fix_tag(raw, 35, raw_length)
+    let sender = extract_fix_tag(raw, 49, raw_length)
+    let target = extract_fix_tag(raw, 56, raw_length)
+    let seq_num = extract_fix_seq(raw, 34, raw_length)
+    let body_len = extract_fix_u32(raw, 9, raw_length)
+    let checksum = extract_fix_checksum(raw, raw_length)
+    let sending_time = extract_fix_timestamp(raw, 52, raw_length)
+    let field_count = count_fix_fields(raw, raw_length)
+    let computed_checksum = compute_fix_checksum(raw, raw_length)
+    let anomaly = streamsight_anomaly(msg_hash)
+    FixParsedMessage {
+        msg_type: msg_type,
+        sender_comp_id: sender,
+        target_comp_id: target,
+        msg_seq_num: seq_num,
+        sending_time: sending_time,
+        body_length: body_len,
+        checksum: computed_checksum,
+        field_count: field_count,
+        raw: raw,
+        raw_length: raw_length,
+    }
+}
+
+// =============================================================================
+// Circuit: FIX Session Manager
+// =============================================================================
+//
+// Manages FIX session state machine:
+//   Disconnected → LogonSent → Active → LogoutSent → Disconnected
+//
+// Handles: Logon (A), Logout (5), Heartbeat (0), TestRequest (1),
+//          ResendRequest (2), SequenceReset (4), Reject (3)
+//
+// SeqNum tracking: validates inbound sequence numbers, detects gaps,
+// generates ResendRequest when gap detected.
+
+circuit fix_session(msg: FixParsedMessage, state: FixSessionState, pk: bytes(1568)) -> FixSessionState
+    lex esn/fin/pci/org/estream/trading {
+        governance hierarchical
+        audit_trail true
+    }
+    precision B
+    witness threshold(2, 3)
+    streamsight true
+    observe metrics: [sessions_active, logon_count, logout_count, heartbeats, seq_gaps_detected, resend_requests]
+    invariant "seq_monotonic" { next_recv_seq >= state.next_recv_seq }
+    invariant "session_state_valid" { state.state >= 0 && state.state <= 5 }
+    property safety "no_duplicate_logon" { logon_count <= sessions_active }
+    monitor "gap_rate" { seq_gaps_detected / messages_total < 0.01 }
+{
+    let msg_type_hash = sha3_256(msg.msg_type)
+    let kem = mlkem_encaps(pk)
+    let session_sig = mldsa_sign(msg.sender_comp_id, msg.target_comp_id)
+    let seq_valid = msg.msg_seq_num == state.next_recv_seq
+    let new_recv_seq = state.next_recv_seq + 1
+    let now = msg.sending_time
+    let gap_anomaly = streamsight_anomaly(msg_type_hash)
+    let baseline = streamsight_baseline("seq_gaps_detected")
+
+    FixSessionState {
+        sender_comp_id: state.sender_comp_id,
+        target_comp_id: state.target_comp_id,
+        next_send_seq: state.next_send_seq,
+        next_recv_seq: new_recv_seq,
+        heartbeat_interval: state.heartbeat_interval,
+        last_sent: state.last_sent,
+        last_recv: now,
+        state: 3,
+        test_req_id: state.test_req_id,
+    }
+}
+
+// =============================================================================
+// Circuit: FIX → Data Ingress Translator (NewOrderSingle)
+// =============================================================================
+//
+// Translates FIX NewOrderSingle (MsgType=D) into EStreamOrder.
+//
+// FIX tag mapping:
+//   Tag 11 (ClOrdID)     → client_order_id
+//   Tag 55 (Symbol)      → instrument
+//   Tag 54 (Side)        → side (1=Buy→0, 2=Sell→1)
+//   Tag 40 (OrdType)     → order_type (1=Market→0, 2=Limit→1, 3=Stop→2, 4=StopLimit→3)
+//   Tag 38 (OrderQty)    → quantity
+//   Tag 44 (Price)       → price (fixed-point, 8 decimals)
+//   Tag 59 (TimeInForce) → time_in_force (0=Day→3, 1=GTC→0, 3=IOC→1, 4=FOK→2)
+
+circuit fix_to_data_order(msg: FixParsedMessage) -> EStreamOrder
+    lex esn/fin/pci/org/estream/trading
+    precision C
+    streamsight true
+    observe metrics: [orders_translated, translation_errors]
+    invariant "msg_type_is_D" { msg.msg_type == "D" }
+    monitor "translation_error_rate" { translation_errors / orders_translated < 0.001 }
+{
+    let order_id = sha3_256(msg.raw)
+    let cl_ord_id = extract_fix_tag(msg.raw, 11, msg.raw_length)
+    let symbol = extract_fix_tag(msg.raw, 55, msg.raw_length)
+    let side_raw = extract_fix_u32(msg.raw, 54, msg.raw_length)
+    let ord_type_raw = extract_fix_u32(msg.raw, 40, msg.raw_length)
+    let quantity = extract_fix_u64(msg.raw, 38, msg.raw_length)
+    let price = extract_fix_u64(msg.raw, 44, msg.raw_length)
+    let tif_raw = extract_fix_u32(msg.raw, 59, msg.raw_length)
+
+    let side = fix_side_to_esf(side_raw)
+    let order_type = fix_ordtype_to_esf(ord_type_raw)
+    let time_in_force = fix_tif_to_esf(tif_raw)
+
+    EStreamOrder {
+        order_id: order_id,
+        client_order_id: cl_ord_id,
+        instrument: symbol,
+        side: side,
+        order_type: order_type,
+        quantity: quantity,
+        price: price,
+        time_in_force: time_in_force,
+        submitted_at: msg.sending_time,
+        submitter: msg.sender_comp_id,
+    }
+}
+
+// =============================================================================
+// Circuit: FIX → Data Ingress Translator (MarketData)
+// =============================================================================
+
+circuit fix_to_data_market_data(msg: FixParsedMessage) -> EStreamMarketData
+    lex esn/fin/pci/org/estream/trading
+    precision C
+    streamsight true
+    observe metrics: [market_data_translated]
+    invariant "msg_type_is_W" { msg.msg_type == "W" }
+{
+    let symbol = extract_fix_tag(msg.raw, 55, msg.raw_length)
+    let bid_price = extract_fix_u64(msg.raw, 270, msg.raw_length)
+    let bid_qty = extract_fix_u64(msg.raw, 271, msg.raw_length)
+    let ask_price = extract_fix_u64(msg.raw, 270, msg.raw_length)
+    let ask_qty = extract_fix_u64(msg.raw, 271, msg.raw_length)
+
+    EStreamMarketData {
+        instrument: symbol,
+        bid_price: bid_price,
+        bid_quantity: bid_qty,
+        ask_price: ask_price,
+        ask_quantity: ask_qty,
+        timestamp: msg.sending_time,
+    }
+}
+
+// =============================================================================
+// Circuit: Data → FIX Egress Translator (ExecutionReport)
+// =============================================================================
+//
+// Data → FIX tag mapping:
+//   order_id    → Tag 37 (OrderID)
+//   instrument  → Tag 55 (Symbol)
+//   side        → Tag 54 (Side, 0→1=Buy, 1→2=Sell)
+//   quantity    → Tag 32 (LastShares) + Tag 14 (CumQty)
+//   price       → Tag 31 (LastPx) + Tag 6 (AvgPx)
+//   executed_at → Tag 60 (TransactTime)
+//   ExecType    → Tag 150 (2=Fill)
+//   OrdStatus   → Tag 39 (2=Filled)
+
+circuit data_to_fix_execution(fill: EStreamFill, session: FixSessionState) -> bytes(8192)
+    lex esn/fin/pci/org/estream/trading
+    precision C
+    streamsight true
+    observe metrics: [fills_translated, egress_bytes]
+    invariant "fill_quantity_positive" { fill.quantity > 0 }
+    invariant "fill_price_positive" { fill.price > 0 }
+{
+    let exec_id = sha3_256(fill.fill_id)
+    let side_fix = data_side_to_fix(fill.side)
+    let fix_msg = build_fix_message(
+        "8",
+        session.sender_comp_id,
+        session.target_comp_id,
+        session.next_send_seq,
+        fill.order_id,
+        exec_id,
+        fill.instrument,
+        side_fix,
+        fill.quantity,
+        fill.price,
+        fill.executed_at
+    )
+    fix_msg
+}
+
+// =============================================================================
+// Circuit: Data → FIX Egress Translator (OrderCancelReject)
+// =============================================================================
+
+circuit data_to_fix_cancel_reject(order_id: bytes(32), reason: bytes(256), session: FixSessionState) -> bytes(8192)
+    lex esn/fin/pci/org/estream/trading
+    precision C
+    streamsight true
+    observe metrics: [cancel_rejects_sent]
+{
+    let reject_id = sha3_256(order_id)
+    let fix_msg = build_fix_message(
+        "9",
+        session.sender_comp_id,
+        session.target_comp_id,
+        session.next_send_seq,
+        order_id,
+        reject_id,
+        reason,
+        0,
+        0,
+        0,
+        0
+    )
+    fix_msg
+}
