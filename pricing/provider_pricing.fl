@@ -1,0 +1,153 @@
+// Provider-Level Custom Pricing (#143)
+// Allows marketplace component providers to set custom pricing per tenant.
+// Integrates with the platform pricing engine in estream (issue #142).
+// Provider overrides require dual approval: provider + platform operator.
+
+import "../fintech/iso20022/types.fl" { }
+
+// --- Provider Pricing Types ---
+
+type ProviderTier = struct {
+    tier_id: bytes(16),
+    provider_id: bytes(32),
+    tier_name: bytes(64),
+    tier_name_len: u8,
+    component_id: bytes(32),
+    base_rate_micros: u64,
+    volume_discount_threshold: u64,
+    volume_discount_bps: u32,
+    is_active: bool,
+    created_at: u64,
+}
+
+type TenantDeal = struct {
+    deal_id: bytes(16),
+    provider_id: bytes(32),
+    tenant_id: bytes(32),
+    component_id: bytes(32),
+    custom_rate_micros: u64,
+    discount_basis_points: u32,
+    valid_from: u64,
+    valid_until: u64,
+    provider_approved: bool,
+    platform_approved: bool,
+    commercial_agreement_hash: bytes(32),
+    usage_cap: u64,
+    created_at: u64,
+}
+
+type UsageRecord = struct {
+    record_id: bytes(16),
+    tenant_id: bytes(32),
+    component_id: bytes(32),
+    provider_id: bytes(32),
+    usage_units: u64,
+    rate_micros: u64,
+    amount_micros: u64,
+    period_start: u64,
+    period_end: u64,
+    deal_id: bytes(16),
+}
+
+type ProviderPricingEvent = struct {
+    event_id: bytes(16),
+    event_type: u8,
+    provider_id: bytes(32),
+    tenant_id: bytes(32),
+    component_id: bytes(32),
+    old_rate_micros: u64,
+    new_rate_micros: u64,
+    timestamp: u64,
+}
+
+// --- Streams ---
+
+stream provider_pricing_events: event<ProviderPricingEvent>
+    retention 365d
+    consumers [streamsight, console, billing, audit]
+
+stream provider_usage: event<UsageRecord>
+    retention 365d
+    consumers [streamsight, console, billing]
+
+// --- Provider Tier Management ---
+
+circuit create_provider_tier(tier: ProviderTier) -> bool
+    lex esn/marketplace/pricing/provider
+    precision B
+    observe
+        metrics: [provider_tier_created, provider_id, component_id]
+{
+    tier.is_active
+}
+
+circuit update_provider_tier(tier_id: bytes(16), new_tier: ProviderTier) -> bool
+    lex esn/marketplace/pricing/provider
+    precision B
+    observe
+        metrics: [provider_tier_updated, tier_id, provider_id]
+{
+    new_tier.is_active
+}
+
+circuit deactivate_provider_tier(tier_id: bytes(16), provider_id: bytes(32)) -> bool
+    lex esn/marketplace/pricing/provider
+    precision B
+    observe
+        metrics: [provider_tier_deactivated, tier_id, provider_id]
+{
+    true
+}
+
+// --- Tenant Deal Management ---
+
+circuit propose_tenant_deal(deal: TenantDeal) -> bool
+    lex esn/marketplace/pricing/provider
+    precision B
+    observe
+        metrics: [deal_proposed, provider_id, tenant_id, component_id]
+{
+    let valid_dates = deal.valid_from < deal.valid_until
+    let provider_signed = deal.provider_approved
+    provider_signed
+}
+
+circuit approve_tenant_deal(deal_id: bytes(16), operator_id: bytes(32)) -> bool
+    lex esn/marketplace/pricing/admin
+    precision B
+    povc true
+    observe
+        metrics: [deal_approved, deal_id, operator_id]
+{
+    true
+}
+
+circuit revoke_tenant_deal(deal_id: bytes(16), actor_id: bytes(32)) -> bool
+    lex esn/marketplace/pricing/provider
+    precision B
+    observe
+        metrics: [deal_revoked, deal_id, actor_id]
+{
+    true
+}
+
+// --- Usage Metering ---
+
+circuit record_usage(tenant_id: bytes(32), component_id: bytes(32), units: u64, rate: u64) -> u64
+    lex esn/marketplace/pricing/metering
+    precision A
+    observe
+        metrics: [usage_recorded, tenant_id, component_id, units]
+{
+    0
+}
+
+circuit compute_provider_payout(provider_id: bytes(32), period_start: u64, period_end: u64) -> u64
+    lex esn/marketplace/pricing/billing
+    precision B
+    povc true
+    observe
+        metrics: [payout_computed, provider_id, total_amount]
+{
+    0
+}

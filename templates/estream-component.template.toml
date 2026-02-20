@@ -37,6 +37,17 @@ pricing = "free"
 # open | interface | compiled | licensed
 visibility = "open"
 
+# Provider-level custom pricing (optional — #143)
+# Enables per-tenant pricing overrides set by the component provider.
+# Requires platform approval. See estream issue #142 for platform pricing.
+# [component.marketplace.pricing_tiers]
+# default_rate_micros = 1000            # Base rate per execution (in microdollars)
+# volume_discount_threshold = 100000    # Usage units before volume discount kicks in
+# volume_discount_bps = 1500            # Basis points discount for volume (15%)
+# allows_custom_deals = true            # Whether provider offers per-tenant deals
+# min_rate_micros = 100                 # Floor rate (provider won't go below this)
+# revenue_share_bps = 7000              # Platform takes 30%, provider keeps 70%
+
 # eStream version compatibility
 [component.estream]
 min_version = "0.8.0"
