@@ -6,7 +6,7 @@ description = "Industrial protocol gateway for eStream — Modbus TCP client, po
 license = "Apache-2.0"
 repository = "https://github.com/polyquantum/estream-marketplace"
 homepage = "https://estream.io/marketplace/estream-industrial-gateway"
-readme = "specs/INDUSTRIAL_PROTOCOL_GATEWAY_V2.md"
+readme = "specs/INDUSTRIAL_PROTOCOL_GATEWAY_v0.9.1.md"
 keywords = ["modbus", "industrial", "iot", "gateway", "protocol", "scada", "plc"]
 
 [component.author]

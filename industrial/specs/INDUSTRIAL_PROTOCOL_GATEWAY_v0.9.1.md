@@ -17,14 +17,14 @@ This specification defines a **layered, composable architecture** for industrial
 1. **Transport Layer** - Generic TCP/UDP/Serial clients
 2. **Protocol Layer** - MODBUS, OPC-UA, DNP3 as Data schemas
 3. **StreamSight Layer** - Unified telemetry and observability
-4. **ESCIR Circuits** - Open-source behavior definitions
+4. **SmartCircuits** - Open-source behavior definitions
 5. **Composite Components** - Marketplace SKUs
 
 **Key Design Decisions:**
-- **ESCIR is Open Source** - Behavior definitions are transparent and auditable
+- **Circuits are Open Source** - Behavior definitions are transparent and auditable
 - **RTL is Optional** - Commercial FPGA acceleration available as upgrade
 - **Software Reference** - Rust implementation for development/testing
-- **Composable** - Mix and match protocols via ESCIR composition
+- **Composable** - Mix and match protocols via SmartCircuit composition
 
 ---
 
@@ -34,7 +34,7 @@ This specification defines a **layered, composable architecture** for industrial
 2. [Transport Layer](#2-transport-layer)
 3. [Protocol Layer - Data Schemas](#3-protocol-layer---data-schemas)
 4. [StreamSight Integration](#4-streamsight-integration)
-5. [ESCIR Circuit Definitions](#5-escir-circuit-definitions)
+5. [SmartCircuit Definitions](#5-smartcircuit-definitions)
 6. [Composite Components](#6-composite-components)
 7. [Implementation Targets](#7-implementation-targets)
 8. [Configuration](#8-configuration)
@@ -54,15 +54,15 @@ This specification defines a **layered, composable architecture** for industrial
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  ┌────────────────────────────────────────────────────────────────────────┐ │
-│  │                      ESCIR Circuit Layer (Open Source)                  │ │
+│  │                      SmartCircuit Layer (Open Source)                  │ │
 │  │                                                                         │ │
 │  │  ┌──────────────────────────────────────────────────────────────────┐  │ │
 │  │  │                    Composite Components                           │  │ │
 │  │  │                                                                   │  │ │
 │  │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │  │ │
 │  │  │  │ gateway-    │  │ gateway-    │  │ gateway-    │              │  │ │
-│  │  │  │ lite.escir  │  │ standard    │  │ premium     │              │  │ │
-│  │  │  │             │  │ .escir      │  │ .escir      │              │  │ │
+│  │  │  │ lite.fl  │  │ standard    │  │ premium     │              │  │ │
+│  │  │  │             │  │ .fl      │  │ .fl      │              │  │ │
 │  │  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘              │  │ │
 │  │  └─────────┼────────────────┼────────────────┼──────────────────────┘  │ │
 │  │            │                │                │                         │ │
@@ -71,13 +71,13 @@ This specification defines a **layered, composable architecture** for industrial
 │  │  │                                                                   │  │ │
 │  │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │  │ │
 │  │  │  │ modbus_tcp  │  │ modbus_rtu  │  │ opcua_      │              │  │ │
-│  │  │  │ .escir      │  │ .escir      │  │ client.escir│              │  │ │
+│  │  │  │ .fl      │  │ .fl      │  │ client.fl│              │  │ │
 │  │  │  └─────────────┘  └─────────────┘  └─────────────┘              │  │ │
 │  │  │                                                                   │  │ │
 │  │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │  │ │
 │  │  │  │ poll_       │  │ alarm_      │  │ stream_     │              │  │ │
 │  │  │  │ scheduler   │  │ evaluator   │  │ emitter     │              │  │ │
-│  │  │  │ .escir      │  │ .escir      │  │ .escir      │              │  │ │
+│  │  │  │ .fl      │  │ .fl      │  │ .fl      │              │  │ │
 │  │  │  └─────────────┘  └─────────────┘  └─────────────┘              │  │ │
 │  │  └───────────────────────────────────────────────────────────────────┘  │ │
 │  │                                                                         │ │
@@ -86,7 +86,7 @@ This specification defines a **layered, composable architecture** for industrial
 │  │  │                                                                    │  │ │
 │  │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐               │  │ │
 │  │  │  │ tcp_client  │  │ serial_uart │  │ udp_client  │               │  │ │
-│  │  │  │ .escir      │  │ .escir      │  │ .escir      │               │  │ │
+│  │  │  │ .fl      │  │ .fl      │  │ .fl      │               │  │ │
 │  │  │  └─────────────┘  └─────────────┘  └─────────────┘               │  │ │
 │  │  └───────────────────────────────────────────────────────────────────┘  │ │
 │  └────────────────────────────────────────────────────────────────────────┘ │
@@ -135,9 +135,9 @@ This specification defines a **layered, composable architecture** for industrial
 
 | Principle | Implementation |
 |-----------|----------------|
-| **Transparency** | ESCIR circuits are open source, auditable |
-| **Composability** | Mix protocol circuits via ESCIR composition |
-| **Portability** | Same ESCIR runs on software or FPGA |
+| **Transparency** | SmartCircuits are open source, auditable |
+| **Composability** | Mix protocol circuits via SmartCircuit composition |
+| **Portability** | Same circuit runs on software or FPGA |
 | **Observability** | Full StreamSight integration at every layer |
 | **Upgradability** | Swap software for FPGA without changing config |
 
@@ -148,8 +148,8 @@ This specification defines a **layered, composable architecture** for industrial
 ### 2.1 TCP Client Circuit
 
 ```yaml
-# circuits/transport/tcp_client.escir.yaml
-escir: "0.8.0"
+# circuits/transport/tcp_client.fl.yaml
+version: "0.9.1"
 name: tcp_client
 version: "1.0.0"
 license: "Apache-2.0"
@@ -298,8 +298,8 @@ compute:
 ### 2.2 Serial UART Circuit
 
 ```yaml
-# circuits/transport/serial_uart.escir.yaml
-escir: "0.8.0"
+# circuits/transport/serial_uart.fl.yaml
+version: "0.9.1"
 name: serial_uart
 version: "1.0.0"
 license: "Apache-2.0"
@@ -750,8 +750,8 @@ lex://estream/sys/industrial/
 ### 4.2 StreamSight Bridge Circuit
 
 ```yaml
-# circuits/industrial/industrial_streamsight_bridge.escir.yaml
-escir: "0.8.0"
+# circuits/industrial/industrial_streamsight_bridge.fl.yaml
+version: "0.9.1"
 name: industrial_streamsight_bridge
 version: "1.0.0"
 license: "Apache-2.0"
@@ -838,13 +838,13 @@ compute:
 
 ---
 
-## 5. ESCIR Circuit Definitions
+## 5. SmartCircuit Definitions
 
 ### 5.1 MODBUS TCP Client Circuit
 
 ```yaml
-# circuits/industrial/modbus_tcp_client.escir.yaml
-escir: "0.8.0"
+# circuits/industrial/modbus_tcp_client.fl.yaml
+version: "0.9.1"
 name: modbus_tcp_client
 version: "1.0.0"
 license: "Apache-2.0"
@@ -992,8 +992,8 @@ subcircuits:
 ### 5.2 Poll Scheduler Circuit
 
 ```yaml
-# circuits/industrial/poll_scheduler.escir.yaml
-escir: "0.8.0"
+# circuits/industrial/poll_scheduler.fl.yaml
+version: "0.9.1"
 name: poll_scheduler
 version: "1.0.0"
 license: "Apache-2.0"
@@ -1085,8 +1085,8 @@ compute:
 ### 5.3 Stream Emitter Circuit
 
 ```yaml
-# circuits/industrial/stream_emitter.escir.yaml
-escir: "0.8.0"
+# circuits/industrial/stream_emitter.fl.yaml
+version: "0.9.1"
 name: stream_emitter
 version: "1.0.0"
 license: "Apache-2.0"
@@ -1189,8 +1189,8 @@ compute:
 ### 6.1 Gateway Lite (Open Source)
 
 ```yaml
-# circuits/marketplace/industrial-gateway-lite.escir.yaml
-escir: "0.8.0"
+# circuits/marketplace/industrial-gateway-lite.fl.yaml
+version: "0.9.1"
 name: industrial_gateway_lite
 version: "1.0.0"
 license: "Apache-2.0"
@@ -1285,8 +1285,8 @@ outputs:
 ### 6.2 Gateway Standard (Commercial)
 
 ```yaml
-# circuits/marketplace/industrial-gateway-standard.escir.yaml
-escir: "0.8.0"
+# circuits/marketplace/industrial-gateway-standard.fl.yaml
+version: "0.9.1"
 name: industrial_gateway_standard
 version: "1.0.0"
 license: "Commercial"
@@ -1350,8 +1350,8 @@ composition:
 ### 6.3 Gateway Premium (Commercial)
 
 ```yaml
-# circuits/marketplace/industrial-gateway-premium.escir.yaml
-escir: "0.8.0"
+# circuits/marketplace/industrial-gateway-premium.fl.yaml
+version: "0.9.1"
 name: industrial_gateway_premium
 version: "1.0.0"
 license: "Commercial"
@@ -1526,10 +1526,10 @@ gateway:
 
 ## 10. Testing Strategy
 
-### 10.1 ESCIR Tests
+### 10.1 SmartCircuit Tests
 
 ```yaml
-# tests/industrial/modbus_tcp_test.escir.yaml
+# tests/industrial/modbus_tcp_test.fl.yaml
 test:
   name: "MODBUS TCP Read Holding Registers"
   circuit: modbus_tcp_client
@@ -1594,7 +1594,7 @@ pub struct ModbusSlaveSimulator {
 
 ## 11. Marketplace SKUs
 
-| SKU | License | ESCIR | Software | Hardware | Monthly | Support |
+| SKU | License | SmartCircuit | Software | Hardware | Monthly | Support |
 |-----|---------|-------|----------|----------|---------|---------|
 | **gateway-lite** | Apache-2.0 | ✅ Source | ✅ Source | ❌ | Free | Community |
 | **gateway-standard** | Commercial | ❌ Compiled | ✅ Binary | ✅ Bitstream | 100 ES | Standard |
@@ -1605,7 +1605,7 @@ pub struct ModbusSlaveSimulator {
 ## Appendix A: Related Specifications
 
 - [Component Marketplace Spec](./MARKETPLACE_SPEC.md)
-- [ESCIR Language Spec](../protocol/ESCIR_LANGUAGE_SPEC.md)
+- [SmartCircuit Language Spec](../protocol/ESCIR_LANGUAGE_SPEC.md)
 - [Data Schema Spec](../protocol/ESF_SCHEMA_SPEC.md)
 - [StreamSight Spec](../protocol/STREAMSIGHT_SPEC.md)
 - [ISO 20022 Parser Component](../../fpga/rtl/iso20022/COMPONENT_MARKETPLACE.md)

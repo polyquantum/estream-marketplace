@@ -15,8 +15,8 @@
 // StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
 // and `streamsight_anomaly()`/`streamsight_baseline()` — not as a standalone component.
 //
-// The adapter implements the WireAdapter trait via ESCIR codegen.
-// Same circuits compile to CPU (Rust/WASM) or FPGA (Verilog) via dual-target ESCIR.
+// The adapter implements the WireAdapter trait via SmartCircuit compilation.
+// Same circuits compile to CPU (Rust/WASM) or FPGA (Verilog) via dual-target codegen.
 
 import data_trading from "fintech/fix-trading/trading_schemas"
 

@@ -30,7 +30,7 @@
 
 ## 1. Overview
 
-The FIX Trading Marketplace Component provides FIX protocol (4.2/4.4/5.0) integration as a set of composable marketplace components, following the same layered architecture pattern established by the [Industrial Protocol Gateway v2](./INDUSTRIAL_PROTOCOL_GATEWAY_V2.md) and the [ISO 20022 FPGA Parser](../protocol/ISO20022_FPGA_PARSER_SPEC.md).
+The FIX Trading Marketplace Component provides FIX protocol (4.2/4.4/5.0) integration as a set of composable marketplace components, following the same layered architecture pattern established by the [Industrial Protocol Gateway v2](./INDUSTRIAL_PROTOCOL_GATEWAY_v0.9.1.md) and the [ISO 20022 FPGA Parser](../protocol/ISO20022_FPGA_PARSER_SPEC.md).
 
 ### 1.1 Design Principles
 
@@ -401,7 +401,7 @@ data_to_fix ◀── settlement ◀── fill_stream ◀── lex stream (tra
 
 ## 7. Marketplace SKUs
 
-Following the [Industrial Protocol Gateway](./INDUSTRIAL_PROTOCOL_GATEWAY_V2.md) tiered model:
+Following the [Industrial Protocol Gateway](./INDUSTRIAL_PROTOCOL_GATEWAY_v0.9.1.md) tiered model:
 
 ### 7.1 SKU Comparison
 
@@ -843,7 +843,7 @@ These three constructs should be evaluated as FastLang language extensions in a 
 - [ESTREAM_MARKETPLACE_SPEC.md](./ESTREAM_MARKETPLACE_SPEC.md) — Parent marketplace specification
 - [WIRE_ADAPTER_TRAIT_SPEC.md](../protocol/WIRE_ADAPTER_TRAIT_SPEC.md) — WireAdapter trait (#528)
 - [ESF_SCHEMA_COMPOSITION_SPEC.md](../protocol/ESF_SCHEMA_COMPOSITION_SPEC.md) — Schema composition (#526)
-- [INDUSTRIAL_PROTOCOL_GATEWAY_V2.md](./INDUSTRIAL_PROTOCOL_GATEWAY_V2.md) — Industrial gateway pattern reference
+- [INDUSTRIAL_PROTOCOL_GATEWAY_v0.9.1.md](./INDUSTRIAL_PROTOCOL_GATEWAY_v0.9.1.md) — Industrial gateway pattern reference
 - [ISO20022_FPGA_PARSER_SPEC.md](../protocol/ISO20022_FPGA_PARSER_SPEC.md) — ISO 20022 component reference
 - [FIX Protocol Specification](https://www.fixtrading.org/standards/) — FIX Trading Community standards
 
