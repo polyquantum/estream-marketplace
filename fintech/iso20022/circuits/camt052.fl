@@ -1,0 +1,71 @@
+// camt.052 — BankToCustomerAccountReport
+// Intraday account report from bank to customer.
+// Data types + Data encode declarations.
+
+import "types.fl" { Amount }
+
+type ReportGroupHeader = struct {
+    message_id: bytes(35),
+    message_id_len: u8,
+    creation_timestamp: u64,
+}
+
+type ReportEntry = struct {
+    entry_ref: bytes(35),
+    entry_ref_len: u8,
+    amount_cents: u64,
+    currency: bytes(3),
+    credit_debit: u8,
+    status: u8,
+    booking_date: u64,
+    value_date: u64,
+}
+
+type AccountReport = struct {
+    report_id: bytes(35),
+    report_id_len: u8,
+    account_iban: bytes(34),
+    account_iban_len: u8,
+    sequence_number: u64,
+    report_timestamp: u64,
+    entry_count: u32,
+}
+
+type Camt052 = struct {
+    group_header: ReportGroupHeader,
+    report_count: u32,
+}
+
+data Camt052Data : core v1 {
+    msg_type: u16,
+    message_id: bytes(35),
+    creation_timestamp: u64,
+    report_id: bytes(35),
+    account_iban: bytes(34),
+    sequence_number: u64,
+    report_timestamp: u64,
+    available_balance_cents: u64,
+    available_currency: bytes(3),
+    entry_count: u32,
+}
+    encode @ bytes(200) {
+        msg_type                @ le = 0x0052,
+        message_id              @ le,
+        creation_timestamp      @ le,
+        report_id               @ le,
+        account_iban            @ le,
+        sequence_number         @ le,
+        report_timestamp        @ le,
+        available_balance_cents @ le,
+        available_currency      @ le,
+        entry_count             @ le,
+    }
+
+circuit camt052_hash(msg: Camt052Data) -> bytes(32)
+    lex esn/iso20022/camt052
+    precision C
+    povc true
+{
+    let combined = concat(msg.message_id, msg.report_id)
+    sha3_256(combined)
+}

@@ -1,0 +1,88 @@
+// camt.053 — BankToCustomerStatement
+// End-of-day account statement from bank to customer.
+// Data types + Data encode declarations.
+
+import "types.fl" { Amount }
+
+type StatementGroupHeader = struct {
+    message_id: bytes(35),
+    message_id_len: u8,
+    creation_timestamp: u64,
+}
+
+type BalanceInfo = struct {
+    balance_type: u8,
+    amount_cents: u64,
+    currency: bytes(3),
+    credit_debit: u8,
+    date: u64,
+}
+
+type StatementEntry = struct {
+    entry_ref: bytes(35),
+    entry_ref_len: u8,
+    amount_cents: u64,
+    currency: bytes(3),
+    credit_debit: u8,
+    status: u8,
+    booking_date: u64,
+    value_date: u64,
+    account_servicer_ref: bytes(35),
+    account_servicer_ref_len: u8,
+}
+
+type AccountStatement = struct {
+    statement_id: bytes(35),
+    statement_id_len: u8,
+    account_iban: bytes(34),
+    account_iban_len: u8,
+    sequence_number: u64,
+    from_date: u64,
+    to_date: u64,
+    entry_count: u32,
+}
+
+type Camt053 = struct {
+    group_header: StatementGroupHeader,
+    statement_count: u32,
+}
+
+data Camt053Data : core v1 {
+    msg_type: u16,
+    message_id: bytes(35),
+    creation_timestamp: u64,
+    statement_id: bytes(35),
+    account_iban: bytes(34),
+    sequence_number: u64,
+    from_date: u64,
+    to_date: u64,
+    opening_balance_cents: u64,
+    opening_currency: bytes(3),
+    closing_balance_cents: u64,
+    closing_currency: bytes(3),
+    entry_count: u32,
+}
+    encode @ bytes(232) {
+        msg_type              @ le = 0x0053,
+        message_id            @ le,
+        creation_timestamp    @ le,
+        statement_id          @ le,
+        account_iban          @ le,
+        sequence_number       @ le,
+        from_date             @ le,
+        to_date               @ le,
+        opening_balance_cents @ le,
+        opening_currency      @ le,
+        closing_balance_cents @ le,
+        closing_currency      @ le,
+        entry_count           @ le,
+    }
+
+circuit camt053_hash(msg: Camt053Data) -> bytes(32)
+    lex esn/iso20022/camt053
+    precision C
+    povc true
+{
+    let combined = concat(msg.message_id, msg.statement_id)
+    sha3_256(combined)
+}

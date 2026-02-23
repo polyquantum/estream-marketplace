@@ -28,8 +28,9 @@ provides = ["Iso20022Pacs008", "Iso20022Pacs002", "PaymentStatus"]
 requires = []
 
 [component.circuits]
-provides = ["iso20022_parser"]
-target = ["cpu"]
+provides = ["iso20022_parser", "pacs008_hash", "pacs002_hash", "camt053_hash", "camt052_hash"]
+source = ["circuits/types.fl", "circuits/pacs008.fl", "circuits/pacs002.fl", "circuits/camt053.fl", "circuits/camt052.fl"]
+target = ["cpu", "fpga"]
 
 [component.wire_adapter]
 protocol_family = "financial"
@@ -43,6 +44,12 @@ breaking_change_notice_days = 90
 changelog = "CHANGELOG.md"
 
 [component.include]
-circuits = ["circuit.v091.escir.yaml"]
+circuits = ["circuit.v091.escir.yaml", "circuits/*.fl"]
 tests = ["test_vectors/**"]
 docs = ["README.md", "COMPONENT_MARKETPLACE.md"]
+
+[component.boundary]
+tier = "application"
+rationale = "ISO 20022 is a domain-specific financial messaging standard; no horizontal platform circuit depends on it"
+migrated_from = "estream/runtime/iso20022"
+migration_issue = "polyquantum/estream#179"

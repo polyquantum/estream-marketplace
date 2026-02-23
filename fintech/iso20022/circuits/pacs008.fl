@@ -1,0 +1,90 @@
+// pacs.008 — FIToFICustomerCreditTransfer
+// Debtor agent → Creditor agent credit transfer message.
+// Data types + Data encode declarations for FPGA/Rust/WASM targets.
+
+import "types.fl" { Amount, Bic, Iban, PartyIdentification, FinancialInstitutionId, PaymentId, ChargeBearer }
+
+type GroupHeader008 = struct {
+    message_id: bytes(35),
+    message_id_len: u8,
+    creation_timestamp: u64,
+    number_of_transactions: u32,
+    total_settlement_cents: u64,
+    settlement_method: u8,
+}
+
+type CreditTransferTransaction = struct {
+    payment_id: PaymentId,
+    settlement_amount: Amount,
+    settlement_date: u64,
+    charge_bearer: u8,
+    debtor_name: bytes(140),
+    debtor_name_len: u8,
+    debtor_account: bytes(34),
+    debtor_account_len: u8,
+    debtor_agent_bic: bytes(11),
+    debtor_agent_bic_len: u8,
+    creditor_name: bytes(140),
+    creditor_name_len: u8,
+    creditor_account: bytes(34),
+    creditor_account_len: u8,
+    creditor_agent_bic: bytes(11),
+    creditor_agent_bic_len: u8,
+    remittance_info: bytes(140),
+    remittance_info_len: u8,
+}
+
+type Pacs008 = struct {
+    group_header: GroupHeader008,
+    transaction_count: u32,
+}
+
+data Pacs008Data : core v1 {
+    msg_type: u16,
+    message_id: bytes(35),
+    creation_timestamp: u64,
+    num_transactions: u32,
+    total_settlement_cents: u64,
+    settlement_method: u8,
+    instruction_id: bytes(35),
+    end_to_end_id: bytes(35),
+    amount_cents: u64,
+    currency: bytes(3),
+    charge_bearer: u8,
+    debtor_name: bytes(140),
+    debtor_account: bytes(34),
+    debtor_agent_bic: bytes(11),
+    creditor_name: bytes(140),
+    creditor_account: bytes(34),
+    creditor_agent_bic: bytes(11),
+    remittance_info: bytes(140),
+}
+    encode @ bytes(680) {
+        msg_type            @ le = 0x0008,
+        message_id          @ le,
+        creation_timestamp  @ le,
+        num_transactions    @ le,
+        total_settlement_cents @ le,
+        settlement_method   @ le,
+        instruction_id      @ le,
+        end_to_end_id       @ le,
+        amount_cents        @ le,
+        currency            @ le,
+        charge_bearer       @ le,
+        debtor_name         @ le,
+        debtor_account      @ le,
+        debtor_agent_bic    @ le,
+        creditor_name       @ le,
+        creditor_account    @ le,
+        creditor_agent_bic  @ le,
+        remittance_info     @ le,
+    }
+
+circuit pacs008_hash(msg: Pacs008Data) -> bytes(32)
+    lex esn/iso20022/pacs008
+    precision C
+    povc true
+{
+    let combined = concat(msg.message_id, msg.end_to_end_id)
+    sha3_256(combined)
+}

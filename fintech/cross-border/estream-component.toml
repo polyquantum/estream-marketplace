@@ -1,0 +1,41 @@
+[component]
+name = "estream-cross-border"
+version = "0.9.1"
+category = "payment-protocol"
+implementation_type = "Hybrid"
+status = "Active"
+description = "Cross-border payment protocol (mBridge compatible) — atomic FX swaps, multi-CBDC settlement, and compliance-aware routing"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-cross-border"
+readme = "README.md"
+keywords = ["cross-border", "mbridge", "cbdc", "atomic-swap", "fx", "payment"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "free"
+visibility = "open"
+
+[component.estream]
+min_version = "0.9.1"
+
+[component.schemas]
+provides = ["CrossBorderIntent", "SettlementProof", "FxQuote"]
+requires = ["Iso20022Pacs008"]
+
+[component.circuits]
+provides = ["cross_border_settlement"]
+target = ["cpu"]
+
+[component.lifecycle]
+status = "active"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
+
+[component.include]
+tests = ["test_vectors/**"]
+docs = ["README.md"]

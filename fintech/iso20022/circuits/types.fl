@@ -1,0 +1,60 @@
+// ISO 20022 Shared Types
+// Common data structures used across all ISO 20022 message types.
+// FL integer-only encoding: amounts in cents (u64), dates as Unix epoch.
+
+type MessageType = struct {
+    code: u16,
+}
+
+type Amount = struct {
+    value_cents: u64,
+    currency: bytes(3),
+}
+
+type Bic = struct {
+    code: bytes(11),
+    length: u8,
+}
+
+type Iban = struct {
+    value: bytes(34),
+    length: u8,
+}
+
+type PartyIdentification = struct {
+    name: bytes(140),
+    name_len: u8,
+    country: bytes(2),
+}
+
+type FinancialInstitutionId = struct {
+    bic: Bic,
+    has_bic: bool,
+}
+
+type PaymentId = struct {
+    instruction_id: bytes(35),
+    instruction_id_len: u8,
+    end_to_end_id: bytes(35),
+    end_to_end_id_len: u8,
+    transaction_id: bytes(35),
+    transaction_id_len: u8,
+    uetr: bytes(36),
+    uetr_len: u8,
+}
+
+type TransactionStatus = struct {
+    code: u8,
+}
+
+type ChargeBearer = struct {
+    code: u8,
+}
+
+type PrivacyTier = struct {
+    tier: u8,
+}
+
+type DataFieldType = struct {
+    code: u8,
+}

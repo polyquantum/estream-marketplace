@@ -1,0 +1,65 @@
+// pacs.002 — FIToFIPaymentStatusReport
+// Status report for payment instructions between financial institutions.
+// Data types + Data encode declarations.
+
+import "types.fl" { TransactionStatus }
+
+type StatusReportGroupHeader = struct {
+    message_id: bytes(35),
+    message_id_len: u8,
+    creation_timestamp: u64,
+}
+
+type StatusReasonCode = struct {
+    code: bytes(4),
+}
+
+type TransactionInfoAndStatus = struct {
+    original_message_id: bytes(35),
+    original_message_id_len: u8,
+    original_instruction_id: bytes(35),
+    original_instruction_id_len: u8,
+    original_end_to_end_id: bytes(35),
+    original_end_to_end_id_len: u8,
+    transaction_status: u8,
+    reason_code: bytes(4),
+    additional_info: bytes(140),
+    additional_info_len: u8,
+}
+
+type Pacs002 = struct {
+    group_header: StatusReportGroupHeader,
+    status_count: u32,
+}
+
+data Pacs002Data : core v1 {
+    msg_type: u16,
+    message_id: bytes(35),
+    creation_timestamp: u64,
+    original_message_id: bytes(35),
+    original_instruction_id: bytes(35),
+    original_end_to_end_id: bytes(35),
+    transaction_status: u8,
+    reason_code: bytes(4),
+    additional_info: bytes(140),
+}
+    encode @ bytes(328) {
+        msg_type                @ le = 0x0002,
+        message_id              @ le,
+        creation_timestamp      @ le,
+        original_message_id     @ le,
+        original_instruction_id @ le,
+        original_end_to_end_id  @ le,
+        transaction_status      @ le,
+        reason_code             @ le,
+        additional_info         @ le,
+    }
+
+circuit pacs002_hash(msg: Pacs002Data) -> bytes(32)
+    lex esn/iso20022/pacs002
+    precision C
+    povc true
+{
+    let combined = concat(msg.message_id, msg.original_message_id)
+    sha3_256(combined)
+}
