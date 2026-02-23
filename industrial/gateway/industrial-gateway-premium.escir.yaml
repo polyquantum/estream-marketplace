@@ -1,7 +1,7 @@
 # Industrial Gateway Premium - Marketplace Composite Component
 # Commercial License
 
-escir: "0.8.0"
+version: "0.9.1"
 name: industrial_gateway_premium
 version: "1.0.0"
 license: "commercial"

@@ -173,7 +173,7 @@ pricing = "free"        # free | one-time | subscription | usage-based | enterpr
 visibility = "open"     # open | interface | compiled | licensed
 
 [component.estream]
-min_version = "0.8.0"
+min_version = "0.9.1"
 max_version = "1.0.0"   # optional
 
 [component.dependencies]
@@ -1322,9 +1322,65 @@ Future marketplace wire adapters:
 
 ---
 
-## 21. Performance Targets
+## 21. Circuit Lifecycle Management (v0.9.1)
 
-### CPU Targets
+Every marketplace component follows a predictable lifecycle that gives consumers confidence in stability and migration paths.
+
+### 21.1 Lifecycle States
+
+| State | Description | Consumer Impact |
+|-------|-------------|-----------------|
+| **Draft** | Under development, not production-ready | Available for testing only |
+| **Active** | Production-ready, actively maintained | Full support, SLA-backed |
+| **Deprecated** | Still functional but scheduled for removal | Migration warnings emitted via StreamSight; `successor` field points to replacement |
+| **Sunset** | Removed from active registry | Existing deployments continue running but receive no updates; new installations blocked |
+
+### 21.2 Component Manifest Fields
+
+Components declare lifecycle metadata in `estream-component.toml`:
+
+```toml
+[component.lifecycle]
+status = "active"              # active | deprecated | sunset
+sunset_date = "2027-06-01"    # Required when status = deprecated
+successor = "@pub/new-comp"   # Required when status = deprecated
+migration_guide = "MIGRATION.md"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
+```
+
+### 21.3 Deprecation Protocol
+
+1. Publisher sets `status = "deprecated"` with `sunset_date` and `successor`
+2. Marketplace emits StreamSight warning to all active consumers: `lex://esn/marketplace/deprecation`
+3. Migration guide published alongside the deprecated version
+4. During deprecation period: component still installable, still receives security patches
+5. At sunset date: component moved to `sunset` status, new installations blocked, existing deployments unaffected
+6. Consumer applications using deprecated circuits receive CLI warnings during `estream build`
+
+### 21.4 Version Transition Support
+
+When a component publishes a new major version:
+
+- Previous major version automatically enters `deprecated` status with 90-day default notice
+- Publisher must provide a `MIGRATION.md` documenting breaking changes and migration steps
+- The marketplace CLI (`estream marketplace upgrade`) generates a diff of schema and circuit changes between versions
+- Shadow testing support: consumers can run old and new versions side-by-side using the lifecycle `shadow_test` circuit from `estream/circuits/lifecycle/shadow_test.fl`
+
+### 21.5 StreamSight Integration
+
+All lifecycle transitions emit events to `lex://esn/marketplace/lifecycle`:
+
+- `component.deprecated` — includes sunset_date, successor, migration_guide_url
+- `component.sunset` — includes final version, successor
+- `component.version.major` — new major version available, migration guide attached
+- `component.security.patch` — critical security update for any lifecycle state
+
+---
+
+## 22. Performance Targets
+
+### 22.1 CPU Targets
 
 | Component | Metric | Target |
 |-----------|--------|--------|
@@ -1333,7 +1389,7 @@ Future marketplace wire adapters:
 | Wire adapter (FIX) | Parse throughput | > 500K msg/sec |
 | Data serialize | Throughput | > 2M msg/sec |
 
-### FPGA Targets
+### 22.2 FPGA Targets
 
 | Component | Metric | Target |
 |-----------|--------|--------|

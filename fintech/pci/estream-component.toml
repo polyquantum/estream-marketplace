@@ -2,6 +2,8 @@
 name = "estream-pci-cardholder"
 version = "1.0.0"
 category = "smart-circuit"
+implementation_type = "FastLang"
+status = "Active"
 description = "PCI DSS cardholder data governance circuit — field-level encryption, audit trails, and compliance masks for payment card data"
 license = "Apache-2.0"
 repository = "https://github.com/polyquantum/estream-marketplace"
@@ -19,7 +21,7 @@ pricing = "free"
 visibility = "open"
 
 [component.estream]
-min_version = "0.8.0"
+min_version = "0.9.1"
 
 [component.schemas]
 provides = ["CardholderData", "PciAuditEntry"]
@@ -28,6 +30,11 @@ requires = []
 [component.circuits]
 provides = ["pci_cardholder_governance"]
 target = ["cpu"]
+
+[component.lifecycle]
+status = "active"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
 
 [component.include]
 circuits = ["pci_cardholder.fl"]

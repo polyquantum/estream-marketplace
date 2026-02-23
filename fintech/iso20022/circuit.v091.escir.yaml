@@ -1,5 +1,5 @@
 # =============================================================================
-# ISO 20022 Parser Circuit (ESCIR v0.8.0)
+# ISO 20022 Parser Circuit (SmartCircuit v0.9.1)
 # =============================================================================
 # Streaming ISO 20022 XML/JSON parser that converts financial messages to
 # eStream Format (ESF) with privacy tier annotations.
@@ -17,7 +17,7 @@
 
 name: iso20022-parser
 version: 1
-format: v0.8.0
+format: v0.9.1
 description: |
   Hardware-accelerated ISO 20022 financial message parser with support for
   pacs.008 (Credit Transfer), pacs.002 (Status Report), camt.053 (Statement),

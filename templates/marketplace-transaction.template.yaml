@@ -1,7 +1,7 @@
 # Marketplace Transaction Circuit Template
-# ESCIR v0.8.0
+# SmartCircuit v0.9.1
 
-escir: "0.8.0"
+version: "0.9.1"
 name: "{{CIRCUIT_NAME}}_marketplace"
 version: "1.0.0"
 

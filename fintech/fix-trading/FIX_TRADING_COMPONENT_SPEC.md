@@ -522,7 +522,7 @@ data EStreamFill : app v1 {
 ### 9.1 Lite SKU Structure
 
 ```yaml
-escir: "0.8.0"
+version: "0.9.1"
 name: fix_trading_lite
 version: "1.0.0"
 license: "Apache-2.0"

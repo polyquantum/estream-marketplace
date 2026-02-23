@@ -15,6 +15,10 @@ version = "0.1.0"
 # Required: one of — data-schema, wire-adapter, smart-circuit, fpga-circuit, integration, console-widget
 category = "{{category}}"
 
+# Required: implementation type — FastLang | Hybrid | Pure Rust | Pure RTL | Platform
+implementation_type = "FastLang"
+status = "Draft"
+
 # Required: short description (one line)
 description = "{{description}}"
 
@@ -50,13 +54,13 @@ visibility = "open"
 
 # eStream version compatibility
 [component.estream]
-min_version = "0.8.0"
+min_version = "0.9.1"
 # max_version = "2.0.0"  # uncomment to set ceiling
 
 # Dependencies on other marketplace components (semver requirements)
 [component.dependencies]
 # data-trading = "^1.0.0"
-# estream-kernel = ">=0.8.0"
+# estream-kernel = ">=0.9.1"
 
 # Schemas this component provides and requires
 [component.schemas]
@@ -89,6 +93,21 @@ target = ["cpu"]
 # [component.fpga]
 # device_family = ["xcvu9p"]
 # resource_estimate = { luts = 50000, brams = 100, dsps = 0 }
+
+# Circuit lifecycle management (v0.9.1)
+[component.lifecycle]
+# Component status: active | deprecated | sunset
+status = "active"
+# If deprecated, when will it be removed? (ISO 8601)
+# sunset_date = "2027-01-01"
+# If deprecated, what replaces it?
+# successor = "@publisher/successor-component"
+# Migration guide (path relative to component root)
+# migration_guide = "MIGRATION.md"
+# Minimum notice period before breaking changes (days)
+breaking_change_notice_days = 90
+# Changelog
+changelog = "CHANGELOG.md"
 
 # Files to include in the published package (glob patterns)
 [component.include]

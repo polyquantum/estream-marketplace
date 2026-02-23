@@ -1,7 +1,7 @@
 # Industrial Stream Emitter Circuit
 # Open Source under Apache-2.0
 
-escir: "0.8.0"
+version: "0.9.1"
 name: stream_emitter
 version: "1.0.0"
 license: "Apache-2.0"

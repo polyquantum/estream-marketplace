@@ -2,6 +2,8 @@
 name = "estream-wire-fix"
 version = "1.0.0"
 category = "wire-adapter"
+implementation_type = "FastLang"
+status = "Active"
 description = "FIX 4.2/4.4 protocol adapter for eStream — parses FIX messages, manages sessions, routes orders via SmartCircuits"
 license = "Apache-2.0"
 repository = "https://github.com/polyquantum/estream-marketplace"
@@ -19,7 +21,7 @@ pricing = "free"
 visibility = "open"
 
 [component.estream]
-min_version = "0.8.0"
+min_version = "0.9.1"
 
 [component.dependencies]
 data-trading = "^1.0.0"
@@ -37,6 +39,11 @@ protocol_family = "financial"
 transports = ["tcp", "tls"]
 bidirectional = true
 request_response = true
+
+[component.lifecycle]
+status = "active"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
 
 [component.include]
 schemas = ["trading_schemas.fl"]

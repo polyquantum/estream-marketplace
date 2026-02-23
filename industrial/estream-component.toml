@@ -2,6 +2,8 @@
 name = "estream-industrial-gateway"
 version = "0.9.0"
 category = "integration"
+implementation_type = "Hybrid"
+status = "Active"
 description = "Industrial protocol gateway for eStream — Modbus TCP client, poll scheduling, stream emission, and StreamSight bridge with Lite/Standard/Premium tiers"
 license = "Apache-2.0"
 repository = "https://github.com/polyquantum/estream-marketplace"
@@ -19,7 +21,7 @@ pricing = "freemium"
 visibility = "open"
 
 [component.estream]
-min_version = "0.8.0"
+min_version = "0.9.1"
 
 [component.schemas]
 provides = ["ModbusTcpFrame", "PollSchedule", "IndustrialTelemetry", "StreamSightBridgeEvent"]
@@ -36,6 +38,11 @@ provides = [
     "industrial_gateway_premium",
 ]
 target = ["cpu", "fpga"]
+
+[component.lifecycle]
+status = "active"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
 
 [component.include]
 circuits = ["components/*.escir.yaml", "gateway/*.escir.yaml"]
