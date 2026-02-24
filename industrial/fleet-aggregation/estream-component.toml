@@ -1,0 +1,61 @@
+[component]
+name = "estream-fleet-aggregation"
+version = "0.9.2"
+category = "smart-circuit"
+implementation_type = "FastLang"
+status = "Active"
+description = "Multi-site fleet aggregation — site-to-region-to-fleet rollup with health scoring, cross-site comparison, anomaly correlation, and pluggable AI model hooks for industrial IoT deployments"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-fleet-aggregation"
+readme = "README.md"
+keywords = ["fleet", "aggregation", "industrial", "iot", "health-scoring", "anomaly-detection", "ai", "multi-site"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "freemium"
+visibility = "open"
+
+[component.estream]
+min_version = "0.9.2"
+
+[component.dependencies]
+estream-industrial-gateway = "^0.9.0"
+
+[component.schemas]
+provides = [
+    "SiteKPI",
+    "RegionMapping",
+    "RegionalHealth",
+    "FleetKPI",
+    "SiteRanking",
+    "AnomalyScore",
+    "FleetCorrelation",
+    "HealthWeights",
+    "AIModelSlot",
+    "AIInferenceResult",
+]
+requires = []
+
+[component.circuits]
+provides = [
+    "fleet_aggregation",
+    "compute_health_score",
+    "detect_outlier",
+    "correlate_anomalies",
+]
+target = ["cpu", "fpga"]
+
+[component.lifecycle]
+status = "active"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
+
+[component.include]
+circuits = ["circuits/*.fl"]
+tests = ["test_vectors/*.esz"]
+docs = ["specs/*.md", "README.md"]

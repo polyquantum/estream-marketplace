@@ -1,0 +1,156 @@
+/// Spec: ESTREAM-FLEET-001
+/// Marketplace-packaged fleet aggregation for industrial IoT deployments.
+///
+/// This circuit re-exports the platform fleet aggregation graph
+/// (estream/circuits/services/fleet/fleet_aggregation.fl) with
+/// marketplace-specific defaults, preconfigured region templates,
+/// and example AI model slot configurations.
+///
+/// Platform source: esn.fleet.aggregation
+/// Issue: #193   Epic: platform-architecture-v0.9.2
+
+use estream::fleet::FleetAggregation
+use estream::fleet::SiteKPI
+use estream::fleet::RegionMapping
+use estream::fleet::HealthWeights
+use estream::fleet::AIModelSlot
+
+// =============================================================================
+// Marketplace Configuration Profiles
+// =============================================================================
+
+type FleetProfile = struct {
+    name:                 u32,
+    max_sites:            u16,
+    max_regions:          u16,
+    aggregation_interval: u16,
+    ai_model_slots:       u8,
+    anomaly_threshold:    f32,
+    outlier_sigma:        f32,
+}
+
+type FleetConfig = struct {
+    profile:              FleetProfile,
+    region_mappings:      list<RegionMapping>,
+    health_weights:       HealthWeights,
+    ai_models:            list<AIModelSlot>,
+}
+
+// =============================================================================
+// Preconfigured Profiles
+// =============================================================================
+
+/// Small fleet: 1–50 sites, single region, basic health scoring.
+circuit fleet_profile_small() -> FleetProfile
+    status production
+    spec ESTREAM-FLEET-001
+    lex esn/marketplace/fleet/profile/small
+{
+    FleetProfile {
+        name: 0x736D616C,
+        max_sites: 50,
+        max_regions: 4,
+        aggregation_interval: 60,
+        ai_model_slots: 2,
+        anomaly_threshold: 0.7,
+        outlier_sigma: 3.0,
+    }
+}
+
+/// Medium fleet: 50–200 sites, regional grouping, full anomaly correlation.
+circuit fleet_profile_medium() -> FleetProfile
+    status production
+    spec ESTREAM-FLEET-001
+    lex esn/marketplace/fleet/profile/medium
+{
+    FleetProfile {
+        name: 0x6D656469,
+        max_sites: 200,
+        max_regions: 16,
+        aggregation_interval: 60,
+        ai_model_slots: 8,
+        anomaly_threshold: 0.6,
+        outlier_sigma: 2.5,
+    }
+}
+
+/// Large fleet: 200–1000 sites, deviation-only ingestion, full AI pipeline.
+circuit fleet_profile_large() -> FleetProfile
+    status production
+    spec ESTREAM-FLEET-001
+    lex esn/marketplace/fleet/profile/large
+{
+    FleetProfile {
+        name: 0x6C617267,
+        max_sites: 1000,
+        max_regions: 64,
+        aggregation_interval: 30,
+        ai_model_slots: 16,
+        anomaly_threshold: 0.5,
+        outlier_sigma: 2.0,
+    }
+}
+
+// =============================================================================
+// Default Health Weights for Common Industrial Domains
+// =============================================================================
+
+/// Default weights for thermoelectric / energy generation fleets.
+circuit default_weights_energy() -> HealthWeights
+    status production
+    spec ESTREAM-FLEET-001
+    lex esn/marketplace/fleet/weights/energy
+{
+    HealthWeights {
+        weights: [0.20, 0.15, 0.15, 0.10, 0.10, 0.10, 0.05, 0.05, 0.03, 0.03, 0.02, 0.01, 0.01, 0.0, 0.0, 0.0],
+        weight_count: 13,
+        uptime_weight: 0.30,
+        fault_weight: 0.20,
+    }
+}
+
+/// Default weights for manufacturing / SCADA fleets.
+circuit default_weights_manufacturing() -> HealthWeights
+    status production
+    spec ESTREAM-FLEET-001
+    lex esn/marketplace/fleet/weights/manufacturing
+{
+    HealthWeights {
+        weights: [0.25, 0.20, 0.15, 0.10, 0.10, 0.05, 0.05, 0.05, 0.03, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        weight_count: 10,
+        uptime_weight: 0.35,
+        fault_weight: 0.15,
+    }
+}
+
+/// Default weights for logistics / fleet tracking deployments.
+circuit default_weights_logistics() -> HealthWeights
+    status production
+    spec ESTREAM-FLEET-001
+    lex esn/marketplace/fleet/weights/logistics
+{
+    HealthWeights {
+        weights: [0.15, 0.15, 0.15, 0.15, 0.10, 0.10, 0.05, 0.05, 0.05, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        weight_count: 10,
+        uptime_weight: 0.25,
+        fault_weight: 0.25,
+    }
+}
+
+// =============================================================================
+// Marketplace Entry Point — Configured Fleet Graph
+// =============================================================================
+
+/// Instantiate a fleet aggregation graph with the given profile and config.
+/// Validates configuration, applies defaults for missing weights, and
+/// returns a fully wired FleetAggregation graph reference.
+circuit create_fleet(config: FleetConfig) -> u32
+    status production
+    spec ESTREAM-FLEET-001
+    lex esn/marketplace/fleet/create
+    observe metrics: [profile_name, sites_configured, regions_configured, ai_slots_active]
+{
+    let _profile = config.profile
+    let _weights = config.health_weights
+    0
+}

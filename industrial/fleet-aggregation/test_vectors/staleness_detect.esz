@@ -1,0 +1,63 @@
+# Fleet Aggregation — Staleness Detection Test Vector
+# Validates that stale site data is detected and handled
+
+circuit_id: esn.fleet.aggregation
+test_name: staleness_detection
+vector_count: 4
+
+vectors:
+  - name: "site goes stale — no update for 5 minutes"
+    inputs:
+      sites:
+        - { site_id: 1, region_id: 100, timestamp_us: 1000000000, kpi_values: [0.9], kpi_count: 1, status: 0 }
+      current_time_us: 1300000000
+      staleness_threshold_s: 120
+    expected_outputs:
+      site_1_status: "offline"
+      sites_online: 0
+      sites_offline: 1
+    pass_criteria:
+      stale_site_marked_offline: true
+
+  - name: "mixed — 1 fresh, 1 stale"
+    inputs:
+      sites:
+        - { site_id: 1, region_id: 100, timestamp_us: 1300000000, kpi_values: [0.9], kpi_count: 1, status: 0 }
+        - { site_id: 2, region_id: 100, timestamp_us: 1000000000, kpi_values: [0.7], kpi_count: 1, status: 0 }
+      current_time_us: 1300000000
+      staleness_threshold_s: 120
+    expected_outputs:
+      sites_online: 1
+      sites_offline: 1
+      fleet_health_uses_fresh_only: true
+    pass_criteria:
+      stale_excluded_from_aggregation: true
+      fresh_site_still_counted: true
+
+  - name: "site recovers after staleness"
+    inputs:
+      sequence:
+        - time: 0, site_1_update: { kpi_values: [0.9], status: 0 }
+        - time: 300, site_1_update: null
+        - time: 400, site_1_update: { kpi_values: [0.85], status: 0 }
+      staleness_threshold_s: 120
+    expected_outputs:
+      at_time_0: { site_1_status: "online" }
+      at_time_300: { site_1_status: "offline" }
+      at_time_400: { site_1_status: "online" }
+    pass_criteria:
+      recovery_detected: true
+
+  - name: "all sites stale — fleet degraded"
+    inputs:
+      sites:
+        - { site_id: 1, timestamp_us: 1000000000 }
+        - { site_id: 2, timestamp_us: 1000000000 }
+        - { site_id: 3, timestamp_us: 1000000000 }
+      current_time_us: 1300000000
+      staleness_threshold_s: 120
+    expected_outputs:
+      sites_online: 0
+      fleet_health: 0.0
+    pass_criteria:
+      all_stale_results_in_zero_health: true

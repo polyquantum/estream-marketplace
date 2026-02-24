@@ -1,0 +1,175 @@
+# Fleet Aggregation — Multi-Site Aggregation Test Vector
+# Validates site → region → fleet rollup pipeline
+
+circuit_id: esn.fleet.aggregation
+test_name: multi_site_aggregation
+vector_count: 12
+
+vectors:
+  - name: "3-site single-region rollup"
+    inputs:
+      sites:
+        - { site_id: 1, region_id: 100, kpi_values: [0.9, 0.85, 0.8], kpi_count: 3, status: 0, fault_count: 0, uptime_pct: 99.5 }
+        - { site_id: 2, region_id: 100, kpi_values: [0.7, 0.75, 0.6], kpi_count: 3, status: 0, fault_count: 1, uptime_pct: 97.2 }
+        - { site_id: 3, region_id: 100, kpi_values: [0.5, 0.4, 0.3], kpi_count: 3, status: 2, fault_count: 5, uptime_pct: 82.0 }
+    expected_outputs:
+      fleet_kpi:
+        total_sites: 3
+        sites_online: 2
+        sites_faulted: 1
+        fleet_health_min: 0.6
+        fleet_health_max: 0.95
+      regional_health:
+        region_100:
+          site_count: 3
+          sites_online: 2
+          sites_faulted: 1
+          worst_site_id: 3
+    pass_criteria:
+      fleet_health_in_range: true
+      all_sites_accounted: true
+
+  - name: "cross-region comparison"
+    inputs:
+      sites:
+        - { site_id: 10, region_id: 200, kpi_values: [0.95, 0.9], kpi_count: 2, status: 0, fault_count: 0, uptime_pct: 99.9 }
+        - { site_id: 11, region_id: 200, kpi_values: [0.93, 0.88], kpi_count: 2, status: 0, fault_count: 0, uptime_pct: 99.7 }
+        - { site_id: 20, region_id: 300, kpi_values: [0.4, 0.3], kpi_count: 2, status: 1, fault_count: 3, uptime_pct: 88.0 }
+        - { site_id: 21, region_id: 300, kpi_values: [0.35, 0.25], kpi_count: 2, status: 2, fault_count: 8, uptime_pct: 71.0 }
+    expected_outputs:
+      site_rankings:
+        best_site: 10
+        worst_site: 21
+        outlier_detected: true
+        outlier_site: 21
+      regional_health:
+        region_200:
+          health_score_min: 0.85
+        region_300:
+          health_score_max: 0.60
+    pass_criteria:
+      outlier_detected_for_degraded_region: true
+      cross_region_ranking_correct: true
+
+  - name: "anomaly correlation — multi-site thermal spike"
+    inputs:
+      anomaly_scores:
+        - { site_id: 1, domain: 0, score: 0.92, baseline_sigma: 3.1 }
+        - { site_id: 2, domain: 0, score: 0.88, baseline_sigma: 2.8 }
+        - { site_id: 3, domain: 0, score: 0.85, baseline_sigma: 2.6 }
+    expected_outputs:
+      fleet_correlations:
+        correlation_count: 1
+        involved_site_count: 3
+        severity: "critical"
+        confidence_min: 0.7
+    pass_criteria:
+      multi_site_thermal_pattern_detected: true
+      severity_is_critical: true
+
+  - name: "AI model slot — single active model"
+    inputs:
+      site_kpis:
+        - { site_id: 1, kpi_values: [0.5, 0.6, 0.4], kpi_count: 3 }
+      ai_models:
+        - { slot_id: 0, model_id: 1001, domain: 0, version: 1, active: true }
+    expected_outputs:
+      ai_inference:
+        inferences_total: 1
+        model_id: 1001
+        confidence_min: 0.0
+    pass_criteria:
+      model_invoked: true
+
+  - name: "empty fleet — zero sites"
+    inputs:
+      sites: []
+    expected_outputs:
+      fleet_kpi:
+        total_sites: 0
+        fleet_health_min: 0.0
+        fleet_health_max: 0.0
+    pass_criteria:
+      graceful_empty_handling: true
+
+  - name: "storm mode — 500 sites"
+    inputs:
+      site_count: 500
+      all_status: 0
+      all_uptime_pct: 95.0
+    expected_outputs:
+      fleet_kpi:
+        total_sites: 500
+        ingestion_mode: "deviation_only"
+    pass_criteria:
+      storm_mode_triggered: true
+      all_sites_counted: true
+
+  - name: "health score computation — weighted"
+    inputs:
+      kpis: [0.8, 0.9, 0.7]
+      kpi_count: 3
+      weights: { weights: [0.5, 0.3, 0.2], weight_count: 3, uptime_weight: 0.3, fault_weight: 0.2 }
+      uptime_pct: 95.0
+      fault_count: 2
+    expected_outputs:
+      health_score_min: 0.5
+      health_score_max: 1.0
+    pass_criteria:
+      score_in_valid_range: true
+      weighted_correctly: true
+
+  - name: "outlier detection — sigma threshold"
+    inputs:
+      site_score: 0.3
+      region_mean: 0.85
+      region_stddev: 0.1
+      threshold_sigma: 2.5
+    expected_outputs:
+      is_outlier: true
+    pass_criteria:
+      outlier_correctly_flagged: true
+
+  - name: "outlier detection — within threshold"
+    inputs:
+      site_score: 0.82
+      region_mean: 0.85
+      region_stddev: 0.1
+      threshold_sigma: 2.5
+    expected_outputs:
+      is_outlier: false
+    pass_criteria:
+      not_flagged_as_outlier: true
+
+  - name: "region mapper — unmapped site fallback"
+    inputs:
+      sites:
+        - { site_id: 999, region_id: 0, kpi_values: [0.5], kpi_count: 1, status: 0, fault_count: 0, uptime_pct: 90.0 }
+      region_config: []
+    expected_outputs:
+      region_id_assigned: 0
+      unmapped_count: 1
+    pass_criteria:
+      fallback_region_applied: true
+
+  - name: "dashboard sink — push interval"
+    inputs:
+      fleet_kpi: { total_sites: 10, fleet_health: 0.88 }
+      push_interval_s: 5
+    expected_outputs:
+      dashboard_updates_within_10s: true
+    pass_criteria:
+      dashboard_received_update: true
+
+  - name: "series attestation — merkle chain"
+    inputs:
+      fleet_kpi_sequence:
+        - { total_sites: 10, fleet_health: 0.88 }
+        - { total_sites: 10, fleet_health: 0.87 }
+        - { total_sites: 10, fleet_health: 0.89 }
+    expected_outputs:
+      merkle_chain_valid: true
+      witness_attested: true
+    pass_criteria:
+      chain_integrity: true
+      attestation_present: true
