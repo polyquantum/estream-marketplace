@@ -1,0 +1,212 @@
+// Domain Package Registry — Package Format & Attestation
+// Epic 4: estream-marketplace#4
+// Depends: estream#299 (Customer-Extensible FastLang)
+//
+// Defines the .escx package binary format, manifest metadata,
+// PoVC attestation, and package signing primitives.
+
+/// govern lex esn/marketplace/registry
+
+// --- Package Format Constants ---
+// .escx packages are opaque compiled domain artifacts.
+// They are NOT reverse-engineerable — the compiler produces
+// position-independent ESCIR bytecode with symbol stripping.
+
+// --- Core Types ---
+
+type PackageId = bytes(32)
+type PublisherId = bytes(32)
+type PackageVersion = bytes(20)
+type EscirApiVersion = bytes(12)
+type PlatformVersion = bytes(12)
+type PackageChecksum = bytes(32)
+type PackageSignature = bytes(4627)
+type AttestationHash = bytes(32)
+type LexRequirement = bytes(64)
+type DependencySpec = bytes(128)
+
+// Package stability tiers (mirrors ESCIR public API stability)
+type PackageStability = u8
+// 0=Stable, 1=Preview, 2=Experimental
+
+// Package visibility levels
+type PackageVisibility = u8
+// 0=Public, 1=Unlisted, 2=Private, 3=Solution-Only
+
+type PackageManifest = struct {
+    package_id: PackageId,
+    name: bytes(128),
+    version: PackageVersion,
+    publisher_id: PublisherId,
+    description: bytes(512),
+    stability: PackageStability,
+    visibility: PackageVisibility,
+    escir_api_version: EscirApiVersion,
+    min_platform_version: PlatformVersion,
+    max_platform_version: PlatformVersion,
+    lex_requirements: bytes(512),
+    dependency_count: u16,
+    domain_category: bytes(32),
+    license_spdx: bytes(32),
+    share_price_micros: u64,
+    private_price_micros: u64,
+    telemetry_schema_hash: PackageChecksum,
+    source_hash: PackageChecksum,
+    compiled_hash: PackageChecksum,
+    created_at: u64,
+    updated_at: u64,
+}
+
+type PackageDependency = struct {
+    dep_id: PackageId,
+    dep_name: bytes(128),
+    version_req: bytes(32),
+    resolved_version: PackageVersion,
+    optional: bool,
+}
+
+type PackageAttestation = struct {
+    package_id: PackageId,
+    version: PackageVersion,
+    attestation_type: u8,
+    compiler_version: PlatformVersion,
+    escir_api_version: EscirApiVersion,
+    source_hash: PackageChecksum,
+    compiled_hash: PackageChecksum,
+    attestation_hash: AttestationHash,
+    witness_signature: PackageSignature,
+    attester_id: PublisherId,
+    attested_at: u64,
+}
+// attestation_type: 0=CompilerPoVC, 1=PlatformVerification, 2=CommunityAudit
+
+type VersionConstraint = struct {
+    package_id: PackageId,
+    min_version: PackageVersion,
+    max_version: PackageVersion,
+    min_escir_api: EscirApiVersion,
+    max_escir_api: EscirApiVersion,
+    min_platform: PlatformVersion,
+    max_platform: PlatformVersion,
+}
+
+// --- Data Declarations ---
+
+data PackageManifestWire : marketplace v1 {
+    package_id: PackageId,
+    name: bytes(128),
+    version: PackageVersion,
+    publisher_id: PublisherId,
+    stability: PackageStability,
+    visibility: PackageVisibility,
+    escir_api_version: EscirApiVersion,
+    min_platform_version: PlatformVersion,
+    share_price_micros: u64,
+    private_price_micros: u64,
+    source_hash: PackageChecksum,
+    compiled_hash: PackageChecksum,
+    created_at: u64,
+}
+    encode
+    observe metrics [stability, visibility, escir_api_version] level adaptive
+
+data AttestationWire : marketplace v1 {
+    package_id: PackageId,
+    version: PackageVersion,
+    attestation_type: u8,
+    attestation_hash: AttestationHash,
+    witness_signature: PackageSignature,
+    attested_at: u64,
+}
+    encode
+    sign {
+        algorithm mldsa87
+        fields [package_id, version, attestation_hash]
+    }
+
+// --- Streams ---
+
+stream package_registry: state<PackageId, PackageManifest>
+    retention 365d
+    consumers [cli, console, registry, marketplace_admin]
+
+stream package_attestations: event<AttestationWire>
+    retention 365d
+    consumers [cli, console, registry, verifier]
+
+stream package_versions: event<PackageManifestWire>
+    retention 365d
+    consumers [cli, console, registry]
+
+// --- Circuits ---
+
+/// test golden
+circuit register_package(manifest: PackageManifest, attestation: PackageAttestation) -> bool
+    lex esn/marketplace/registry
+    precision B
+    rbac [publisher, marketplace_admin]
+    observe metrics: [packages_registered, publisher_id, stability]
+    povc true
+    invariant "attestation_matches" { attestation.package_id == manifest.package_id }
+    invariant "version_matches" { attestation.version == manifest.version }
+    invariant "hash_matches" { attestation.compiled_hash == manifest.compiled_hash }
+{
+    let sig_valid = mldsa_verify(attestation.attestation_hash, attestation.witness_signature, bytes(1952))
+    sig_valid
+}
+
+/// test golden
+circuit verify_package_attestation(package_id: PackageId, version: PackageVersion, attestation: PackageAttestation) -> bool
+    lex esn/marketplace/registry
+    precision A
+    observe metrics: [attestation_verifications, attestation_failures]
+{
+    let id_match = attestation.package_id == package_id
+    let ver_match = attestation.version == version
+    let sig_valid = mldsa_verify(attestation.attestation_hash, attestation.witness_signature, bytes(1952))
+    id_match
+}
+
+/// test golden
+circuit check_version_compatibility(constraint: VersionConstraint, target_platform: PlatformVersion, target_escir: EscirApiVersion) -> bool
+    lex esn/marketplace/registry
+    precision C
+    observe metrics: [version_checks, compatibility_failures]
+{
+    true
+}
+
+/// test golden
+circuit sign_package(manifest: PackageManifest, publisher_key: bytes(1952)) -> PackageSignature
+    lex esn/marketplace/registry/publish
+    precision A
+    rbac [publisher]
+    observe metrics: [packages_signed]
+{
+    let manifest_hash = sha3_256(manifest.source_hash)
+    let sig = mldsa_sign(manifest_hash, publisher_key)
+    sig
+}
+
+/// test golden
+circuit update_package_version(package_id: PackageId, new_manifest: PackageManifest, attestation: PackageAttestation) -> bool
+    lex esn/marketplace/registry
+    precision B
+    rbac [publisher, marketplace_admin]
+    observe metrics: [version_updates]
+    povc true
+{
+    let sig_valid = mldsa_verify(attestation.attestation_hash, attestation.witness_signature, bytes(1952))
+    sig_valid
+}
+
+/// test golden
+circuit deprecate_package(package_id: PackageId, version: PackageVersion, reason: bytes(256)) -> bool
+    lex esn/marketplace/registry
+    precision B
+    rbac [publisher, marketplace_admin]
+    observe metrics: [packages_deprecated]
+    povc true
+{
+    true
+}

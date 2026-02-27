@@ -1,0 +1,147 @@
+// Console & Developer Experience — Customer Console
+// Epic 7: estream-marketplace#7
+//
+// Customer view: installed packages, licenses, telemetry preferences,
+// billing. All customer identifiers are blinded — the marketplace operator
+// cannot correlate customers across packages. Telemetry preference is
+// per-package share/private toggle with PoVC attestation.
+
+/// govern lex esn/marketplace/console
+
+// --- Types ---
+
+type BlindedCustomerId = bytes(32)
+type PackageId = bytes(32)
+type RecordId = bytes(32)
+
+type CustomerDashboard = struct {
+    customer_id_blinded: BlindedCustomerId,
+    installed_count: u16,
+    active_licenses: u16,
+    monthly_cost_micros: u64,
+    telemetry_share_count: u16,
+    telemetry_private_count: u16,
+}
+
+type InstalledPackageInfo = struct {
+    package_id: PackageId,
+    name: bytes(128),
+    version: bytes(32),
+    license_type: u8,
+    license_expires_at: u64,
+    usage_this_period: u64,
+    cost_this_period_micros: u64,
+    update_available: bool,
+    telemetry_preference: u8,
+}
+// license_type: 0=Share, 1=Private, 2=Trial, 3=Enterprise
+// telemetry_preference: 0=Share, 1=Private
+
+type BillingRecord = struct {
+    record_id: RecordId,
+    period_start: u64,
+    period_end: u64,
+    package_id: PackageId,
+    tier: u8,
+    usage_count: u64,
+    cost_micros: u64,
+    paid: bool,
+}
+// tier: 0=Share, 1=Private
+
+// --- Streams ---
+
+stream customer_dashboards: state<BlindedCustomerId, CustomerDashboard>
+    retention 30d
+    consumers [console, billing]
+
+stream billing_history: event<BillingRecord>
+    retention 365d
+    consumers [console, billing, audit]
+
+// --- Circuits ---
+
+/// test golden
+circuit get_customer_dashboard(customer_id_blinded: BlindedCustomerId) -> CustomerDashboard
+    lex esn/marketplace/console/customer
+    precision C
+    observe metrics: [customer_dashboard_views]
+{
+    CustomerDashboard {
+        customer_id_blinded: customer_id_blinded,
+        installed_count: 0,
+        active_licenses: 0,
+        monthly_cost_micros: 0,
+        telemetry_share_count: 0,
+        telemetry_private_count: 0,
+    }
+}
+
+/// test golden
+circuit list_installed_packages(customer_id_blinded: BlindedCustomerId) -> list<InstalledPackageInfo>
+    lex esn/marketplace/console/customer
+    precision C
+    observe metrics: [installed_package_queries]
+{
+    let empty = list<InstalledPackageInfo>
+    empty
+}
+
+/// test golden
+circuit get_license_status(customer_id_blinded: BlindedCustomerId, package_id: PackageId) -> InstalledPackageInfo
+    lex esn/marketplace/console/customer
+    precision C
+    observe metrics: [license_status_queries, package_id]
+{
+    InstalledPackageInfo {
+        package_id: package_id,
+        name: bytes(128),
+        version: bytes(32),
+        license_type: 0,
+        license_expires_at: 0,
+        usage_this_period: 0,
+        cost_this_period_micros: 0,
+        update_available: false,
+        telemetry_preference: 0,
+    }
+}
+
+/// test golden
+circuit get_billing_history(customer_id_blinded: BlindedCustomerId, period_start: u64, period_end: u64) -> list<BillingRecord>
+    lex esn/marketplace/console/customer
+    precision C
+    observe metrics: [billing_history_queries]
+{
+    let empty = list<BillingRecord>
+    empty
+}
+
+/// test golden
+circuit toggle_telemetry(customer_id_blinded: BlindedCustomerId, package_id: PackageId, new_preference: u8) -> InstalledPackageInfo
+    lex esn/marketplace/console/customer
+    precision B
+    povc true
+    observe metrics: [telemetry_toggles, package_id, new_preference]
+{
+    InstalledPackageInfo {
+        package_id: package_id,
+        name: bytes(128),
+        version: bytes(32),
+        license_type: 0,
+        license_expires_at: 0,
+        usage_this_period: 0,
+        cost_this_period_micros: 0,
+        update_available: false,
+        telemetry_preference: new_preference,
+    }
+}
+
+/// test golden
+circuit get_dependency_graph(customer_id_blinded: BlindedCustomerId) -> list<InstalledPackageInfo>
+    lex esn/marketplace/console/customer
+    precision C
+    observe metrics: [dependency_graph_views]
+{
+    let empty = list<InstalledPackageInfo>
+    empty
+}

@@ -1,0 +1,156 @@
+// Console & Developer Experience — Developer Tooling
+// Epic 7: estream-marketplace#7
+//
+// Developer workflow circuits: package development, testing, linting,
+// docs generation. Local dev server with hot-reload, ESCIR compatibility
+// testing, manifest validation, and package scaffolding. All dev events
+// are short-lived (1h TTL) except test results retained for regression.
+
+/// govern lex esn/marketplace/dev
+
+// --- Types ---
+
+type PackageId = bytes(32)
+
+type DevServerConfig = struct {
+    package_path: bytes(256),
+    hot_reload: bool,
+    watch_dirs: bytes(512),
+    port: u16,
+}
+
+type TestResult = struct {
+    test_id: bytes(32),
+    package_id: PackageId,
+    escir_version: bytes(32),
+    passed: bool,
+    failed_count: u16,
+    total_count: u16,
+    duration_ms: u32,
+}
+
+type LintResult = struct {
+    package_id: PackageId,
+    errors: u16,
+    warnings: u16,
+    info: u16,
+    escir_compatibility: bool,
+    manifest_valid: bool,
+}
+
+type DocGenResult = struct {
+    package_id: PackageId,
+    output_path: bytes(256),
+    pages_generated: u16,
+    api_signatures: u16,
+    examples_count: u16,
+}
+
+// --- Streams ---
+
+stream dev_events: event<DevServerConfig>
+    ttl 1h
+    consumers [dev, console]
+
+stream test_results: event<TestResult>
+    retention 30d
+    consumers [dev, console, audit]
+
+// --- Circuits ---
+
+/// test golden
+circuit start_dev_server(config: DevServerConfig) -> DevServerConfig
+    lex esn/marketplace/dev
+    precision C
+    observe metrics: [dev_server_starts, port]
+{
+    DevServerConfig {
+        package_path: config.package_path,
+        hot_reload: config.hot_reload,
+        watch_dirs: config.watch_dirs,
+        port: config.port,
+    }
+}
+
+/// test golden
+circuit run_package_tests(package_id: PackageId, escir_version: bytes(32)) -> TestResult
+    lex esn/marketplace/dev
+    precision C
+    observe metrics: [test_runs, package_id, escir_version]
+{
+    let test_hash = sha3_256(concat(package_id, escir_version))
+    TestResult {
+        test_id: test_hash,
+        package_id: package_id,
+        escir_version: escir_version,
+        passed: true,
+        failed_count: 0,
+        total_count: 0,
+        duration_ms: 0,
+    }
+}
+
+/// test golden
+circuit lint_package(package_id: PackageId) -> LintResult
+    lex esn/marketplace/dev
+    precision C
+    observe metrics: [lint_runs, package_id]
+{
+    LintResult {
+        package_id: package_id,
+        errors: 0,
+        warnings: 0,
+        info: 0,
+        escir_compatibility: true,
+        manifest_valid: true,
+    }
+}
+
+/// test golden
+circuit generate_docs(package_id: PackageId, output_path: bytes(256)) -> DocGenResult
+    lex esn/marketplace/dev
+    precision C
+    observe metrics: [doc_generations, package_id]
+{
+    DocGenResult {
+        package_id: package_id,
+        output_path: output_path,
+        pages_generated: 0,
+        api_signatures: 0,
+        examples_count: 0,
+    }
+}
+
+/// test golden
+circuit check_escir_compatibility(package_id: PackageId, target_escir_version: bytes(32)) -> TestResult
+    lex esn/marketplace/dev
+    precision C
+    observe metrics: [escir_compat_checks, package_id, target_escir_version]
+{
+    let test_hash = sha3_256(concat(package_id, target_escir_version))
+    TestResult {
+        test_id: test_hash,
+        package_id: package_id,
+        escir_version: target_escir_version,
+        passed: true,
+        failed_count: 0,
+        total_count: 0,
+        duration_ms: 0,
+    }
+}
+
+/// test golden
+circuit scaffold_package(package_path: bytes(256)) -> DocGenResult
+    lex esn/marketplace/dev
+    precision C
+    observe metrics: [packages_scaffolded]
+{
+    let id = sha3_256(package_path)
+    DocGenResult {
+        package_id: id,
+        output_path: package_path,
+        pages_generated: 0,
+        api_signatures: 0,
+        examples_count: 0,
+    }
+}

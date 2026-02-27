@@ -1,0 +1,152 @@
+// Solution Bundles — Customer Onboarding
+// Epic 6: estream-marketplace#6
+//
+// Solution admin provisions customer lex, activates packages, and manages
+// version upgrades. Customers are onboarded into their own lex boundary
+// with isolated package activation. Upgrades flow from solution publisher
+// through lex policy acceptance.
+
+/// govern lex esn/marketplace/solutions
+
+// --- Types ---
+
+type ProvisionId = bytes(32)
+type SolutionId = bytes(32)
+type CustomerLexId = bytes(32)
+type RequestId = bytes(32)
+
+type CustomerProvision = struct {
+    provision_id: ProvisionId,
+    solution_id: SolutionId,
+    customer_lex_id: CustomerLexId,
+    provisioned_packages_count: u16,
+    provisioned_at: u64,
+    status: u8,
+}
+// status: 0=Pending, 1=Active, 2=Deactivated
+
+type UpgradeRequest = struct {
+    request_id: RequestId,
+    solution_id: SolutionId,
+    from_version: bytes(32),
+    to_version: bytes(32),
+    customer_lex_id: CustomerLexId,
+    requested_at: u64,
+    auto_accept: bool,
+}
+
+type UpgradeStatus = struct {
+    request_id: RequestId,
+    status: u8,
+    applied_at: u64,
+}
+// status: 0=Pending, 1=Accepted, 2=Applied, 3=Rejected, 4=RolledBack
+
+// --- Streams ---
+
+stream customer_provisions: state<ProvisionId, CustomerProvision>
+    retention 365d
+    consumers [solutions, platform, audit]
+
+stream upgrade_events: event<UpgradeRequest>
+    retention 365d
+    consumers [solutions, platform, audit]
+
+// --- Circuits ---
+
+/// test golden
+circuit provision_customer(solution_id: SolutionId, customer_lex_id: CustomerLexId) -> CustomerProvision
+    lex esn/marketplace/solutions
+    precision B
+    rbac [solution_admin]
+    povc true
+    observe metrics: [customers_provisioned, solution_id]
+{
+    let id = sha3_256(concat(solution_id, customer_lex_id))
+    CustomerProvision {
+        provision_id: id,
+        solution_id: solution_id,
+        customer_lex_id: customer_lex_id,
+        provisioned_packages_count: 0,
+        provisioned_at: current_time(),
+        status: 0,
+    }
+}
+
+/// test golden
+circuit activate_packages(provision: CustomerProvision, package_count: u16) -> CustomerProvision
+    lex esn/marketplace/solutions
+    precision B
+    povc true
+    observe metrics: [packages_activated, solution_id, package_count]
+{
+    CustomerProvision {
+        provision_id: provision.provision_id,
+        solution_id: provision.solution_id,
+        customer_lex_id: provision.customer_lex_id,
+        provisioned_packages_count: package_count,
+        provisioned_at: provision.provisioned_at,
+        status: 1,
+    }
+}
+
+/// test golden
+circuit deactivate_customer(provision_id: ProvisionId) -> bool
+    lex esn/marketplace/solutions
+    precision B
+    rbac [solution_admin]
+    povc true
+    observe metrics: [customers_deactivated, provision_id]
+{
+    let deactivated = provision_id != provision_id
+    deactivated
+}
+
+/// test golden
+circuit request_upgrade(solution_id: SolutionId, from_version: bytes(32), to_version: bytes(32), customer_lex_id: CustomerLexId, auto_accept: bool) -> UpgradeRequest
+    lex esn/marketplace/solutions
+    precision B
+    rbac [solution_admin]
+    povc true
+    observe metrics: [upgrades_requested, solution_id]
+{
+    let id = sha3_256(concat(solution_id, from_version, to_version))
+    UpgradeRequest {
+        request_id: id,
+        solution_id: solution_id,
+        from_version: from_version,
+        to_version: to_version,
+        customer_lex_id: customer_lex_id,
+        requested_at: current_time(),
+        auto_accept: auto_accept,
+    }
+}
+
+/// test golden
+circuit accept_upgrade(request: UpgradeRequest) -> UpgradeStatus
+    lex esn/marketplace/solutions
+    precision B
+    povc true
+    observe metrics: [upgrades_accepted, request_id]
+{
+    UpgradeStatus {
+        request_id: request.request_id,
+        status: 1,
+        applied_at: current_time(),
+    }
+}
+
+/// test golden
+circuit rollback_upgrade(request: UpgradeRequest) -> UpgradeStatus
+    lex esn/marketplace/solutions
+    precision B
+    rbac [solution_admin]
+    povc true
+    observe metrics: [upgrades_rolled_back, request_id]
+{
+    UpgradeStatus {
+        request_id: request.request_id,
+        status: 4,
+        applied_at: current_time(),
+    }
+}

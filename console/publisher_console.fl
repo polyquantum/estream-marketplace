@@ -1,0 +1,172 @@
+// Console & Developer Experience — Publisher Console
+// Epic 7: estream-marketplace#7
+//
+// Publisher dashboard: packages, revenue, telemetry, analytics, version
+// management. All analytics are anonymous or k-anonymous with differential
+// privacy. Revenue data uses ZK proofs — publishers prove aggregate revenue
+// without leaking individual transactions.
+
+/// govern lex esn/marketplace/console
+
+// --- Types ---
+
+type PublisherId = bytes(32)
+type PackageId = bytes(32)
+
+type PublisherDashboard = struct {
+    publisher_id: PublisherId,
+    package_count: u16,
+    total_downloads: u64,
+    total_revenue_micros: u64,
+    avg_rating_x100: u16,
+    active_licenses: u64,
+    period_start: u64,
+    period_end: u64,
+}
+
+type PackageAnalytics = struct {
+    package_id: PackageId,
+    version: bytes(32),
+    downloads: u64,
+    active_installs: u64,
+    revenue_micros: u64,
+    error_rate_bps: u16,
+    avg_latency_ms: u32,
+    dependents_count: u32,
+}
+
+type DeprecationWorkflow = struct {
+    package_id: PackageId,
+    version: bytes(32),
+    reason: bytes(256),
+    migration_guide_hash: bytes(32),
+    deprecated_at: u64,
+    sunset_at: u64,
+    affected_installs: u64,
+}
+
+// --- Streams ---
+
+stream publisher_dashboards: state<PublisherId, PublisherDashboard>
+    retention 30d
+    consumers [console, audit]
+
+stream package_analytics: event<PackageAnalytics>
+    retention 365d
+    consumers [console, publisher_dashboard, platform]
+
+// --- Circuits ---
+
+/// test golden
+circuit get_publisher_dashboard(publisher_id: PublisherId, period_start: u64, period_end: u64) -> PublisherDashboard
+    lex esn/marketplace/console/publisher
+    precision C
+    rbac [publisher]
+    observe metrics: [dashboard_views, publisher_id]
+{
+    PublisherDashboard {
+        publisher_id: publisher_id,
+        package_count: 0,
+        total_downloads: 0,
+        total_revenue_micros: 0,
+        avg_rating_x100: 0,
+        active_licenses: 0,
+        period_start: period_start,
+        period_end: period_end,
+    }
+}
+
+/// test golden
+circuit get_package_analytics(package_id: PackageId, publisher_id: PublisherId) -> PackageAnalytics
+    lex esn/marketplace/console/publisher
+    precision C
+    rbac [publisher]
+    observe metrics: [analytics_queries, package_id]
+{
+    PackageAnalytics {
+        package_id: package_id,
+        version: bytes(32),
+        downloads: 0,
+        active_installs: 0,
+        revenue_micros: 0,
+        error_rate_bps: 0,
+        avg_latency_ms: 0,
+        dependents_count: 0,
+    }
+}
+
+/// test golden
+circuit get_revenue_summary(publisher_id: PublisherId, period_start: u64, period_end: u64) -> PublisherDashboard
+    lex esn/marketplace/console/publisher
+    precision C
+    rbac [publisher]
+    observe metrics: [revenue_summary_views, publisher_id]
+{
+    PublisherDashboard {
+        publisher_id: publisher_id,
+        package_count: 0,
+        total_downloads: 0,
+        total_revenue_micros: 0,
+        avg_rating_x100: 0,
+        active_licenses: 0,
+        period_start: period_start,
+        period_end: period_end,
+    }
+}
+
+/// test golden
+circuit initiate_deprecation(package_id: PackageId, version: bytes(32), reason: bytes(256), migration_guide_hash: bytes(32), sunset_at: u64) -> DeprecationWorkflow
+    lex esn/marketplace/console/publisher
+    precision B
+    rbac [publisher]
+    povc true
+    observe metrics: [deprecations_initiated, package_id]
+{
+    DeprecationWorkflow {
+        package_id: package_id,
+        version: version,
+        reason: reason,
+        migration_guide_hash: migration_guide_hash,
+        deprecated_at: current_time(),
+        sunset_at: sunset_at,
+        affected_installs: 0,
+    }
+}
+
+/// test golden
+circuit get_telemetry_dashboard(publisher_id: PublisherId, package_id: PackageId) -> PackageAnalytics
+    lex esn/marketplace/console/publisher
+    precision C
+    rbac [publisher]
+    observe metrics: [telemetry_dashboard_views, package_id]
+{
+    PackageAnalytics {
+        package_id: package_id,
+        version: bytes(32),
+        downloads: 0,
+        active_installs: 0,
+        revenue_micros: 0,
+        error_rate_bps: 0,
+        avg_latency_ms: 0,
+        dependents_count: 0,
+    }
+}
+
+/// test golden
+circuit get_dependency_graph(publisher_id: PublisherId, package_id: PackageId) -> PackageAnalytics
+    lex esn/marketplace/console/publisher
+    precision C
+    rbac [publisher]
+    observe metrics: [dependency_graph_queries, package_id]
+{
+    PackageAnalytics {
+        package_id: package_id,
+        version: bytes(32),
+        downloads: 0,
+        active_installs: 0,
+        revenue_micros: 0,
+        error_rate_bps: 0,
+        avg_latency_ms: 0,
+        dependents_count: 0,
+    }
+}

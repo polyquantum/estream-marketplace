@@ -1,13 +1,20 @@
 # estream-marketplace
 
-This repository contains **marketplace components** for the eStream platform — SmartCircuits and specifications that are distributed separately from the core platform.
+This repository contains **marketplace components** for the eStream platform — SmartCircuits, domain packages, and specifications that are distributed separately from the core platform.
 
 ## Directory Layout
 
 - **`fintech/`** — Financial technology components organized by sub-domain (FIX trading, PCI, ISO 20022). FastLang `.fl` files are the canonical source; `.escir.yaml` files exist where no `.fl` equivalent has been written yet.
 - **`industrial/`** — Industrial protocol gateway components. `components/` has individual ESCIR sub-circuits; `gateway/` has composite SKU circuits (Lite/Standard/Premium); `specs/` has the gateway specifications.
+- **`registry/`** — Domain package registry circuits: package format, dependency resolution, mirrors/cache (Epic 4, #4).
+- **`licensing/`** — ZK licensing circuits: blinded tokens, metering, atomic settlement, pricing tiers (Epic 5, #5).
+- **`solutions/`** — Solution bundle circuits: manifest, lex boundary nesting, revenue waterfall, customer onboarding (Epic 6, #6).
+- **`console/`** — Console circuits: publisher/customer/admin dashboards, developer tooling (Epic 7, #7).
+- **`pricing/`** — Provider-level custom pricing circuits.
+- **`streams/`** — Graph-based marketplace registry model (marketplace_streams.fl).
 - **`runtime/`** — Rust runtime crates (`estream-iso20022`, `estream-industrial`) that implement the marketplace components as native executables.
-- **`specs/`** — Cross-cutting marketplace specifications (registry API, package format, FPGA extension, console widgets).
+- **`specs/`** — Cross-cutting marketplace specifications and standards.
+- **`docs/guides/`** — Publisher, customer, and developer guides.
 - **`templates/`** — ESCIR circuit templates for marketplace patterns.
 
 ## Conventions

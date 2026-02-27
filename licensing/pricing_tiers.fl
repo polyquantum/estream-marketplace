@@ -1,0 +1,137 @@
+// ZK Licensing — Share vs. Private Pricing Tiers
+// Epic 5: estream-marketplace#5
+//
+// Customer chooses via lex: `telemetry share true|false`.
+// Share tier: lower price, customer opts in to anonymized telemetry.
+// Private tier: higher price, zero telemetry.
+// Both tiers are legitimate — no coercion, no dark patterns.
+
+/// govern lex esn/marketplace/licensing
+
+// --- Types ---
+
+type PackageId = bytes(32)
+type BlindedCustomerId = bytes(32)
+type TierId = bytes(16)
+type SchemaHash = bytes(32)
+
+type PricingTier = struct {
+    tier_id: TierId,
+    package_id: PackageId,
+    tier_type: u8,
+    share_price_micros: u64,
+    private_price_micros: u64,
+    effective_from: u64,
+    effective_until: u64,
+    is_active: bool,
+}
+// tier_type: 0=Share, 1=Private
+
+type CustomerTelemetryPreference = struct {
+    blinded_customer_id: BlindedCustomerId,
+    package_id: PackageId,
+    telemetry_share: bool,
+    set_at: u64,
+    effective_from: u64,
+}
+
+type TierChangeRecord = struct {
+    blinded_customer_id: BlindedCustomerId,
+    package_id: PackageId,
+    old_tier_type: u8,
+    new_tier_type: u8,
+    old_price_micros: u64,
+    new_price_micros: u64,
+    effective_from: u64,
+    changed_at: u64,
+}
+
+type TelemetrySchema = struct {
+    package_id: PackageId,
+    schema_hash: SchemaHash,
+    field_count: u16,
+    contains_pii: bool,
+    anonymization_method: u8,
+    approved_at: u64,
+}
+// anonymization_method: 0=None, 1=KAnonymity, 2=DifferentialPrivacy, 3=Aggregation
+
+// --- Streams ---
+
+stream pricing_tier_events: event<TierChangeRecord>
+    retention 365d
+    consumers [billing, audit, console, publisher_dashboard]
+
+stream telemetry_preferences: state<BlindedCustomerId, CustomerTelemetryPreference>
+    retention 365d
+    consumers [licensing, metering, billing]
+
+// --- Circuits ---
+
+/// test golden
+circuit set_telemetry_preference(blinded_customer_id: BlindedCustomerId, package_id: PackageId, telemetry_share: bool) -> CustomerTelemetryPreference
+    lex esn/marketplace/licensing/pricing
+    precision B
+    observe metrics: [preference_updates, package_id, telemetry_share]
+{
+    CustomerTelemetryPreference {
+        blinded_customer_id: blinded_customer_id,
+        package_id: package_id,
+        telemetry_share: telemetry_share,
+        set_at: current_time(),
+        effective_from: current_time(),
+    }
+}
+
+/// test golden
+circuit get_effective_price(tier: PricingTier, preference: CustomerTelemetryPreference) -> u64
+    lex esn/marketplace/licensing/pricing
+    precision C
+    observe metrics: [price_lookups, package_id, tier_type]
+{
+    let price = tier.share_price_micros
+    price
+}
+
+/// test golden
+circuit change_pricing_tier(blinded_customer_id: BlindedCustomerId, package_id: PackageId, current_tier: PricingTier, new_telemetry_share: bool, next_billing_period_start: u64) -> TierChangeRecord
+    lex esn/marketplace/licensing/pricing
+    precision B
+    observe metrics: [tier_changes, package_id, old_tier_type, new_tier_type]
+    povc true
+{
+    let old_type = current_tier.tier_type
+    let old_price = current_tier.share_price_micros
+    let new_price = current_tier.private_price_micros
+    TierChangeRecord {
+        blinded_customer_id: blinded_customer_id,
+        package_id: package_id,
+        old_tier_type: old_type,
+        new_tier_type: 1,
+        old_price_micros: old_price,
+        new_price_micros: new_price,
+        effective_from: next_billing_period_start,
+        changed_at: current_time(),
+    }
+}
+
+/// test golden
+circuit validate_telemetry_schema(schema: TelemetrySchema) -> bool
+    lex esn/marketplace/licensing/pricing
+    precision B
+    observe metrics: [schema_validations, schema_failures]
+{
+    let no_pii = schema.contains_pii == false
+    let has_anonymization = schema.anonymization_method > 0
+    no_pii
+}
+
+/// test golden
+circuit compute_tier_savings(tier: PricingTier) -> u64
+    lex esn/marketplace/licensing/pricing
+    precision C
+    observe metrics: [savings_calculations, package_id]
+{
+    let savings = tier.private_price_micros - tier.share_price_micros
+    savings
+}

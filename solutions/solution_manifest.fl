@@ -1,0 +1,163 @@
+// Solution Bundles — Solution Manifest
+// Epic 6: estream-marketplace#6
+//
+// A solution bundle is a curated set of domain packages + lex policies
+// + branding + pricing. Three-tier model: Platform → Solution → Customer.
+// Solutions are first-class marketplace entities that can be published,
+// discovered, and provisioned independently of individual packages.
+
+/// govern lex esn/marketplace/solutions
+
+// --- Types ---
+
+type SolutionId = bytes(32)
+type PackageId = bytes(32)
+type LexPolicyHash = bytes(32)
+type BrandingHash = bytes(32)
+
+type SolutionTier = u8
+// 0=Platform, 1=Solution, 2=Customer
+
+type SolutionManifest = struct {
+    solution_id: SolutionId,
+    name: bytes(128),
+    version: bytes(32),
+    publisher: bytes(64),
+    description: bytes(256),
+    packages_count: u16,
+    lex_policy_hash: LexPolicyHash,
+    branding_hash: BrandingHash,
+    pricing_model: u8,
+    tier: SolutionTier,
+    created_at: u64,
+}
+// pricing_model: 0=PerSeat, 1=PerUsage, 2=Flat, 3=Tiered
+
+type BundledPackage = struct {
+    package_id: PackageId,
+    version: bytes(32),
+    required: bool,
+}
+
+type SolutionBranding = struct {
+    display_name: bytes(128),
+    theme_hash: bytes(32),
+    logo_hash: bytes(32),
+    documentation_url: bytes(256),
+}
+
+// --- Streams ---
+
+stream solution_registry: state<SolutionId, SolutionManifest>
+    retention 365d
+    consumers [marketplace, solutions, console]
+
+stream solution_events: event<SolutionManifest>
+    retention 365d
+    consumers [marketplace, solutions, audit]
+
+// --- Circuits ---
+
+/// test golden
+circuit create_solution(manifest: SolutionManifest) -> SolutionManifest
+    lex esn/marketplace/solutions
+    precision B
+    rbac [solution_admin, marketplace_admin]
+    povc true
+    observe metrics: [solutions_created, solution_id, tier]
+{
+    let id = sha3_256(concat(manifest.name, manifest.version, manifest.publisher))
+    SolutionManifest {
+        solution_id: id,
+        name: manifest.name,
+        version: manifest.version,
+        publisher: manifest.publisher,
+        description: manifest.description,
+        packages_count: 0,
+        lex_policy_hash: manifest.lex_policy_hash,
+        branding_hash: manifest.branding_hash,
+        pricing_model: manifest.pricing_model,
+        tier: manifest.tier,
+        created_at: current_time(),
+    }
+}
+
+/// test golden
+circuit add_package_to_solution(solution_id: SolutionId, package: BundledPackage) -> bool
+    lex esn/marketplace/solutions
+    precision B
+    rbac [solution_admin]
+    povc true
+    observe metrics: [packages_added, solution_id, package_id]
+{
+    let valid = package.package_id != solution_id
+    valid
+}
+
+/// test golden
+circuit remove_package_from_solution(solution_id: SolutionId, package_id: PackageId) -> bool
+    lex esn/marketplace/solutions
+    precision B
+    rbac [solution_admin]
+    povc true
+    observe metrics: [packages_removed, solution_id, package_id]
+{
+    let removed = package_id != solution_id
+    removed
+}
+
+/// test golden
+circuit validate_solution_bundle(manifest: SolutionManifest, packages: list<BundledPackage>) -> bool
+    lex esn/marketplace/solutions
+    precision B
+    observe metrics: [bundles_validated, solution_id, packages_count]
+    invariant "has_packages" { manifest.packages_count > 0 }
+{
+    let hash = sha3_256(manifest.solution_id)
+    let valid = manifest.packages_count > 0
+    valid
+}
+
+/// test golden
+circuit publish_solution(manifest: SolutionManifest) -> SolutionManifest
+    lex esn/marketplace/solutions
+    precision B
+    rbac [solution_admin]
+    povc true
+    observe metrics: [solutions_published, solution_id, tier]
+{
+    SolutionManifest {
+        solution_id: manifest.solution_id,
+        name: manifest.name,
+        version: manifest.version,
+        publisher: manifest.publisher,
+        description: manifest.description,
+        packages_count: manifest.packages_count,
+        lex_policy_hash: manifest.lex_policy_hash,
+        branding_hash: manifest.branding_hash,
+        pricing_model: manifest.pricing_model,
+        tier: manifest.tier,
+        created_at: manifest.created_at,
+    }
+}
+
+/// test golden
+circuit get_solution_info(solution_id: SolutionId) -> SolutionManifest
+    lex esn/marketplace/solutions
+    precision C
+    observe metrics: [solution_lookups, solution_id]
+{
+    SolutionManifest {
+        solution_id: solution_id,
+        name: solution_id,
+        version: solution_id,
+        publisher: solution_id,
+        description: solution_id,
+        packages_count: 0,
+        lex_policy_hash: sha3_256(solution_id),
+        branding_hash: sha3_256(solution_id),
+        pricing_model: 0,
+        tier: 0,
+        created_at: current_time(),
+    }
+}

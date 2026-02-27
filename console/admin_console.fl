@@ -1,0 +1,153 @@
+// Console & Developer Experience — Admin Console
+// Epic 7: estream-marketplace#7
+//
+// Platform admin: marketplace health, compliance monitoring, ESCIR version
+// compatibility matrix, and deprecation tracker. Admin circuits enforce
+// lex-governed access and PoVC attestation for state-changing operations.
+// Compliance alerts cover lex violations, attestation failures, disputes,
+// malicious packages, and version conflicts.
+
+/// govern lex esn/marketplace/console
+
+// --- Types ---
+
+type PackageId = bytes(32)
+type AlertId = bytes(32)
+
+type MarketplaceHealth = struct {
+    total_packages: u32,
+    total_publishers: u32,
+    total_customers: u32,
+    total_revenue_micros: u64,
+    active_licenses: u64,
+    attestation_failure_count: u32,
+    dispute_count: u32,
+    period: u64,
+}
+
+type ComplianceAlert = struct {
+    alert_id: AlertId,
+    alert_type: u8,
+    severity: u8,
+    package_id: PackageId,
+    description: bytes(512),
+    detected_at: u64,
+    resolved: bool,
+}
+// alert_type: 0=LexViolation, 1=AttestationFailure, 2=DisputeEscalation, 3=MaliciousPackage, 4=VersionConflict
+// severity: 0=Info, 1=Warning, 2=Critical
+
+type EscirCompatMatrix = struct {
+    escir_version: bytes(32),
+    compatible_packages: u32,
+    incompatible_packages: u32,
+    deprecated_ops_used: u16,
+    migration_needed: bool,
+}
+
+// --- Streams ---
+
+stream marketplace_health: state<bytes(32), MarketplaceHealth>
+    retention 365d
+    consumers [console, audit, platform]
+
+stream compliance_alerts: event<ComplianceAlert>
+    retention 365d
+    consumers [console, audit, marketplace_admin]
+
+// --- Circuits ---
+
+/// test golden
+circuit get_marketplace_health(period: u64) -> MarketplaceHealth
+    lex esn/marketplace/console/admin
+    precision C
+    rbac [marketplace_admin]
+    observe metrics: [health_dashboard_views]
+{
+    MarketplaceHealth {
+        total_packages: 0,
+        total_publishers: 0,
+        total_customers: 0,
+        total_revenue_micros: 0,
+        active_licenses: 0,
+        attestation_failure_count: 0,
+        dispute_count: 0,
+        period: period,
+    }
+}
+
+/// test golden
+circuit get_compliance_dashboard(period_start: u64, period_end: u64) -> list<ComplianceAlert>
+    lex esn/marketplace/console/admin
+    precision C
+    rbac [marketplace_admin]
+    observe metrics: [compliance_dashboard_views]
+{
+    let empty = list<ComplianceAlert>
+    empty
+}
+
+/// test golden
+circuit get_escir_version_matrix(escir_version: bytes(32)) -> EscirCompatMatrix
+    lex esn/marketplace/console/admin
+    precision C
+    rbac [marketplace_admin]
+    observe metrics: [escir_matrix_queries, escir_version]
+{
+    EscirCompatMatrix {
+        escir_version: escir_version,
+        compatible_packages: 0,
+        incompatible_packages: 0,
+        deprecated_ops_used: 0,
+        migration_needed: false,
+    }
+}
+
+/// test golden
+circuit get_deprecation_tracker(escir_version: bytes(32)) -> list<EscirCompatMatrix>
+    lex esn/marketplace/console/admin
+    precision C
+    rbac [marketplace_admin]
+    observe metrics: [deprecation_tracker_views]
+{
+    let empty = list<EscirCompatMatrix>
+    empty
+}
+
+/// test golden
+circuit flag_package(package_id: PackageId, alert_type: u8, severity: u8, description: bytes(512)) -> ComplianceAlert
+    lex esn/marketplace/console/admin
+    precision B
+    rbac [marketplace_admin]
+    povc true
+    observe metrics: [packages_flagged, package_id, alert_type]
+{
+    ComplianceAlert {
+        alert_id: sha3_256(package_id),
+        alert_type: alert_type,
+        severity: severity,
+        package_id: package_id,
+        description: description,
+        detected_at: current_time(),
+        resolved: false,
+    }
+}
+
+/// test golden
+circuit resolve_compliance_alert(alert_id: AlertId) -> ComplianceAlert
+    lex esn/marketplace/console/admin
+    precision B
+    rbac [marketplace_admin]
+    povc true
+    observe metrics: [alerts_resolved, alert_id]
+{
+    ComplianceAlert {
+        alert_id: alert_id,
+        alert_type: 0,
+        severity: 0,
+        package_id: bytes(32),
+        description: bytes(512),
+        detected_at: 0,
+        resolved: true,
+    }
+}
