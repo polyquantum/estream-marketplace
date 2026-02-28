@@ -1,0 +1,44 @@
+[component]
+name = "estream-sage"
+version = "0.1.0"
+category = "smart-circuit"
+implementation_type = "FastLang"
+status = "Draft"
+description = "AI agent framework — conversational chatbot/voicebot with ESLM inference, external API bridge, content generation, and SEO optimization on Stratum with Cortex governance"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-sage"
+readme = "README.md"
+keywords = ["ai", "agent", "chatbot", "voicebot", "eslm", "seo", "content", "advertising"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "usage-based"
+visibility = "open"
+
+[component.estream]
+min_version = "0.10.0"
+
+[component.dependencies]
+estream-crm = "^0.1.0"
+
+[component.schemas]
+provides = ["ConversationContext", "AgentResponse", "ExternalApiCall", "ContentNode", "VoiceSession", "VoiceMetrics"]
+requires = []
+
+[component.circuits]
+provides = ["sage_agent", "sage_content", "sage_voice"]
+target = ["cpu"]
+
+[component.lifecycle]
+status = "draft"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
+
+[component.include]
+circuits = ["circuits/*.fl"]
+docs = ["README.md"]

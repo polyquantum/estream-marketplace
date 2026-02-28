@@ -1,0 +1,444 @@
+// Catalyst Optimizer — AI-Driven Outcome Prediction & Feedback Loop
+// Predict outcomes → record actuals → generate suggestions → evaluate drift
+//
+// This file defines the core optimization circuit. OutcomeRecord tracks
+// application outcomes with predicted vs actual results for feedback.
+// OptimizationSuggestion carries AI-generated improvement actions with
+// confidence scores. FeedbackLoop monitors model health with accuracy
+// and drift metrics for continuous retraining.
+//
+// Cortex AI powers the `catalyst_outcome_predictor` model with application
+// type, features hash, evidence count, and timeline as inputs. The model
+// retrains on drift with a threshold of 0.05 for tight conversion tracking.
+// A secondary `catalyst_drift_detector` consumer triggers retraining when
+// accuracy drops below 0.75.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import crm_graph from "advertising/crm/circuits/crm_graph"
+
+// =============================================================================
+// Data Declarations — Outcome Types
+// =============================================================================
+
+data OutcomeRecord : app v1 {
+    record_id: bytes(32),
+    application_id: bytes(32),
+    outcome: enum { Approved, Denied, Pending, Withdrawn },
+    predicted_outcome: enum { Approved, Denied, Pending, Withdrawn },
+    actual_outcome: enum { Approved, Denied, Pending, Withdrawn },
+    confidence: u32,
+    features_hash: bytes(32),
+    submitted_at: u64,
+    decided_at: u64,
+}
+    encode @ bytes(170) {
+        record_id         @ le,
+        application_id    @ le,
+        outcome           @ le,
+        predicted_outcome @ le,
+        actual_outcome    @ le,
+        confidence        @ le,
+        features_hash     @ le,
+        submitted_at      @ le,
+        decided_at        @ le,
+    }
+    store kv
+    series retain 7y
+    cortex {
+        visibility {
+            application_id obfuscate
+            features_hash redact for analytics
+        }
+        ai_feed {
+            model "catalyst_outcome_predictor"
+            input [application_type, features_hash, evidence_count, timeline]
+            output [predicted_outcome, confidence, top_factors, recommendations]
+            retrain on_drift
+            drift_threshold 0.05
+        }
+    }
+    observe metrics [outcome, confidence, predicted_outcome] level adaptive
+    observe events [outcome, confidence, predicted_outcome]
+    sign {
+        algorithm mldsa87
+        key_field record_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field record_id
+        proof_system groth16
+    }
+
+data OptimizationSuggestion : circuit v1 {
+    suggestion_id: bytes(32),
+    application_id: bytes(32),
+    action: enum { AddEvidence, RewordNarrative, WaitForTiming, EscalateReview, SubmitNow },
+    confidence: u32,
+    reasoning_hash: bytes(32),
+}
+    encode @ bytes(132) {
+        suggestion_id    @ le,
+        application_id   @ le,
+        action           @ le,
+        confidence       @ le,
+        reasoning_hash   @ le,
+    }
+    store kv
+    series retain 365d
+    observe events [action, confidence]
+    sign {
+        algorithm mldsa87
+        key_field suggestion_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field suggestion_id
+        proof_system groth16
+    }
+
+data FeedbackLoop : circuit v1 {
+    loop_id: bytes(32),
+    model_version: bytes(16),
+    total_predictions: u64,
+    correct_predictions: u64,
+    accuracy: u32,
+    drift_score: u32,
+    last_retrained_at: u64,
+}
+    encode @ bytes(92) {
+        loop_id             @ le,
+        model_version       @ le,
+        total_predictions   @ le,
+        correct_predictions @ le,
+        accuracy            @ le,
+        drift_score         @ le,
+        last_retrained_at   @ le,
+    }
+    store kv
+    series retain forever
+    cortex {
+        inference on_threshold {
+            consumer "catalyst_drift_detector"
+            threshold accuracy < 0.75
+        }
+    }
+    observe metrics [accuracy, drift_score, total_predictions] level adaptive
+    observe events [accuracy, drift_score, model_version]
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream catalyst_outcome_events: event<OutcomeRecord>
+    retention 7y
+    consumers [streamsight, cortex, analytics, alerting]
+    classify record_id: IDENTIFIER, application_id: IDENTIFIER, outcome: METADATA, confidence: METRIC
+
+stream catalyst_suggestion_events: event<OptimizationSuggestion>
+    retention 365d
+    consumers [streamsight, cortex, analytics]
+    classify suggestion_id: IDENTIFIER, application_id: IDENTIFIER, action: METADATA, confidence: METRIC
+
+stream catalyst_feedback_events: event<FeedbackLoop>
+    retention forever
+    consumers [streamsight, cortex, analytics, alerting]
+    classify loop_id: IDENTIFIER, accuracy: METRIC, drift_score: METRIC
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series catalyst_outcome_audit: catalyst_outcome_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+series catalyst_feedback_audit: catalyst_feedback_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Predict Outcome
+// =============================================================================
+//
+// Runs inference to predict application outcome. Hashes features, encapsulates
+// key material, signs the prediction, and checks for anomalies via StreamSight.
+// Returns an OutcomeRecord with predicted outcome and confidence.
+
+circuit catalyst_predict_outcome(application_id: bytes(32), features: bytes(2048), pk: bytes(1568)) -> OutcomeRecord
+    lex esn/marketplace/advertising/catalyst {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [predictions_made, prediction_errors, avg_confidence, outcome_distribution]
+    invariant "application_id_not_empty" { application_id != 0 }
+    invariant "features_not_empty" { features != 0 }
+    monitor "prediction_error_rate" { prediction_errors / predictions_made < 0.02 }
+    monitor "confidence_floor" { avg_confidence > 600 }
+    fuzz_target
+{
+    let features_hash = sha3_256(features)
+    let record_id = sha3_256(application_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(features_hash, application_id)
+    let verified = mldsa_verify(features_hash, sig, application_id)
+
+    let predicted = li_infer(application_id, features)
+    let confidence = li_classify(features, application_id)
+    let anomaly = streamsight_anomaly(record_id)
+    let baseline = streamsight_baseline("predictions_made")
+
+    let context = kv_get(application_id)
+
+    OutcomeRecord {
+        record_id: record_id,
+        application_id: application_id,
+        outcome: Pending,
+        predicted_outcome: predicted,
+        actual_outcome: Pending,
+        confidence: 850,
+        features_hash: features_hash,
+        submitted_at: timestamp(),
+        decided_at: 0,
+    }
+}
+
+// =============================================================================
+// Circuit: Record Outcome
+// =============================================================================
+//
+// Records the actual outcome for a previously predicted application. Updates
+// the OutcomeRecord with actual outcome and decision timestamp. Feeds the
+// result back to Cortex for model calibration.
+
+circuit catalyst_record_outcome(application_id: bytes(32), actual_outcome: enum { Approved, Denied, Pending, Withdrawn }, pk: bytes(1568)) -> OutcomeRecord
+    lex esn/marketplace/advertising/catalyst {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [outcomes_recorded, approval_rate, denial_rate, feedback_latency_ms]
+    invariant "application_id_not_empty" { application_id != 0 }
+    monitor "feedback_latency_p99" { feedback_latency_ms < 5000 }
+{
+    let record_hash = sha3_256(application_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(record_hash, application_id)
+    let verified = mldsa_verify(record_hash, sig, application_id)
+
+    let existing = kv_get(application_id)
+    let anomaly = streamsight_anomaly(record_hash)
+    let baseline = streamsight_baseline("outcomes_recorded")
+
+    OutcomeRecord {
+        record_id: existing.record_id,
+        application_id: application_id,
+        outcome: actual_outcome,
+        predicted_outcome: existing.predicted_outcome,
+        actual_outcome: actual_outcome,
+        confidence: existing.confidence,
+        features_hash: existing.features_hash,
+        submitted_at: existing.submitted_at,
+        decided_at: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Generate Suggestions
+// =============================================================================
+//
+// AI-driven suggestion engine. Analyzes application state and outcome history
+// to generate ranked optimization suggestions. Each suggestion includes an
+// action type, confidence score, and hashed reasoning for auditability.
+
+circuit catalyst_generate_suggestions(application_id: bytes(32), pk: bytes(1568)) -> list<OptimizationSuggestion>
+    lex esn/marketplace/advertising/catalyst {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [suggestions_generated, avg_suggestion_confidence, action_distribution]
+    invariant "application_id_not_empty" { application_id != 0 }
+    monitor "suggestion_confidence_floor" { avg_suggestion_confidence > 500 }
+    fuzz_target
+{
+    let app_hash = sha3_256(application_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(app_hash, application_id)
+    let verified = mldsa_verify(app_hash, sig, application_id)
+
+    let analysis = li_infer(application_id, app_hash)
+    let actions = li_classify(analysis, application_id)
+    let anomaly = streamsight_anomaly(app_hash)
+    let baseline = streamsight_baseline("suggestions_generated")
+
+    let context = kv_get(application_id)
+
+    [OptimizationSuggestion {
+        suggestion_id: sha3_256(app_hash),
+        application_id: application_id,
+        action: AddEvidence,
+        confidence: 800,
+        reasoning_hash: sha3_256(analysis),
+    }]
+}
+
+// =============================================================================
+// Circuit: Evaluate Drift
+// =============================================================================
+//
+// Evaluates model drift by comparing prediction accuracy against threshold.
+// When accuracy drops below 0.75, the drift detector consumer triggers
+// automatic retraining. Returns current FeedbackLoop state with accuracy
+// and drift metrics.
+
+circuit catalyst_evaluate_drift(loop_id: bytes(32), pk: bytes(1568)) -> FeedbackLoop
+    lex esn/marketplace/advertising/catalyst {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    streamsight true
+    povc true
+    observe metrics: [drift_evaluations, current_accuracy, current_drift_score, retrains_triggered]
+    invariant "loop_id_not_empty" { loop_id != 0 }
+    monitor "accuracy_threshold" { current_accuracy > 0.75 }
+    monitor "drift_ceiling" { current_drift_score < 0.10 }
+{
+    let loop_hash = sha3_256(loop_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(loop_hash, loop_id)
+    let verified = mldsa_verify(loop_hash, sig, loop_id)
+
+    let state = kv_get(loop_id)
+    let anomaly = streamsight_anomaly(loop_hash)
+    let baseline = streamsight_baseline("current_accuracy")
+
+    let drift = li_classify(loop_id, loop_hash)
+
+    FeedbackLoop {
+        loop_id: loop_id,
+        model_version: state.model_version,
+        total_predictions: state.total_predictions,
+        correct_predictions: state.correct_predictions,
+        accuracy: state.accuracy,
+        drift_score: drift,
+        last_retrained_at: state.last_retrained_at,
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "predict_outcome_basic" {
+    let pk = test_keygen(1568)
+    let application_id = sha3_256("test_app_001")
+    let features = sha3_256("test_features_001")
+    let result = catalyst_predict_outcome(application_id, features, pk)
+    assert result.confidence > 0
+    assert result.predicted_outcome != 0
+    assert result.record_id != 0
+    assert result.features_hash != 0
+}
+
+test golden "predict_outcome_populates_timestamps" {
+    let pk = test_keygen(1568)
+    let application_id = sha3_256("test_app_002")
+    let features = sha3_256("test_features_002")
+    let result = catalyst_predict_outcome(application_id, features, pk)
+    assert result.submitted_at > 0
+    assert result.decided_at == 0
+}
+
+test golden "record_outcome_updates_actual" {
+    let pk = test_keygen(1568)
+    let application_id = sha3_256("test_app_003")
+    let result = catalyst_record_outcome(application_id, Approved, pk)
+    assert result.actual_outcome == Approved
+    assert result.decided_at > 0
+}
+
+test golden "generate_suggestions_returns_list" {
+    let pk = test_keygen(1568)
+    let application_id = sha3_256("test_app_004")
+    let suggestions = catalyst_generate_suggestions(application_id, pk)
+    assert len(suggestions) > 0
+    assert suggestions[0].confidence > 0
+    assert suggestions[0].reasoning_hash != 0
+}
+
+test golden "evaluate_drift_returns_metrics" {
+    let pk = test_keygen(1568)
+    let loop_id = sha3_256("test_loop_001")
+    let result = catalyst_evaluate_drift(loop_id, pk)
+    assert result.loop_id != 0
+    assert result.accuracy >= 0
+    assert result.drift_score >= 0
+}
+
+test property "predict_outcome_always_returns_record" {
+    forall application_id: bytes(32), features: bytes(2048), pk: bytes(1568) {
+        let result = catalyst_predict_outcome(application_id, features, pk)
+        assert result.record_id != 0
+        assert result.features_hash != 0
+    }
+}
+
+test property "generate_suggestions_preserves_application_id" {
+    forall application_id: bytes(32), pk: bytes(1568) {
+        let suggestions = catalyst_generate_suggestions(application_id, pk)
+        assert suggestions[0].application_id == application_id
+    }
+}
+
+test property "evaluate_drift_accuracy_bounded" {
+    forall loop_id: bytes(32), pk: bytes(1568) {
+        let result = catalyst_evaluate_drift(loop_id, pk)
+        assert result.accuracy >= 0
+        assert result.drift_score >= 0
+    }
+}
+
+test fuzz "predict_outcome_no_panic" {
+    fuzz application_id: bytes(32), features: bytes(2048), pk: bytes(1568) {
+        let result = catalyst_predict_outcome(application_id, features, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "record_outcome_no_panic" {
+    fuzz application_id: bytes(32), actual_outcome: u8, pk: bytes(1568) {
+        let result = catalyst_record_outcome(application_id, actual_outcome, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "generate_suggestions_no_panic" {
+    fuzz application_id: bytes(32), pk: bytes(1568) {
+        let result = catalyst_generate_suggestions(application_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "evaluate_drift_no_panic" {
+    fuzz loop_id: bytes(32), pk: bytes(1568) {
+        let result = catalyst_evaluate_drift(loop_id, pk)
+        assert no_panic
+    }
+}

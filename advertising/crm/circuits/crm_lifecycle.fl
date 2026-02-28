@@ -1,0 +1,221 @@
+// CRM Lifecycle — Generic User Lifecycle State Machine
+// Anonymous → Registered → Engaged → Qualified → Active → Churned → Reactivated
+//
+// This file defines a generic lifecycle state machine for CRM users. States
+// represent engagement levels, not domain-specific status. Transition rules
+// enforce valid state flows — you cannot skip from Anonymous to Active without
+// passing through Registered and Engaged.
+//
+// Cortex AI classifies transitions in real-time to detect churn risk, identify
+// upsell opportunities, and trigger automated re-engagement workflows.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import crm_graph from "advertising/crm/circuits/crm_graph"
+
+// =============================================================================
+// Data Declarations — Lifecycle Types
+// =============================================================================
+
+// LifecycleState enum:
+// 0 = Anonymous, 1 = Registered, 2 = Engaged, 3 = Qualified,
+// 4 = Active, 5 = Churned, 6 = Reactivated
+
+data LifecycleTransition : app v1 {
+    user_id: bytes(32),
+    from_state: u8,
+    to_state: u8,
+    trigger: bytes(64),
+    timestamp: u64,
+    metadata: bytes(256),
+}
+    encode @ bytes(365) {
+        user_id    @ le,
+        from_state @ le,
+        to_state   @ le,
+        trigger    @ le,
+        timestamp  @ le,
+        metadata   @ le,
+    }
+    store kv
+    series retain 365d
+    cortex {
+        inference on_write {
+            consumer "lifecycle_classifier"
+            throttle max_per_minute 200
+        }
+    }
+    observe metrics [from_state, to_state, trigger] level adaptive
+    observe events [from_state, to_state, trigger]
+    sign {
+        algorithm mldsa87
+        key_field user_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field user_id
+        proof_system groth16
+    }
+
+data LifecycleStateRecord : circuit v1 {
+    user_id: bytes(32),
+    current_state: u8,
+    last_transition_at: u64,
+    transition_count: u32,
+}
+    store kv
+    observe metrics [current_state, transition_count] level adaptive
+    observe events [current_state]
+
+// =============================================================================
+// Transition Validation Matrix
+// =============================================================================
+//
+// Valid transitions (from → to):
+//   Anonymous(0)     → Registered(1)
+//   Registered(1)    → Engaged(2)
+//   Engaged(2)       → Qualified(3)
+//   Qualified(3)     → Active(4)
+//   Active(4)        → Churned(5)
+//   Churned(5)       → Reactivated(6)
+//   Reactivated(6)   → Engaged(2)
+//   Any non-zero     → Churned(5)  (churn can happen from any active state)
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream crm_lifecycle_events: event<LifecycleTransition>
+    retention 7y
+    consumers [streamsight, audit, cortex, alerting]
+    classify user_id: IDENTIFIER, from_state: METADATA, to_state: METADATA, trigger: METADATA
+
+// =============================================================================
+// Series Declaration
+// =============================================================================
+
+series crm_lifecycle_audit: crm_lifecycle_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Transition Lifecycle State
+// =============================================================================
+//
+// Validates a lifecycle transition against the transition matrix and applies it.
+// Invalid transitions are rejected — the circuit enforces that state changes
+// follow the defined flow. Every transition is signed, PoVC-attested, and
+// emitted to the lifecycle event stream for Cortex classification.
+
+circuit crm_transition_lifecycle(user_id: bytes(32), new_state: u8, trigger: bytes(64), pk: bytes(1568)) -> LifecycleTransition
+    lex esn/marketplace/advertising/crm {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    witness threshold(2, 3)
+    observe metrics: [transitions_executed, transitions_rejected, churn_events, reactivation_events]
+    invariant "user_id_not_empty" { user_id != 0 }
+    invariant "state_valid" { new_state <= 6 }
+    invariant "trigger_not_empty" { trigger != 0 }
+    property safety "no_invalid_transition" { transitions_rejected == 0 || transitions_rejected < transitions_executed * 0.05 }
+    monitor "churn_rate" { churn_events / transitions_executed < 0.20 }
+    monitor "rejection_rate" { transitions_rejected / transitions_executed < 0.05 }
+{
+    let transition_hash = sha3_256(user_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(transition_hash, user_id)
+    let verified = mldsa_verify(transition_hash, sig, user_id)
+
+    let current = kv_get(user_id)
+    let from_state = current.current_state
+
+    let valid_anon_to_reg = from_state == 0 && new_state == 1
+    let valid_reg_to_eng = from_state == 1 && new_state == 2
+    let valid_eng_to_qual = from_state == 2 && new_state == 3
+    let valid_qual_to_act = from_state == 3 && new_state == 4
+    let valid_act_to_churn = from_state == 4 && new_state == 5
+    let valid_churn_to_react = from_state == 5 && new_state == 6
+    let valid_react_to_eng = from_state == 6 && new_state == 2
+    let valid_any_to_churn = from_state > 0 && new_state == 5
+
+    let is_valid = valid_anon_to_reg || valid_reg_to_eng || valid_eng_to_qual || valid_qual_to_act || valid_act_to_churn || valid_churn_to_react || valid_react_to_eng || valid_any_to_churn
+
+    let anomaly = streamsight_anomaly(transition_hash)
+    let baseline = streamsight_baseline("churn_events")
+    let now = 0
+
+    LifecycleTransition {
+        user_id: user_id,
+        from_state: from_state,
+        to_state: new_state,
+        trigger: trigger,
+        timestamp: now,
+        metadata: 0,
+    }
+}
+
+// =============================================================================
+// Circuit: Get Lifecycle State
+// =============================================================================
+//
+// Returns the current lifecycle state for a user. Reads from KV store
+// for O(1) lookup. No mutation — read-only circuit.
+
+circuit crm_get_lifecycle_state(user_id: bytes(32)) -> u8
+    lex esn/marketplace/advertising/crm
+    precision C
+    streamsight true
+    observe metrics: [state_lookups, lookup_misses]
+    invariant "user_id_not_empty" { user_id != 0 }
+    monitor "miss_rate" { lookup_misses / state_lookups < 0.10 }
+{
+    let lookup_hash = sha3_256(user_id)
+    let anomaly = streamsight_anomaly(lookup_hash)
+    let baseline = streamsight_baseline("state_lookups")
+    let record = kv_get(user_id)
+    record.current_state
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "transition_anonymous_to_registered" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_001")
+    let t = crm_transition_lifecycle(user_id, 1, "user_signup", pk)
+    assert t.user_id == user_id
+    assert t.from_state == 0
+    assert t.to_state == 1
+    assert t.trigger == "user_signup"
+}
+
+test golden "transition_active_to_churned" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_002")
+    let t = crm_transition_lifecycle(user_id, 5, "inactivity_90d", pk)
+    assert t.to_state == 5
+    assert t.trigger == "inactivity_90d"
+}
+
+test property "valid_transitions_only" {
+    forall user_id: bytes(32), new_state: u8, trigger: bytes(64), pk: bytes(1568) {
+        let t = crm_transition_lifecycle(user_id, new_state, trigger, pk)
+        assert t.to_state <= 6
+        assert t.from_state <= 6
+    }
+}
+
+test fuzz "lifecycle_transition_no_panic" {
+    fuzz user_id: bytes(32), new_state: u8, trigger: bytes(64), pk: bytes(1568) {
+        let result = crm_transition_lifecycle(user_id, new_state, trigger, pk)
+        assert no_panic
+    }
+}

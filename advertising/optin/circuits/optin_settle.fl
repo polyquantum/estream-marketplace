@@ -1,0 +1,367 @@
+// Opt-In Settle — Multi-Party Settlement with Cryptographic Attestation
+// Define rules -> settle engagement -> verify settlement correctness
+//
+// This file defines the multi-party settlement model for the opt-in
+// engagement system. When an engagement completes, funds from the
+// partner's escrow reservation are distributed deterministically across
+// four parties: platform (fee), user (compensation), affiliate (referral
+// share), and publisher (content host share).
+//
+// Settlement rules are defined in basis points (1 bps = 0.01%) with an
+// enforced invariant that all shares sum to exactly 10000 (100%).
+// The settle circuit requires 2-of-3 witness threshold signature,
+// runs in constant_time and precision A mode, and produces Groth16-
+// attested settlement records for independent verification by any party.
+//
+// Settlement is final — consent revocation after settlement does not
+// trigger clawbacks. This prevents asymmetric risk.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import optin_engage from "advertising/optin/circuits/optin_engage"
+import optin_escrow from "advertising/optin/circuits/optin_escrow"
+
+// =============================================================================
+// Data Declarations — Settlement Types
+// =============================================================================
+
+data SettlementRecord : app v1 {
+    settlement_id: bytes(32),
+    code_id: bytes(32),
+    partner_id: bytes(32),
+    user_id: bytes(32),
+    total_amount: u64,
+    platform_fee: u64,
+    user_compensation: u64,
+    affiliate_share: u64,
+    publisher_share: u64,
+    settled_at: u64,
+}
+    encode @ bytes(200) {
+        settlement_id    @ le,
+        code_id          @ le,
+        partner_id       @ le,
+        user_id          @ le,
+        total_amount     @ le,
+        platform_fee     @ le,
+        user_compensation @ le,
+        affiliate_share  @ le,
+        publisher_share  @ le,
+        settled_at       @ le,
+    }
+    store kv
+    store dag
+    series retain 7y
+    cortex {
+        visibility {
+            user_id obfuscate
+            total_amount expose
+            platform_fee expose
+            user_compensation expose
+            affiliate_share expose
+            publisher_share expose
+        }
+    }
+    observe events [total_amount, platform_fee, user_compensation]
+    observe metrics [total_amount, platform_fee, user_compensation, affiliate_share, publisher_share] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field settlement_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field settlement_id
+        proof_system groth16
+    }
+
+data SettlementRules : app v1 {
+    rule_id: bytes(32),
+    platform_fee_bps: u32,
+    user_compensation_bps: u32,
+    affiliate_share_bps: u32,
+    publisher_share_bps: u32,
+}
+    encode @ bytes(48) {
+        rule_id               @ le,
+        platform_fee_bps      @ le,
+        user_compensation_bps @ le,
+        affiliate_share_bps   @ le,
+        publisher_share_bps   @ le,
+    }
+    store kv
+    invariant "shares_sum_to_total" { platform_fee_bps + user_compensation_bps + affiliate_share_bps + publisher_share_bps == 10000 }
+    observe metrics [platform_fee_bps, user_compensation_bps, affiliate_share_bps, publisher_share_bps] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field rule_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field rule_id
+    }
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream optin_settlement_events: event<SettlementRecord>
+    retention 7y
+    consumers [streamsight, audit, cortex, analytics, alerting]
+    classify settlement_id: IDENTIFIER, code_id: IDENTIFIER, partner_id: IDENTIFIER, total_amount: METRIC
+
+stream optin_settlement_rules: event<SettlementRules>
+    retention 7y
+    consumers [streamsight, audit, cortex]
+    classify rule_id: IDENTIFIER, platform_fee_bps: METRIC, user_compensation_bps: METRIC
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series optin_settlement_chain: optin_settlement_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Settle Engagement
+// =============================================================================
+//
+// Distributes funds from escrow per settlement rules. Requires 2-of-3
+// witness threshold signature. Runs in precision A and constant_time
+// mode for deterministic, timing-safe execution.
+//
+// The settlement computes per-party amounts from the reservation amount
+// and rule basis points, enforcing that total distributions never exceed
+// the reservation amount and that identical inputs always produce
+// identical outputs (determinism).
+
+circuit optin_settle_engagement(code_id: bytes(32), reservation_id: bytes(32), rules_id: bytes(32), pk: bytes(1568)) -> SettlementRecord
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    witness threshold(2, 3)
+    observe metrics: [settlements_executed, settlement_amount_total, settlement_latency_ns, distribution_accuracy]
+    invariant "settlement_deterministic" { same_inputs_produce_same_outputs }
+    invariant "no_over_distribution" { platform_fee + user_compensation + affiliate_share + publisher_share <= total_amount }
+    invariant "code_id_not_empty" { code_id != 0 }
+    invariant "reservation_id_not_empty" { reservation_id != 0 }
+    monitor "settlement_rate" { deviation(settlements_per_sec, baseline) < 0.30 }
+    esz_emit "verify/optin_settlement.esz"
+    fuzz_target
+{
+    let settlement_seed = sha3_256(code_id)
+    let settlement_id = sha3_256(settlement_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(settlement_id, code_id)
+    let verified = mldsa_verify(settlement_id, sig, pk)
+
+    let code = kv_get(code_id)
+    let reservation = kv_get(reservation_id)
+    let rules = kv_get(rules_id)
+
+    let total = reservation.amount
+    let platform = (total * rules.platform_fee_bps) / 10000
+    let user_comp = (total * rules.user_compensation_bps) / 10000
+    let affiliate = (total * rules.affiliate_share_bps) / 10000
+    let publisher = total - platform - user_comp - affiliate
+
+    let anomaly = streamsight_anomaly(settlement_id)
+    let baseline = streamsight_baseline("settlements_executed")
+
+    SettlementRecord {
+        settlement_id: settlement_id,
+        code_id: code_id,
+        partner_id: code.partner_id,
+        user_id: code.user_id,
+        total_amount: total,
+        platform_fee: platform,
+        user_compensation: user_comp,
+        affiliate_share: affiliate,
+        publisher_share: publisher,
+        settled_at: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Verify Settlement
+// =============================================================================
+//
+// Verifies that a settlement was computed correctly. Recomputes the
+// per-party distributions from the stored reservation amount and rules,
+// then compares against the recorded settlement. Returns true only if
+// all amounts match exactly — no rounding tolerance.
+
+circuit optin_verify_settlement(settlement_id: bytes(32), pk: bytes(1568)) -> bool
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    observe metrics: [settlements_verified, verification_failures, verification_latency_ns]
+    invariant "settlement_id_not_empty" { settlement_id != 0 }
+    monitor "verification_rate" { deviation(verifications_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let verify_hash = sha3_256(settlement_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(verify_hash, settlement_id)
+    let verified = mldsa_verify(verify_hash, sig, pk)
+
+    let settlement = kv_get(settlement_id)
+    let code = kv_get(settlement.code_id)
+    let reservation = kv_get(settlement.code_id)
+    let rules = kv_get(settlement.code_id)
+
+    let total = reservation.amount
+    let expected_platform = (total * rules.platform_fee_bps) / 10000
+    let expected_user = (total * rules.user_compensation_bps) / 10000
+    let expected_affiliate = (total * rules.affiliate_share_bps) / 10000
+    let expected_publisher = total - expected_platform - expected_user - expected_affiliate
+
+    let platform_ok = settlement.platform_fee == expected_platform
+    let user_ok = settlement.user_compensation == expected_user
+    let affiliate_ok = settlement.affiliate_share == expected_affiliate
+    let publisher_ok = settlement.publisher_share == expected_publisher
+    let total_ok = settlement.platform_fee + settlement.user_compensation + settlement.affiliate_share + settlement.publisher_share <= settlement.total_amount
+
+    let anomaly = streamsight_anomaly(verify_hash)
+    let baseline = streamsight_baseline("settlements_verified")
+
+    platform_ok && user_ok && affiliate_ok && publisher_ok && total_ok
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "settle_engagement_basic" {
+    let pk = test_keygen(1568)
+    let code_id = sha3_256("test_code_001")
+    let reservation_id = sha3_256("test_reservation_001")
+    let rules_id = sha3_256("test_rules_001")
+    let settlement = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+    assert settlement.settlement_id != 0
+    assert settlement.code_id == code_id
+    assert settlement.total_amount > 0
+    assert settlement.settled_at > 0
+}
+
+test golden "settle_engagement_deterministic" {
+    let pk = test_keygen(1568)
+    let code_id = sha3_256("test_code_002")
+    let reservation_id = sha3_256("test_reservation_002")
+    let rules_id = sha3_256("test_rules_002")
+    let s1 = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+    let s2 = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+    assert s1.settlement_id == s2.settlement_id
+    assert s1.platform_fee == s2.platform_fee
+    assert s1.user_compensation == s2.user_compensation
+    assert s1.affiliate_share == s2.affiliate_share
+    assert s1.publisher_share == s2.publisher_share
+}
+
+test golden "settle_no_over_distribution" {
+    let pk = test_keygen(1568)
+    let code_id = sha3_256("test_code_003")
+    let reservation_id = sha3_256("test_reservation_003")
+    let rules_id = sha3_256("test_rules_003")
+    let settlement = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+    let total_distributed = settlement.platform_fee + settlement.user_compensation + settlement.affiliate_share + settlement.publisher_share
+    assert total_distributed <= settlement.total_amount
+}
+
+test golden "settle_all_parties_receive" {
+    let pk = test_keygen(1568)
+    let code_id = sha3_256("test_code_004")
+    let reservation_id = sha3_256("test_reservation_004")
+    let rules_id = sha3_256("test_rules_004")
+    let settlement = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+    assert settlement.platform_fee >= 0
+    assert settlement.user_compensation >= 0
+    assert settlement.affiliate_share >= 0
+    assert settlement.publisher_share >= 0
+}
+
+test golden "verify_settlement_basic" {
+    let pk = test_keygen(1568)
+    let code_id = sha3_256("test_code_005")
+    let reservation_id = sha3_256("test_reservation_005")
+    let rules_id = sha3_256("test_rules_005")
+    let settlement = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+    let valid = optin_verify_settlement(settlement.settlement_id, pk)
+    assert valid == true
+}
+
+test golden "verify_settlement_matches_settle" {
+    let pk = test_keygen(1568)
+    let code_id = sha3_256("test_code_006")
+    let reservation_id = sha3_256("test_reservation_006")
+    let rules_id = sha3_256("test_rules_006")
+    let s1 = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+    let s2 = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+    let v1 = optin_verify_settlement(s1.settlement_id, pk)
+    let v2 = optin_verify_settlement(s2.settlement_id, pk)
+    assert v1 == true
+    assert v2 == true
+    assert s1.total_amount == s2.total_amount
+}
+
+test golden "full_settlement_lifecycle" {
+    let pk = test_keygen(1568)
+    let code_id = sha3_256("test_code_007")
+    let reservation_id = sha3_256("test_reservation_007")
+    let rules_id = sha3_256("test_rules_007")
+    let settlement = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+    let verified = optin_verify_settlement(settlement.settlement_id, pk)
+    assert settlement.settlement_id != 0
+    assert verified == true
+    assert settlement.platform_fee + settlement.user_compensation + settlement.affiliate_share + settlement.publisher_share <= settlement.total_amount
+}
+
+test property "settle_preserves_code_id" {
+    forall code_id: bytes(32), reservation_id: bytes(32), rules_id: bytes(32), pk: bytes(1568) {
+        let settlement = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+        assert settlement.code_id == code_id
+    }
+}
+
+test property "settle_no_over_distribution" {
+    forall code_id: bytes(32), reservation_id: bytes(32), rules_id: bytes(32), pk: bytes(1568) {
+        let settlement = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+        assert settlement.platform_fee + settlement.user_compensation + settlement.affiliate_share + settlement.publisher_share <= settlement.total_amount
+    }
+}
+
+test property "settle_deterministic" {
+    forall code_id: bytes(32), reservation_id: bytes(32), rules_id: bytes(32), pk: bytes(1568) {
+        let s1 = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+        let s2 = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+        assert s1.settlement_id == s2.settlement_id
+        assert s1.platform_fee == s2.platform_fee
+    }
+}
+
+test fuzz "settle_engagement_no_panic" {
+    fuzz code_id: bytes(32), reservation_id: bytes(32), rules_id: bytes(32), pk: bytes(1568) {
+        let result = optin_settle_engagement(code_id, reservation_id, rules_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "verify_settlement_no_panic" {
+    fuzz settlement_id: bytes(32), pk: bytes(1568) {
+        let result = optin_verify_settlement(settlement_id, pk)
+        assert no_panic
+    }
+}

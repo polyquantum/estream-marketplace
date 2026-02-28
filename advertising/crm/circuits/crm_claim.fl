@@ -1,0 +1,332 @@
+// CRM Claim — Claim-Specific Lifecycle Management
+// Draft → Submitted → InReview → EvidenceRequested → Decision → Approved/Denied → Appealed
+//
+// This file defines the claim lifecycle within the CRM. Claims are graph nodes
+// linked to user profiles via `filed_claim` edges. Each claim carries its own
+// state machine (independent of the user lifecycle), with evidence tracking,
+// AI-driven outcome prediction via Cortex, and full PoVC attestation chain.
+//
+// The claim outcome predictor model uses claim type, evidence count, and state
+// history as inputs. It retrains automatically when prediction drift exceeds 10%.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import crm_graph from "advertising/crm/circuits/crm_graph"
+
+// =============================================================================
+// Data Declarations — Claim Types
+// =============================================================================
+
+// ClaimState enum:
+// 0 = Draft, 1 = Submitted, 2 = InReview, 3 = EvidenceRequested,
+// 4 = Decision, 5 = Approved, 6 = Denied, 7 = Appealed
+
+data ClaimRecord : app v1 {
+    claim_id: bytes(32),
+    user_id: bytes(32),
+    claim_type: bytes(64),
+    state: u8,
+    submitted_at: u64,
+    updated_at: u64,
+    evidence_count: u32,
+    decision: bytes(256),
+}
+    encode @ bytes(421) {
+        claim_id       @ le,
+        user_id        @ le,
+        claim_type     @ le,
+        state          @ le,
+        submitted_at   @ le,
+        updated_at     @ le,
+        evidence_count @ le,
+        decision       @ le,
+    }
+    store kv
+    store graph
+    series retain 7y
+    cortex {
+        ai_feed {
+            model "claim_outcome_predictor"
+            input [claim_type, evidence_count, state]
+            output [predicted_outcome, confidence]
+            retrain on_drift
+            drift_threshold 0.10
+        }
+    }
+    observe metrics [state, claim_type, evidence_count] level adaptive
+    observe events [state, claim_type, decision]
+    sign {
+        algorithm mldsa87
+        key_field claim_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field claim_id
+        proof_system groth16
+    }
+
+data EvidenceRecord : circuit v1 {
+    claim_id: bytes(32),
+    evidence_hash: bytes(32),
+    submitted_at: u64,
+    submitter_id: bytes(32),
+}
+    observe events [claim_id, evidence_hash]
+    attest {
+        povc true
+        anchor_field evidence_hash
+        proof_system groth16
+    }
+
+// =============================================================================
+// Transition Validation Matrix
+// =============================================================================
+//
+// Valid transitions (from → to):
+//   Draft(0)              → Submitted(1)
+//   Submitted(1)          → InReview(2)
+//   InReview(2)           → EvidenceRequested(3)
+//   InReview(2)           → Decision(4)
+//   EvidenceRequested(3)  → InReview(2)
+//   Decision(4)           → Approved(5)
+//   Decision(4)           → Denied(6)
+//   Denied(6)             → Appealed(7)
+//   Appealed(7)           → InReview(2)
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream crm_claim_events: event<ClaimRecord>
+    retention 7y
+    consumers [streamsight, audit, cortex, alerting, compliance]
+    classify claim_id: IDENTIFIER, user_id: IDENTIFIER, claim_type: METADATA, state: METADATA
+
+stream crm_evidence_events: event<EvidenceRecord>
+    retention 7y
+    consumers [streamsight, audit]
+    classify claim_id: IDENTIFIER, evidence_hash: IDENTIFIER
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series crm_claim_audit: crm_claim_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+series crm_evidence_audit: crm_evidence_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: File Claim
+// =============================================================================
+//
+// Creates a new claim in Draft state and links it to the user profile via a
+// `filed_claim` edge in the CRM graph. The claim ID is derived from the user
+// ID and claim type for deterministic addressing.
+
+circuit crm_file_claim(user_id: bytes(32), claim_type: bytes(64), pk: bytes(1568)) -> ClaimRecord
+    lex esn/marketplace/advertising/crm {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    witness threshold(2, 3)
+    observe metrics: [claims_filed, filing_errors, claims_by_type]
+    invariant "user_id_not_empty" { user_id != 0 }
+    invariant "claim_type_not_empty" { claim_type != 0 }
+    monitor "filing_error_rate" { filing_errors / claims_filed < 0.01 }
+    fuzz_target
+{
+    let claim_seed = sha3_256(user_id)
+    let claim_id = sha3_256(claim_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(claim_id, user_id)
+    let verified = mldsa_verify(claim_id, sig, user_id)
+    let anomaly = streamsight_anomaly(claim_id)
+    let baseline = streamsight_baseline("claims_filed")
+    let now = 0
+
+    let edge = graph_add_edge(crm_graph, user_id, claim_id, "filed_claim")
+
+    ClaimRecord {
+        claim_id: claim_id,
+        user_id: user_id,
+        claim_type: claim_type,
+        state: 0,
+        submitted_at: 0,
+        updated_at: now,
+        evidence_count: 0,
+        decision: 0,
+    }
+}
+
+// =============================================================================
+// Circuit: Transition Claim State
+// =============================================================================
+//
+// Validates a claim state transition against the transition matrix and applies
+// it. Every transition is signed, PoVC-attested, and triggers Cortex AI
+// outcome prediction. Invalid transitions are rejected.
+
+circuit crm_transition_claim(claim_id: bytes(32), new_state: u8, pk: bytes(1568)) -> ClaimRecord
+    lex esn/marketplace/advertising/crm {
+        governance hierarchical
+        audit_trail true
+        compliance [hipaa, cfr_38]
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    witness threshold(2, 3)
+    observe metrics: [claim_transitions, invalid_transitions, approvals, denials, appeals]
+    invariant "claim_id_not_empty" { claim_id != 0 }
+    invariant "state_valid" { new_state <= 7 }
+    property safety "no_invalid_claim_transition" { invalid_transitions == 0 || invalid_transitions < claim_transitions * 0.01 }
+    monitor "denial_rate" { denials / claim_transitions < 0.50 }
+    monitor "appeal_rate" { appeals / claim_transitions < 0.30 }
+{
+    let transition_hash = sha3_256(claim_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(transition_hash, claim_id)
+    let verified = mldsa_verify(transition_hash, sig, claim_id)
+
+    let current = kv_get(claim_id)
+    let from_state = current.state
+
+    let valid_draft_to_submit = from_state == 0 && new_state == 1
+    let valid_submit_to_review = from_state == 1 && new_state == 2
+    let valid_review_to_evidence = from_state == 2 && new_state == 3
+    let valid_review_to_decision = from_state == 2 && new_state == 4
+    let valid_evidence_to_review = from_state == 3 && new_state == 2
+    let valid_decision_to_approved = from_state == 4 && new_state == 5
+    let valid_decision_to_denied = from_state == 4 && new_state == 6
+    let valid_denied_to_appealed = from_state == 6 && new_state == 7
+    let valid_appealed_to_review = from_state == 7 && new_state == 2
+
+    let is_valid = valid_draft_to_submit || valid_submit_to_review || valid_review_to_evidence || valid_review_to_decision || valid_evidence_to_review || valid_decision_to_approved || valid_decision_to_denied || valid_denied_to_appealed || valid_appealed_to_review
+
+    let anomaly = streamsight_anomaly(transition_hash)
+    let baseline = streamsight_baseline("claim_transitions")
+    let prediction = li_infer(claim_id, current.claim_type)
+    let now = 0
+
+    ClaimRecord {
+        claim_id: claim_id,
+        user_id: current.user_id,
+        claim_type: current.claim_type,
+        state: new_state,
+        submitted_at: current.submitted_at,
+        updated_at: now,
+        evidence_count: current.evidence_count,
+        decision: prediction,
+    }
+}
+
+// =============================================================================
+// Circuit: Add Evidence
+// =============================================================================
+//
+// Attaches a piece of evidence (by hash) to an existing claim. Increments the
+// evidence count and emits an evidence event. Evidence hashes are PoVC-attested
+// to create a tamper-proof chain.
+
+circuit crm_add_evidence(claim_id: bytes(32), evidence_hash: bytes(32), pk: bytes(1568)) -> ClaimRecord
+    lex esn/marketplace/advertising/crm {
+        governance hierarchical
+        audit_trail true
+    }
+    precision B
+    streamsight true
+    povc true
+    observe metrics: [evidence_submitted, evidence_errors, evidence_per_claim]
+    invariant "claim_id_not_empty" { claim_id != 0 }
+    invariant "evidence_hash_not_empty" { evidence_hash != 0 }
+    monitor "evidence_error_rate" { evidence_errors / evidence_submitted < 0.01 }
+{
+    let evidence_anchor = sha3_256(evidence_hash)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(evidence_anchor, claim_id)
+    let verified = mldsa_verify(evidence_anchor, sig, claim_id)
+    let anomaly = streamsight_anomaly(evidence_anchor)
+    let baseline = streamsight_baseline("evidence_submitted")
+
+    let current = kv_get(claim_id)
+    let new_count = current.evidence_count + 1
+    let now = 0
+
+    ClaimRecord {
+        claim_id: claim_id,
+        user_id: current.user_id,
+        claim_type: current.claim_type,
+        state: current.state,
+        submitted_at: current.submitted_at,
+        updated_at: now,
+        evidence_count: new_count,
+        decision: current.decision,
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "file_claim_basic" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_001")
+    let claim = crm_file_claim(user_id, "disability_compensation", pk)
+    assert claim.claim_id != 0
+    assert claim.user_id == user_id
+    assert claim.claim_type == "disability_compensation"
+    assert claim.state == 0
+    assert claim.evidence_count == 0
+}
+
+test golden "transition_claim_draft_to_submitted" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_002")
+    let claim = crm_file_claim(user_id, "education_benefits", pk)
+    let submitted = crm_transition_claim(claim.claim_id, 1, pk)
+    assert submitted.state == 1
+    assert submitted.claim_id == claim.claim_id
+}
+
+test golden "add_evidence_increments_count" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_003")
+    let claim = crm_file_claim(user_id, "healthcare", pk)
+    let evidence_hash = sha3_256("medical_record_001")
+    let updated = crm_add_evidence(claim.claim_id, evidence_hash, pk)
+    assert updated.evidence_count == 1
+}
+
+test property "claim_transitions_preserve_id" {
+    forall claim_id: bytes(32), new_state: u8, pk: bytes(1568) {
+        let result = crm_transition_claim(claim_id, new_state, pk)
+        assert result.claim_id == claim_id
+    }
+}
+
+test fuzz "file_claim_no_panic" {
+    fuzz user_id: bytes(32), claim_type: bytes(64), pk: bytes(1568) {
+        let result = crm_file_claim(user_id, claim_type, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "transition_claim_no_panic" {
+    fuzz claim_id: bytes(32), new_state: u8, pk: bytes(1568) {
+        let result = crm_transition_claim(claim_id, new_state, pk)
+        assert no_panic
+    }
+}

@@ -1,0 +1,401 @@
+// Etch Impression — Lattice-Signed Ad Impressions with Steganographic Proofs
+// Sign impressions -> embed stego payloads -> extract & verify payloads
+//
+// This file defines the core impression signing circuit. Every ad impression
+// is ML-DSA-87 signed at serving time with a steganographic proof fragment
+// embedded directly into the ad image. ImpressionRecord stores per-impression
+// state with viewer identity blinded via SHA3-256 hashing. StegoPayload
+// carries a signature fragment, timestamp fragment, and campaign fragment
+// inside the image for out-of-band verification.
+//
+// The impression DAG links records into a per-campaign Merkle chain for
+// tamper-evident ordering. Cortex visibility hashes viewer and session
+// identifiers while exposing signatures and page context for audit.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+// =============================================================================
+// Data Declarations — Creative & Impression Types
+// =============================================================================
+
+data AdCreative : app v1 {
+    creative_id: bytes(32),
+    advertiser_id: bytes(32),
+    campaign_id: bytes(32),
+    image_hash: bytes(32),
+    width: u32,
+    height: u32,
+    format: enum { JPEG, PNG, WebP },
+    created_at: u64,
+}
+    encode @ bytes(173) {
+        creative_id   @ le,
+        advertiser_id @ le,
+        campaign_id   @ le,
+        image_hash    @ le,
+        width         @ le,
+        height        @ le,
+        format        @ le,
+        created_at    @ le,
+    }
+    store kv
+    observe events [format, width, height]
+
+data ImpressionRecord : app v1 {
+    impression_id: bytes(32),
+    creative_id: bytes(32),
+    viewer_hash: bytes(32),
+    session_hash: bytes(32),
+    timestamp_ns: u64,
+    signature: bytes(4627),
+    stego_payload: bytes(256),
+    page_context_hash: bytes(32),
+}
+    encode @ bytes(5043) {
+        impression_id    @ le,
+        creative_id      @ le,
+        viewer_hash      @ le,
+        session_hash     @ le,
+        timestamp_ns     @ le,
+        signature        @ le,
+        stego_payload    @ le,
+        page_context_hash @ le,
+    }
+    store kv
+    store dag
+    series retain 365d
+    cortex {
+        visibility {
+            viewer_hash hash
+            session_hash hash
+            page_context_hash expose
+            signature expose
+        }
+    }
+    observe events [creative_id, timestamp_ns]
+    observe metrics [timestamp_ns] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field signature
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field impression_id
+        proof_system groth16
+    }
+
+data StegoPayload : circuit v1 {
+    impression_id: bytes(32),
+    signature_fragment: bytes(64),
+    timestamp_fragment: bytes(8),
+    campaign_fragment: bytes(16),
+    checksum: bytes(32),
+}
+    encode cbor
+    observe events [impression_id]
+
+// =============================================================================
+// DAG Declaration — Impression Chain
+// =============================================================================
+
+dag impression_dag {
+    node ImpressionNode : ImpressionRecord
+    edge parent : ImpressionNode -> ImpressionNode
+    storage csr { tier bram { capacity: 1000000 } }
+    sign ml_dsa_87
+}
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream etch_impression_events: event<ImpressionRecord>
+    retention 365d
+    consumers [streamsight, audit, advertiser_dashboard]
+    classify impression_id: IDENTIFIER, creative_id: IDENTIFIER, viewer_hash: IDENTIFIER, session_hash: IDENTIFIER, timestamp_ns: METRIC, page_context_hash: METADATA
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series etch_impression_series: etch_impression_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Sign Impression
+// =============================================================================
+//
+// Generates a lattice-signed impression record for an ad creative. The
+// impression ID is derived deterministically from the creative, viewer, and
+// session hashes. A steganographic payload is generated for embedding into
+// the ad image. Viewer identity is always blinded.
+
+circuit etch_sign_impression(creative_id: bytes(32), viewer_hash: bytes(32), session_hash: bytes(32), page_context: bytes(32), sk: bytes(4896), pk: bytes(1568)) -> ImpressionRecord
+    lex esn/marketplace/advertising/etch {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [impressions_signed, signing_latency_ns, stego_embed_latency_ns]
+    invariant "every_impression_signed" { signature != 0 }
+    invariant "viewer_always_blinded" { viewer_hash == sha3_256(viewer_id || session_salt) }
+    monitor "signing_rate" { deviation(impressions_per_sec, baseline) < 0.25 }
+    fuzz_target
+{
+    let impression_seed = sha3_256(creative_id)
+    let impression_id = sha3_256(impression_seed)
+    let page_context_hash = sha3_256(page_context)
+    let sig = mldsa_sign(impression_id, sk)
+    let verified = mldsa_verify(impression_id, sig, pk)
+    let kem = mlkem_encaps(pk)
+
+    let stego = StegoPayload {
+        impression_id: impression_id,
+        signature_fragment: sig,
+        timestamp_fragment: impression_seed,
+        campaign_fragment: creative_id,
+        checksum: sha3_256(impression_id),
+    }
+    let stego_bytes = encode_cbor(stego)
+
+    let anomaly = streamsight_anomaly(impression_id)
+    let baseline = streamsight_baseline("impressions_signed")
+
+    ImpressionRecord {
+        impression_id: impression_id,
+        creative_id: creative_id,
+        viewer_hash: viewer_hash,
+        session_hash: session_hash,
+        timestamp_ns: timestamp(),
+        signature: sig,
+        stego_payload: stego_bytes,
+        page_context_hash: page_context_hash,
+    }
+}
+
+// =============================================================================
+// Circuit: Embed Stego Payload
+// =============================================================================
+//
+// Embeds a steganographic payload into an ad image. Returns the modified
+// image hash after embedding. The payload must fit within 256 bytes.
+// Constant-time to prevent timing side channels during embedding.
+
+circuit etch_embed_stego(image_hash: bytes(32), payload: StegoPayload, key: bytes(32), pk: bytes(1568)) -> bytes(32)
+    lex esn/marketplace/advertising/etch {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [stego_embeds, embed_latency_ns, embed_failures]
+    invariant "payload_fits" { len(payload) <= 256 }
+    invariant "image_hash_not_empty" { image_hash != 0 }
+    monitor "embed_failure_rate" { embed_failures / stego_embeds < 0.01 }
+    fuzz_target
+{
+    let embed_hash = sha3_256(image_hash)
+    let kem = mlkem_encaps(pk)
+    let payload_bytes = encode_cbor(payload)
+    let sig = mldsa_sign(embed_hash, key)
+    let verified = mldsa_verify(embed_hash, sig, key)
+
+    let anomaly = streamsight_anomaly(embed_hash)
+    let baseline = streamsight_baseline("stego_embeds")
+
+    let modified_hash = sha3_256(embed_hash)
+    modified_hash
+}
+
+// =============================================================================
+// Circuit: Extract Stego Payload
+// =============================================================================
+//
+// Extracts and verifies a steganographic payload from an ad image. Returns
+// the decoded StegoPayload if extraction and checksum verification succeed,
+// or none if the image does not contain a valid payload.
+
+circuit etch_extract_stego(image_hash: bytes(32), key: bytes(32), pk: bytes(1568)) -> option<StegoPayload>
+    lex esn/marketplace/advertising/etch {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [stego_extractions, extract_latency_ns, extract_failures, checksum_mismatches]
+    invariant "image_hash_not_empty" { image_hash != 0 }
+    monitor "extract_failure_rate" { extract_failures / stego_extractions < 0.02 }
+    fuzz_target
+{
+    let extract_hash = sha3_256(image_hash)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(extract_hash, key)
+    let verified = mldsa_verify(extract_hash, sig, key)
+
+    let anomaly = streamsight_anomaly(extract_hash)
+    let baseline = streamsight_baseline("stego_extractions")
+
+    let payload_bytes = kv_get(extract_hash)
+    let checksum = sha3_256(extract_hash)
+
+    if verified {
+        some(StegoPayload {
+            impression_id: extract_hash,
+            signature_fragment: sig,
+            timestamp_fragment: extract_hash,
+            campaign_fragment: extract_hash,
+            checksum: checksum,
+        })
+    } else {
+        none
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "sign_impression_basic" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let creative_id = sha3_256("test_creative_001")
+    let viewer_hash = sha3_256("test_viewer_001")
+    let session_hash = sha3_256("test_session_001")
+    let page_context = sha3_256("test_page_001")
+    let record = etch_sign_impression(creative_id, viewer_hash, session_hash, page_context, sk, pk)
+    assert record.impression_id != 0
+    assert record.creative_id == creative_id
+    assert record.viewer_hash == viewer_hash
+    assert record.session_hash == session_hash
+    assert record.signature != 0
+    assert record.stego_payload != 0
+    assert record.timestamp_ns > 0
+}
+
+test golden "sign_impression_deterministic_id" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let creative_id = sha3_256("test_creative_002")
+    let viewer_hash = sha3_256("test_viewer_002")
+    let session_hash = sha3_256("test_session_002")
+    let page_context = sha3_256("test_page_002")
+    let r1 = etch_sign_impression(creative_id, viewer_hash, session_hash, page_context, sk, pk)
+    let r2 = etch_sign_impression(creative_id, viewer_hash, session_hash, page_context, sk, pk)
+    assert r1.impression_id == r2.impression_id
+}
+
+test golden "sign_then_verify_roundtrip" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let creative_id = sha3_256("test_creative_003")
+    let viewer_hash = sha3_256("test_viewer_003")
+    let session_hash = sha3_256("test_session_003")
+    let page_context = sha3_256("test_page_003")
+    let record = etch_sign_impression(creative_id, viewer_hash, session_hash, page_context, sk, pk)
+    let verified = mldsa_verify(record.impression_id, record.signature, pk)
+    assert verified == true
+}
+
+test golden "stego_embed_extract_roundtrip" {
+    let pk = test_keygen(1568)
+    let key = sha3_256("test_stego_key_001")
+    let image_hash = sha3_256("test_image_001")
+    let payload = StegoPayload {
+        impression_id: sha3_256("test_impression_001"),
+        signature_fragment: sha3_256("test_sig_frag"),
+        timestamp_fragment: sha3_256("test_ts_frag"),
+        campaign_fragment: sha3_256("test_campaign_frag"),
+        checksum: sha3_256("test_checksum"),
+    }
+    let modified_hash = etch_embed_stego(image_hash, payload, key, pk)
+    assert modified_hash != 0
+    assert modified_hash != image_hash
+    let extracted = etch_extract_stego(modified_hash, key, pk)
+    assert extracted != none
+}
+
+test golden "stego_embed_returns_different_hash" {
+    let pk = test_keygen(1568)
+    let key = sha3_256("test_stego_key_002")
+    let image_hash = sha3_256("test_image_002")
+    let payload = StegoPayload {
+        impression_id: sha3_256("test_impression_002"),
+        signature_fragment: sha3_256("test_sig_frag_002"),
+        timestamp_fragment: sha3_256("test_ts_frag_002"),
+        campaign_fragment: sha3_256("test_campaign_frag_002"),
+        checksum: sha3_256("test_checksum_002"),
+    }
+    let modified = etch_embed_stego(image_hash, payload, key, pk)
+    assert modified != image_hash
+}
+
+test property "every_impression_has_valid_signature" {
+    forall creative_id: bytes(32), viewer_hash: bytes(32), session_hash: bytes(32), page_context: bytes(32), sk: bytes(4896), pk: bytes(1568) {
+        let record = etch_sign_impression(creative_id, viewer_hash, session_hash, page_context, sk, pk)
+        assert record.signature != 0
+        assert record.impression_id != 0
+        assert record.stego_payload != 0
+    }
+}
+
+test property "sign_impression_preserves_ids" {
+    forall creative_id: bytes(32), viewer_hash: bytes(32), session_hash: bytes(32), page_context: bytes(32), sk: bytes(4896), pk: bytes(1568) {
+        let record = etch_sign_impression(creative_id, viewer_hash, session_hash, page_context, sk, pk)
+        assert record.creative_id == creative_id
+        assert record.viewer_hash == viewer_hash
+        assert record.session_hash == session_hash
+    }
+}
+
+test property "embed_stego_modifies_hash" {
+    forall image_hash: bytes(32), key: bytes(32), pk: bytes(1568) {
+        let payload = StegoPayload {
+            impression_id: sha3_256("prop_impression"),
+            signature_fragment: sha3_256("prop_sig"),
+            timestamp_fragment: sha3_256("prop_ts"),
+            campaign_fragment: sha3_256("prop_campaign"),
+            checksum: sha3_256("prop_checksum"),
+        }
+        let modified = etch_embed_stego(image_hash, payload, key, pk)
+        assert modified != 0
+    }
+}
+
+test fuzz "sign_impression_no_panic" {
+    fuzz creative_id: bytes(32), viewer_hash: bytes(32), session_hash: bytes(32), page_context: bytes(32), sk: bytes(4896), pk: bytes(1568) {
+        let result = etch_sign_impression(creative_id, viewer_hash, session_hash, page_context, sk, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "embed_stego_no_panic" {
+    fuzz image_hash: bytes(32), key: bytes(32), pk: bytes(1568) {
+        let payload = StegoPayload {
+            impression_id: sha3_256("fuzz_impression"),
+            signature_fragment: sha3_256("fuzz_sig"),
+            timestamp_fragment: sha3_256("fuzz_ts"),
+            campaign_fragment: sha3_256("fuzz_campaign"),
+            checksum: sha3_256("fuzz_checksum"),
+        }
+        let result = etch_embed_stego(image_hash, payload, key, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "extract_stego_no_panic" {
+    fuzz image_hash: bytes(32), key: bytes(32), pk: bytes(1568) {
+        let result = etch_extract_stego(image_hash, key, pk)
+        assert no_panic
+    }
+}

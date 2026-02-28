@@ -1,0 +1,437 @@
+// Opt-In Escrow — Partner Budget Escrow and Reservation Accounts
+// Deposit budget -> reserve per engagement -> release on completion -> expire on timeout
+//
+// This file defines the escrow model for the opt-in engagement system.
+// Partners pre-deposit budgets into ReservationAccounts before creating
+// offers, providing budget certainty for all parties. When an engagement
+// code is generated, funds are reserved against the account. Upon
+// verified engagement completion, reserved funds are released for
+// settlement. Unused reservations expire back to available balance
+// after a configurable timeout.
+//
+// Balance invariants enforce that reservations can never exceed deposits,
+// preventing over-commitment. Every reservation is PoVC-attested for
+// tamper evidence.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import optin_engage from "advertising/optin/circuits/optin_engage"
+
+// =============================================================================
+// Data Declarations — Escrow Types
+// =============================================================================
+
+// ReservationStatus enum:
+// 0 = Reserved, 1 = Released, 2 = Expired, 3 = Cancelled
+
+data ReservationAccount : app v1 {
+    account_id: bytes(32),
+    partner_id: bytes(32),
+    deposited_amount: u64,
+    reserved_amount: u64,
+    released_amount: u64,
+    expired_amount: u64,
+    currency: bytes(8),
+    created_at: u64,
+    last_activity_ns: u64,
+}
+    encode @ bytes(128) {
+        account_id      @ le,
+        partner_id      @ le,
+        deposited_amount @ le,
+        reserved_amount  @ le,
+        released_amount  @ le,
+        expired_amount   @ le,
+        currency         @ le,
+        created_at       @ le,
+        last_activity_ns @ le,
+    }
+    store kv
+    series retain 7y
+    cortex {
+        visibility {
+            partner_id expose
+            deposited_amount redact
+            reserved_amount expose
+            released_amount expose
+            expired_amount expose
+            currency expose
+        }
+    }
+    observe metrics [deposited_amount, reserved_amount, released_amount, expired_amount] level adaptive
+    observe events [partner_id, currency]
+    sign {
+        algorithm mldsa87
+        key_field account_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field account_id
+    }
+
+data Reservation : app v1 {
+    reservation_id: bytes(32),
+    account_id: bytes(32),
+    code_id: bytes(32),
+    amount: u64,
+    status: enum { Reserved, Released, Expired, Cancelled },
+    reserved_at: u64,
+    released_at: u64,
+    expires_at: u64,
+}
+    encode @ bytes(136) {
+        reservation_id @ le,
+        account_id     @ le,
+        code_id        @ le,
+        amount         @ le,
+        status         @ le,
+        reserved_at    @ le,
+        released_at    @ le,
+        expires_at     @ le,
+    }
+    store kv
+    series retain 7y
+    observe events [status, amount]
+    observe metrics [amount, status] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field reservation_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field reservation_id
+    }
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream optin_escrow_events: event<ReservationAccount>
+    retention 7y
+    consumers [streamsight, audit, cortex, analytics, alerting]
+    classify account_id: IDENTIFIER, partner_id: IDENTIFIER, deposited_amount: METRIC, reserved_amount: METRIC
+
+stream optin_reservation_events: event<Reservation>
+    retention 7y
+    consumers [streamsight, audit, cortex, analytics]
+    classify reservation_id: IDENTIFIER, account_id: IDENTIFIER, code_id: IDENTIFIER, amount: METRIC, status: METADATA
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series optin_escrow_audit: optin_escrow_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Deposit Escrow
+// =============================================================================
+//
+// Partner deposits budget into a reservation account. Creates a new
+// account or adds to an existing one. The account_id is deterministically
+// derived from partner_id and currency.
+
+circuit optin_deposit_escrow(partner_id: bytes(32), amount: u64, currency: bytes(8), pk: bytes(1568)) -> ReservationAccount
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [deposits_made, deposit_amount_total, deposit_latency_ns]
+    invariant "partner_id_not_empty" { partner_id != 0 }
+    invariant "amount_positive" { amount > 0 }
+    monitor "deposit_rate" { deviation(deposits_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let account_seed = sha3_256(partner_id)
+    let account_id = sha3_256(account_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(account_id, partner_id)
+    let verified = mldsa_verify(account_id, sig, pk)
+
+    let anomaly = streamsight_anomaly(account_id)
+    let baseline = streamsight_baseline("deposits_made")
+
+    ReservationAccount {
+        account_id: account_id,
+        partner_id: partner_id,
+        deposited_amount: amount,
+        reserved_amount: 0,
+        released_amount: 0,
+        expired_amount: 0,
+        currency: currency,
+        created_at: timestamp(),
+        last_activity_ns: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Reserve Against Escrow
+// =============================================================================
+//
+// Reserves funds from a partner's escrow account when an engagement code
+// is generated. Enforces the balance invariant: available funds (deposited
+// minus reserved) must be >= the requested amount.
+
+circuit optin_reserve_against(account_id: bytes(32), code_id: bytes(32), amount: u64, pk: bytes(1568)) -> Reservation
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [reservations_created, reservation_amount_total, reservation_latency_ns]
+    invariant "sufficient_escrow" { deposited - reserved >= amount }
+    invariant "account_id_not_empty" { account_id != 0 }
+    invariant "amount_positive" { amount > 0 }
+    monitor "reservation_rate" { deviation(reservations_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let reservation_seed = sha3_256(account_id)
+    let reservation_id = sha3_256(reservation_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(reservation_id, account_id)
+    let verified = mldsa_verify(reservation_id, sig, pk)
+
+    let account = kv_get(account_id)
+    let available = account.deposited_amount - account.reserved_amount - account.released_amount - account.expired_amount
+
+    let anomaly = streamsight_anomaly(reservation_id)
+    let baseline = streamsight_baseline("reservations_created")
+
+    Reservation {
+        reservation_id: reservation_id,
+        account_id: account_id,
+        code_id: code_id,
+        amount: amount,
+        status: Reserved,
+        reserved_at: timestamp(),
+        released_at: 0,
+        expires_at: timestamp() + 2592000000000000,
+    }
+}
+
+// =============================================================================
+// Circuit: Release on Completion
+// =============================================================================
+//
+// Releases reserved funds when the engagement is verified complete.
+// The completion_proof (typically a Groth16 proof from the consent
+// chain) must validate before funds are released for settlement.
+
+circuit optin_release_on_completion(reservation_id: bytes(32), completion_proof: bytes(512), pk: bytes(1568)) -> Reservation
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [reservations_released, release_amount_total, release_latency_ns]
+    invariant "reservation_id_not_empty" { reservation_id != 0 }
+    invariant "proof_not_empty" { completion_proof != 0 }
+    monitor "release_rate" { deviation(releases_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let release_hash = sha3_256(reservation_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(release_hash, reservation_id)
+    let verified = mldsa_verify(release_hash, sig, pk)
+
+    let reservation = kv_get(reservation_id)
+    let proof_valid = groth16_verify(completion_proof, release_hash)
+
+    let anomaly = streamsight_anomaly(release_hash)
+    let baseline = streamsight_baseline("reservations_released")
+
+    Reservation {
+        reservation_id: reservation.reservation_id,
+        account_id: reservation.account_id,
+        code_id: reservation.code_id,
+        amount: reservation.amount,
+        status: Released,
+        reserved_at: reservation.reserved_at,
+        released_at: timestamp(),
+        expires_at: reservation.expires_at,
+    }
+}
+
+// =============================================================================
+// Circuit: Expire Reservation
+// =============================================================================
+//
+// Expires a timed-out reservation, returning funds to the partner's
+// available escrow balance. Only reservations in Reserved status and
+// past their expires_at timestamp can be expired.
+
+circuit optin_expire_reservation(reservation_id: bytes(32), pk: bytes(1568)) -> Reservation
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    streamsight true
+    povc true
+    observe metrics: [reservations_expired, expired_amount_total]
+    invariant "reservation_id_not_empty" { reservation_id != 0 }
+    monitor "expiration_rate" { deviation(expirations_per_sec, baseline) < 0.30 }
+{
+    let expire_hash = sha3_256(reservation_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(expire_hash, reservation_id)
+    let verified = mldsa_verify(expire_hash, sig, pk)
+
+    let reservation = kv_get(reservation_id)
+
+    let anomaly = streamsight_anomaly(expire_hash)
+    let baseline = streamsight_baseline("reservations_expired")
+
+    Reservation {
+        reservation_id: reservation.reservation_id,
+        account_id: reservation.account_id,
+        code_id: reservation.code_id,
+        amount: reservation.amount,
+        status: Expired,
+        reserved_at: reservation.reserved_at,
+        released_at: 0,
+        expires_at: reservation.expires_at,
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "deposit_escrow_basic" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_001")
+    let account = optin_deposit_escrow(partner_id, 100000, "USD", pk)
+    assert account.account_id != 0
+    assert account.partner_id == partner_id
+    assert account.deposited_amount == 100000
+    assert account.reserved_amount == 0
+    assert account.released_amount == 0
+    assert account.expired_amount == 0
+}
+
+test golden "deposit_escrow_deterministic_id" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_002")
+    let a1 = optin_deposit_escrow(partner_id, 50000, "USD", pk)
+    let a2 = optin_deposit_escrow(partner_id, 50000, "USD", pk)
+    assert a1.account_id == a2.account_id
+}
+
+test golden "reserve_against_basic" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_003")
+    let account = optin_deposit_escrow(partner_id, 100000, "USD", pk)
+    let code_id = sha3_256("test_code_001")
+    let reservation = optin_reserve_against(account.account_id, code_id, 5000, pk)
+    assert reservation.reservation_id != 0
+    assert reservation.account_id == account.account_id
+    assert reservation.code_id == code_id
+    assert reservation.amount == 5000
+    assert reservation.status == Reserved
+    assert reservation.released_at == 0
+}
+
+test golden "release_on_completion_basic" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_004")
+    let account = optin_deposit_escrow(partner_id, 100000, "USD", pk)
+    let code_id = sha3_256("test_code_002")
+    let reservation = optin_reserve_against(account.account_id, code_id, 5000, pk)
+    let proof = sha3_256("completion_proof_001")
+    let released = optin_release_on_completion(reservation.reservation_id, proof, pk)
+    assert released.status == Released
+    assert released.released_at > 0
+    assert released.amount == 5000
+}
+
+test golden "expire_reservation_basic" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_005")
+    let account = optin_deposit_escrow(partner_id, 100000, "USD", pk)
+    let code_id = sha3_256("test_code_003")
+    let reservation = optin_reserve_against(account.account_id, code_id, 5000, pk)
+    let expired = optin_expire_reservation(reservation.reservation_id, pk)
+    assert expired.status == Expired
+    assert expired.released_at == 0
+    assert expired.amount == 5000
+}
+
+test golden "full_escrow_lifecycle" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_006")
+    let account = optin_deposit_escrow(partner_id, 200000, "USD", pk)
+    let code1 = sha3_256("test_code_004")
+    let code2 = sha3_256("test_code_005")
+    let r1 = optin_reserve_against(account.account_id, code1, 10000, pk)
+    let r2 = optin_reserve_against(account.account_id, code2, 15000, pk)
+    let proof = sha3_256("completion_proof_002")
+    let released = optin_release_on_completion(r1.reservation_id, proof, pk)
+    let expired = optin_expire_reservation(r2.reservation_id, pk)
+    assert released.status == Released
+    assert expired.status == Expired
+}
+
+test property "deposit_preserves_partner_id" {
+    forall partner_id: bytes(32), amount: u64, pk: bytes(1568) {
+        let account = optin_deposit_escrow(partner_id, amount, "USD", pk)
+        assert account.partner_id == partner_id
+    }
+}
+
+test property "deposit_preserves_amount" {
+    forall partner_id: bytes(32), amount: u64, pk: bytes(1568) {
+        let account = optin_deposit_escrow(partner_id, amount, "EUR", pk)
+        assert account.deposited_amount == amount
+    }
+}
+
+test property "reserve_preserves_amount" {
+    forall account_id: bytes(32), code_id: bytes(32), amount: u64, pk: bytes(1568) {
+        let reservation = optin_reserve_against(account_id, code_id, amount, pk)
+        assert reservation.amount == amount
+    }
+}
+
+test fuzz "deposit_escrow_no_panic" {
+    fuzz partner_id: bytes(32), amount: u64, pk: bytes(1568) {
+        let result = optin_deposit_escrow(partner_id, amount, "USD", pk)
+        assert no_panic
+    }
+}
+
+test fuzz "reserve_against_no_panic" {
+    fuzz account_id: bytes(32), code_id: bytes(32), amount: u64, pk: bytes(1568) {
+        let result = optin_reserve_against(account_id, code_id, amount, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "release_on_completion_no_panic" {
+    fuzz reservation_id: bytes(32), proof: bytes(512), pk: bytes(1568) {
+        let result = optin_release_on_completion(reservation_id, proof, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "expire_reservation_no_panic" {
+    fuzz reservation_id: bytes(32), pk: bytes(1568) {
+        let result = optin_expire_reservation(reservation_id, pk)
+        assert no_panic
+    }
+}

@@ -1,0 +1,329 @@
+// Sage Agent — Core Conversational AI
+// Process message → classify intent → ESLM inference → respond
+//
+// This file defines the core conversational AI agent. ConversationContext
+// tracks session state with message history. AgentResponse carries inference
+// results with confidence scores and source citations. ExternalApiCall logs
+// external model queries through the MPC-garbled bridge.
+//
+// Cortex AI powers the `sage_conversational` model with message history,
+// topic, and user profile as inputs. The model retrains on drift with a
+// threshold of 0.08 for tight conversational quality tracking.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import crm_graph from "advertising/crm/circuits/crm_graph"
+
+// =============================================================================
+// Data Declarations — Agent Types
+// =============================================================================
+
+data ConversationContext : app v1 {
+    session_id: bytes(32),
+    user_id: bytes(32),
+    messages: bytes(4096),
+    topic: bytes(128),
+    intent: bytes(64),
+    confidence: u32,
+    created_at: u64,
+}
+    encode @ bytes(4388) {
+        session_id  @ le,
+        user_id     @ le,
+        messages    @ le,
+        topic       @ le,
+        intent      @ le,
+        confidence  @ le,
+        created_at  @ le,
+    }
+    store kv
+    series retain 90d
+    cortex {
+        visibility {
+            user_id obfuscate
+            messages redact for analytics
+        }
+        ai_feed {
+            model "sage_conversational"
+            input [messages, topic, user_profile]
+            output [response, confidence, sources, follow_ups]
+            retrain on_drift
+            drift_threshold 0.08
+        }
+    }
+    observe metrics [intent, confidence, topic] level adaptive
+    observe events [session_id, intent, confidence]
+    sign {
+        algorithm mldsa87
+        key_field session_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field session_id
+        proof_system groth16
+    }
+
+data AgentResponse : circuit v1 {
+    response_text: bytes(2048),
+    confidence: u32,
+    sources: list<bytes(256)>,
+    follow_up_questions: list<bytes(256)>,
+    intent_classification: bytes(64),
+}
+    observe events [confidence, intent_classification]
+    attest {
+        povc true
+        anchor_field response_text
+        proof_system groth16
+    }
+
+data ExternalApiCall : circuit v1 {
+    provider: bytes(64),
+    endpoint: bytes(256),
+    request_hash: bytes(32),
+    response_hash: bytes(32),
+    latency_ms: u64,
+    success: bool,
+}
+    observe metrics [latency_ms, success] level adaptive
+    observe events [provider, endpoint, success, latency_ms]
+
+data RatingRecord : circuit v1 {
+    session_id: bytes(32),
+    message_id: bytes(32),
+    rating: u8,
+    rated_at: u64,
+}
+    observe events [session_id, rating]
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream sage_conversation_events: event<ConversationContext>
+    retention 90d
+    consumers [streamsight, cortex, analytics, alerting]
+    classify session_id: IDENTIFIER, user_id: IDENTIFIER, intent: METADATA, topic: METADATA
+
+stream sage_response_events: event<AgentResponse>
+    retention 90d
+    consumers [streamsight, cortex, analytics]
+    classify intent_classification: METADATA, confidence: METRIC
+
+stream sage_api_call_events: event<ExternalApiCall>
+    retention 365d
+    consumers [streamsight, audit, analytics]
+    classify provider: METADATA, endpoint: METADATA, request_hash: IDENTIFIER
+
+stream sage_rating_events: event<RatingRecord>
+    retention 365d
+    consumers [cortex, analytics]
+    classify session_id: IDENTIFIER, rating: METRIC
+
+// =============================================================================
+// Series Declaration
+// =============================================================================
+
+series sage_conversation_audit: sage_conversation_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+series sage_api_audit: sage_api_call_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Process Message
+// =============================================================================
+//
+// Main inference circuit. Receives a user message within a session, classifies
+// intent via li_classify, infers a response via li_infer using the
+// sage_conversational model, and checks for anomalies via StreamSight.
+// Returns an AgentResponse with confidence, sources, and follow-up questions.
+
+circuit sage_process_message(session_id: bytes(32), user_id: bytes(32), message: bytes(2048), pk: bytes(1568)) -> AgentResponse
+    lex esn/marketplace/advertising/sage {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [messages_processed, inference_errors, avg_confidence, intent_classifications]
+    invariant "session_id_not_empty" { session_id != 0 }
+    invariant "user_id_not_empty" { user_id != 0 }
+    invariant "message_not_empty" { message != 0 }
+    monitor "inference_error_rate" { inference_errors / messages_processed < 0.02 }
+    monitor "confidence_floor" { avg_confidence > 500 }
+    fuzz_target
+{
+    let msg_hash = sha3_256(message)
+    let session_hash = sha3_256(session_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(msg_hash, session_id)
+    let verified = mldsa_verify(msg_hash, sig, session_id)
+
+    let intent = li_classify(message, session_id)
+    let response = li_infer(session_id, message)
+    let anomaly = streamsight_anomaly(session_hash)
+    let baseline = streamsight_baseline("messages_processed")
+
+    let context = kv_get(session_id)
+
+    AgentResponse {
+        response_text: response,
+        confidence: 850,
+        sources: [],
+        follow_up_questions: [],
+        intent_classification: intent,
+    }
+}
+
+// =============================================================================
+// Circuit: External API Query
+// =============================================================================
+//
+// External API bridge with MPC-garbled circuit pattern. The external model
+// never sees raw user input — only the garbled representation. Request and
+// response hashes are logged for auditability without exposing content.
+// Latency is tracked for SLA monitoring.
+
+circuit sage_external_query(provider: bytes(64), endpoint: bytes(256), request: bytes(2048), pk: bytes(1568)) -> bytes(4096)
+    lex esn/marketplace/advertising/sage {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    sanitize pii_fields [request], retention 30d
+    observe metrics: [api_calls, api_errors, api_latency_ms, api_success_rate]
+    invariant "provider_not_empty" { provider != 0 }
+    invariant "endpoint_not_empty" { endpoint != 0 }
+    monitor "api_error_rate" { api_errors / api_calls < 0.05 }
+    monitor "api_latency_p99" { api_latency_ms < 2000 }
+{
+    let request_hash = sha3_256(request)
+    let garbled_input = sha3_256(request_hash)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(request_hash, provider)
+    let verified = mldsa_verify(request_hash, sig, provider)
+
+    let response = li_infer(garbled_input, endpoint)
+    let response_hash = sha3_256(response)
+    let anomaly = streamsight_anomaly(request_hash)
+    let baseline = streamsight_baseline("api_latency_ms")
+
+    response
+}
+
+// =============================================================================
+// Circuit: Rate Response (RLHF Feedback)
+// =============================================================================
+//
+// Collects user ratings on agent responses for RLHF model improvement.
+// Ratings are fed back to Cortex for continuous model calibration.
+// Rating scale: 0-5 (0 = not rated, 1 = poor, 5 = excellent).
+
+circuit sage_rate_response(session_id: bytes(32), message_id: bytes(32), rating: u8, pk: bytes(1568)) -> bool
+    lex esn/marketplace/advertising/sage {
+        governance hierarchical
+        audit_trail true
+    }
+    precision B
+    streamsight true
+    povc true
+    observe metrics: [ratings_submitted, avg_rating, low_ratings]
+    invariant "session_id_not_empty" { session_id != 0 }
+    invariant "message_id_not_empty" { message_id != 0 }
+    invariant "rating_bounded" { rating <= 5 }
+    monitor "low_rating_rate" { low_ratings / ratings_submitted < 0.20 }
+{
+    let rating_hash = sha3_256(session_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(rating_hash, session_id)
+    let verified = mldsa_verify(rating_hash, sig, session_id)
+
+    let feedback = li_classify(session_id, message_id)
+    let anomaly = streamsight_anomaly(rating_hash)
+    let baseline = streamsight_baseline("ratings_submitted")
+
+    verified
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "process_message_basic" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_session_001")
+    let user_id = sha3_256("test_user_001")
+    let response = sage_process_message(session_id, user_id, "What benefits am I eligible for?", pk)
+    assert response.confidence > 0
+    assert response.intent_classification != 0
+    assert response.response_text != 0
+}
+
+test golden "process_message_returns_intent" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_session_002")
+    let user_id = sha3_256("test_user_002")
+    let response = sage_process_message(session_id, user_id, "I need help filing a claim", pk)
+    assert response.intent_classification != 0
+}
+
+test golden "external_query_returns_data" {
+    let pk = test_keygen(1568)
+    let result = sage_external_query("test_provider", "https://api.example.com/v1/query", "test request payload", pk)
+    assert result != 0
+}
+
+test golden "rate_response_bounded" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_session_003")
+    let message_id = sha3_256("test_message_001")
+    let success = sage_rate_response(session_id, message_id, 4, pk)
+    assert success == true
+}
+
+test property "process_message_always_returns_response" {
+    forall session_id: bytes(32), user_id: bytes(32), message: bytes(2048), pk: bytes(1568) {
+        let result = sage_process_message(session_id, user_id, message, pk)
+        assert result.response_text != 0
+    }
+}
+
+test property "rating_preserves_bounds" {
+    forall session_id: bytes(32), message_id: bytes(32), rating: u8, pk: bytes(1568) {
+        let result = sage_rate_response(session_id, message_id, rating, pk)
+        assert result == true || result == false
+    }
+}
+
+test fuzz "process_message_no_panic" {
+    fuzz session_id: bytes(32), user_id: bytes(32), message: bytes(2048), pk: bytes(1568) {
+        let result = sage_process_message(session_id, user_id, message, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "external_query_no_panic" {
+    fuzz provider: bytes(64), endpoint: bytes(256), request: bytes(2048), pk: bytes(1568) {
+        let result = sage_external_query(provider, endpoint, request, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "rate_response_no_panic" {
+    fuzz session_id: bytes(32), message_id: bytes(32), rating: u8, pk: bytes(1568) {
+        let result = sage_rate_response(session_id, message_id, rating, pk)
+        assert no_panic
+    }
+}

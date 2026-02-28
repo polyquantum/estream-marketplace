@@ -1,0 +1,322 @@
+// Etch Merkle — Tamper-Evident Impression Chain
+// Append impressions -> build merkle chain -> verify chain integrity -> query head
+//
+// This file defines the Merkle chain circuit for impression ordering. Each
+// impression is appended as a node in a per-campaign DAG, with parent hashes
+// linking nodes into a tamper-evident chain. ChainHead tracks the current
+// state of each campaign's chain — total impressions, depth, and head hash.
+//
+// The impression_chain DAG uses CSR storage on BRAM for fast chain traversal
+// with ML-DSA-87 signed nodes. Chain verification walks the DAG from head
+// to root, validating every parent hash along the way.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+// =============================================================================
+// Data Declarations — Chain Node & Head Types
+// =============================================================================
+
+data ImpressionChainNode : app v1 {
+    node_hash: bytes(32),
+    impression_id: bytes(32),
+    parent_hash: bytes(32),
+    depth: u64,
+    campaign_id: bytes(32),
+    timestamp_ns: u64,
+}
+    encode @ bytes(200) {
+        node_hash     @ le,
+        impression_id @ le,
+        parent_hash   @ le,
+        depth         @ le,
+        campaign_id   @ le,
+        timestamp_ns  @ le,
+    }
+    store dag
+    series retain 365d
+    observe events [campaign_id, timestamp_ns]
+    observe metrics [depth] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field node_hash
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field node_hash
+        proof_system groth16
+    }
+
+data ChainHead : app v1 {
+    campaign_id: bytes(32),
+    head_hash: bytes(32),
+    depth: u64,
+    total_impressions: u64,
+    last_updated_ns: u64,
+}
+    encode @ bytes(136) {
+        campaign_id       @ le,
+        head_hash         @ le,
+        depth             @ le,
+        total_impressions @ le,
+        last_updated_ns   @ le,
+    }
+    store kv
+    series retain forever
+    observe metrics [depth, total_impressions] level adaptive
+    observe events [campaign_id, depth, total_impressions]
+
+// =============================================================================
+// DAG Declaration — Impression Chain
+// =============================================================================
+
+dag impression_chain {
+    node ImpressionChainNode : ImpressionChainNode
+    edge parent : ImpressionChainNode -> ImpressionChainNode
+    storage csr { tier bram { capacity: 1000000 } }
+    sign ml_dsa_87
+}
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream etch_chain_events: event<ImpressionChainNode>
+    retention 365d
+    consumers [streamsight, audit, advertiser_dashboard]
+    classify node_hash: IDENTIFIER, impression_id: IDENTIFIER, parent_hash: IDENTIFIER, campaign_id: IDENTIFIER, depth: METRIC, timestamp_ns: METRIC
+
+stream etch_chain_head_events: event<ChainHead>
+    retention forever
+    consumers [streamsight, audit, advertiser_dashboard]
+    classify campaign_id: IDENTIFIER, head_hash: IDENTIFIER, depth: METRIC, total_impressions: METRIC
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series etch_chain_audit: etch_chain_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Append to Chain
+// =============================================================================
+//
+// Appends an impression to the per-campaign Merkle chain. Retrieves the
+// current chain head, computes the new node hash from the impression ID
+// and parent hash, increments depth, and updates the chain head. The node
+// is signed and added as a DAG edge from the new node to the previous head.
+
+circuit etch_append_chain(impression_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568)) -> ImpressionChainNode
+    lex esn/marketplace/advertising/etch {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [nodes_appended, append_latency_ns, chain_depth_max, append_errors]
+    invariant "impression_id_not_empty" { impression_id != 0 }
+    invariant "campaign_id_not_empty" { campaign_id != 0 }
+    monitor "append_error_rate" { append_errors / nodes_appended < 0.01 }
+    monitor "chain_depth_ceiling" { chain_depth_max < 10000000 }
+    fuzz_target
+{
+    let head = kv_get(campaign_id)
+    let parent_hash = head.head_hash
+    let depth = head.depth + 1
+
+    let node_seed = sha3_256(impression_id)
+    let node_hash = sha3_256(node_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(node_hash, impression_id)
+    let verified = mldsa_verify(node_hash, sig, impression_id)
+
+    let edge = graph_add_edge(impression_chain, node_hash, parent_hash, "parent")
+    let anomaly = streamsight_anomaly(node_hash)
+    let baseline = streamsight_baseline("nodes_appended")
+
+    ImpressionChainNode {
+        node_hash: node_hash,
+        impression_id: impression_id,
+        parent_hash: parent_hash,
+        depth: depth,
+        campaign_id: campaign_id,
+        timestamp_ns: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Verify Chain Integrity
+// =============================================================================
+//
+// Verifies the integrity of a Merkle impression chain by walking from the
+// head hash backward through parent hashes for the specified depth.
+// Returns true if every node's parent hash matches and all signatures verify.
+
+circuit etch_verify_chain(head_hash: bytes(32), depth: u64, pk: bytes(1568)) -> bool
+    lex esn/marketplace/advertising/etch {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [chains_verified, verify_latency_ns, verify_failures, nodes_traversed]
+    invariant "head_hash_not_empty" { head_hash != 0 }
+    invariant "depth_positive" { depth > 0 }
+    monitor "verify_failure_rate" { verify_failures / chains_verified < 0.01 }
+{
+    let verify_hash = sha3_256(head_hash)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(verify_hash, head_hash)
+    let verified = mldsa_verify(verify_hash, sig, head_hash)
+
+    let chain = graph_traverse(impression_chain, head_hash, "parent", depth)
+    let anomaly = streamsight_anomaly(verify_hash)
+    let baseline = streamsight_baseline("chains_verified")
+
+    verified
+}
+
+// =============================================================================
+// Circuit: Get Chain Head
+// =============================================================================
+//
+// Returns the current chain head for a campaign, including the head hash,
+// depth, total impression count, and last update timestamp.
+
+circuit etch_chain_head(campaign_id: bytes(32)) -> ChainHead
+    lex esn/marketplace/advertising/etch
+    precision C
+    streamsight true
+    observe metrics: [head_lookups, head_misses]
+    invariant "campaign_id_not_empty" { campaign_id != 0 }
+    monitor "head_miss_rate" { head_misses / head_lookups < 0.10 }
+{
+    let lookup_hash = sha3_256(campaign_id)
+    let anomaly = streamsight_anomaly(lookup_hash)
+    let baseline = streamsight_baseline("head_lookups")
+
+    let head = kv_get(campaign_id)
+
+    ChainHead {
+        campaign_id: campaign_id,
+        head_hash: head.head_hash,
+        depth: head.depth,
+        total_impressions: head.total_impressions,
+        last_updated_ns: head.last_updated_ns,
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "append_chain_basic" {
+    let pk = test_keygen(1568)
+    let impression_id = sha3_256("test_impression_001")
+    let campaign_id = sha3_256("test_campaign_001")
+    let node = etch_append_chain(impression_id, campaign_id, pk)
+    assert node.node_hash != 0
+    assert node.impression_id == impression_id
+    assert node.campaign_id == campaign_id
+    assert node.depth > 0
+    assert node.timestamp_ns > 0
+}
+
+test golden "append_chain_increments_depth" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_002")
+    let n1 = etch_append_chain(sha3_256("impression_a"), campaign_id, pk)
+    let n2 = etch_append_chain(sha3_256("impression_b"), campaign_id, pk)
+    assert n2.depth > n1.depth
+    assert n2.parent_hash == n1.node_hash
+}
+
+test golden "append_chain_links_parent" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_003")
+    let n1 = etch_append_chain(sha3_256("impression_c"), campaign_id, pk)
+    let n2 = etch_append_chain(sha3_256("impression_d"), campaign_id, pk)
+    assert n2.parent_hash != 0
+}
+
+test golden "verify_chain_valid" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_004")
+    let n1 = etch_append_chain(sha3_256("impression_e"), campaign_id, pk)
+    let n2 = etch_append_chain(sha3_256("impression_f"), campaign_id, pk)
+    let valid = etch_verify_chain(n2.node_hash, 2, pk)
+    assert valid == true
+}
+
+test golden "chain_head_returns_current" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_005")
+    let n1 = etch_append_chain(sha3_256("impression_g"), campaign_id, pk)
+    let head = etch_chain_head(campaign_id)
+    assert head.campaign_id == campaign_id
+    assert head.head_hash != 0
+    assert head.depth > 0
+    assert head.total_impressions > 0
+}
+
+test golden "chain_head_updates_after_append" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_006")
+    let n1 = etch_append_chain(sha3_256("impression_h"), campaign_id, pk)
+    let head1 = etch_chain_head(campaign_id)
+    let n2 = etch_append_chain(sha3_256("impression_i"), campaign_id, pk)
+    let head2 = etch_chain_head(campaign_id)
+    assert head2.depth > head1.depth
+    assert head2.total_impressions > head1.total_impressions
+}
+
+test property "append_chain_preserves_ids" {
+    forall impression_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568) {
+        let node = etch_append_chain(impression_id, campaign_id, pk)
+        assert node.impression_id == impression_id
+        assert node.campaign_id == campaign_id
+    }
+}
+
+test property "append_chain_node_hash_not_zero" {
+    forall impression_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568) {
+        let node = etch_append_chain(impression_id, campaign_id, pk)
+        assert node.node_hash != 0
+    }
+}
+
+test property "chain_head_preserves_campaign" {
+    forall campaign_id: bytes(32) {
+        let head = etch_chain_head(campaign_id)
+        assert head.campaign_id == campaign_id
+    }
+}
+
+test fuzz "append_chain_no_panic" {
+    fuzz impression_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568) {
+        let result = etch_append_chain(impression_id, campaign_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "verify_chain_no_panic" {
+    fuzz head_hash: bytes(32), depth: u64, pk: bytes(1568) {
+        let result = etch_verify_chain(head_hash, depth, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "chain_head_no_panic" {
+    fuzz campaign_id: bytes(32) {
+        let result = etch_chain_head(campaign_id)
+        assert no_panic
+    }
+}

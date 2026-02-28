@@ -1,0 +1,44 @@
+[component]
+name = "estream-thread"
+version = "0.1.0"
+category = "smart-circuit"
+implementation_type = "FastLang"
+status = "Draft"
+description = "Provenance chain — full verifiable click path from ad impression through landing page to conversion, with per-session lattice chains and zero-knowledge path proofs"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-thread"
+readme = "README.md"
+keywords = ["provenance", "click-path", "attribution", "verification", "lattice", "zk-proofs", "advertising"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "usage-based"
+visibility = "open"
+
+[component.estream]
+min_version = "0.10.0"
+
+[component.dependencies]
+estream-etch = "^0.1.0"
+
+[component.schemas]
+provides = ["ProvenanceHop", "SessionChain", "PathProof", "PathVerification"]
+requires = []
+
+[component.circuits]
+provides = ["thread_chain", "thread_proof"]
+target = ["cpu", "fpga"]
+
+[component.lifecycle]
+status = "draft"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
+
+[component.include]
+circuits = ["circuits/*.fl"]
+docs = ["README.md"]

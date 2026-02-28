@@ -1,0 +1,329 @@
+// Sage Content — SEO Content Generation and Management
+// Generate → score → link into topic clusters
+//
+// This file defines the SEO content pipeline. ContentNode stores generated
+// content with topic metadata, keyword lists, and SEO scores. Content nodes
+// are graph-linked into topic clusters via the content_graph, enabling
+// automated internal linking and topic authority signals.
+//
+// Cortex AI powers the `sage_seo_optimizer` model with title, topic, keywords,
+// and engagement metrics as inputs. The model suggests high-value keywords and
+// title variants, retraining on drift.
+//
+// Content can be generated from conversation data (linked via `generated_from`
+// edges to ConversationContext), creating a closed loop between user questions
+// and published knowledge base articles.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import sage_agent from "advertising/sage/circuits/sage_agent"
+
+// =============================================================================
+// Data Declarations — Content Types
+// =============================================================================
+
+data ContentNode : app v1 {
+    content_id: bytes(32),
+    title: bytes(256),
+    body_hash: bytes(32),
+    topic: bytes(128),
+    keywords: bytes(512),
+    seo_score: u64,
+    created_at: u64,
+    published: bool,
+}
+    encode @ bytes(1001) {
+        content_id  @ le,
+        title       @ le,
+        body_hash   @ le,
+        topic       @ le,
+        keywords    @ le,
+        seo_score   @ le,
+        created_at  @ le,
+        published   @ le,
+    }
+    store graph
+    store kv
+    series retain 365d
+    cortex {
+        ai_feed {
+            model "sage_seo_optimizer"
+            input [title, topic, keywords, engagement_metrics]
+            output [seo_score, suggested_keywords, title_variants]
+            retrain on_drift
+            drift_threshold 0.10
+        }
+    }
+    observe metrics [seo_score, topic, published] level adaptive
+    observe events [content_id, seo_score, published]
+    sign {
+        algorithm mldsa87
+        key_field content_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field content_id
+        proof_system groth16
+    }
+
+data TopicInfo : circuit v1 {
+    topic_id: bytes(32),
+    topic_name: bytes(128),
+    content_count: u32,
+    avg_seo_score: u64,
+}
+    observe events [topic_id, content_count, avg_seo_score]
+
+data ContentInfo : circuit v1 {
+    content_id: bytes(32),
+    title: bytes(256),
+    seo_score: u64,
+    published: bool,
+}
+    observe events [content_id, seo_score, published]
+
+data ContentScore : circuit v1 {
+    content_id: bytes(32),
+    seo_score: u64,
+    keyword_density: u32,
+    readability_score: u32,
+    suggested_keywords: bytes(512),
+}
+    observe metrics [seo_score, keyword_density, readability_score] level adaptive
+    observe events [content_id, seo_score]
+
+// =============================================================================
+// Graph Declaration
+// =============================================================================
+
+graph content_graph {
+    node ContentNode : ContentInfo
+    node Topic : TopicInfo
+    edge covers_topic : ContentNode -> Topic
+    edge related : ContentNode -> ContentNode
+    edge generated_from : ContentNode -> ConversationContext
+    storage csr { tier bram { capacity: 50000 } }
+    sign ml_dsa_87
+    ai_feed topic_clustering
+    observe streamsight: [content_count, seo_score_avg] threshold: {
+        seo_score_avg 0.9
+        baseline_window 86400
+    }
+}
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream sage_content_events: event<ContentNode>
+    retention 365d
+    consumers [streamsight, cortex, analytics, alerting]
+    classify content_id: IDENTIFIER, topic: METADATA, seo_score: METRIC
+
+stream sage_content_score_events: event<ContentScore>
+    retention 365d
+    consumers [streamsight, cortex, analytics]
+    classify content_id: IDENTIFIER, seo_score: METRIC
+
+// =============================================================================
+// Series Declaration
+// =============================================================================
+
+series sage_content_audit: sage_content_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Generate Content
+// =============================================================================
+//
+// Generates SEO-optimized content from a topic, keyword list, and optional
+// source conversations. The body is hashed (never stored in plaintext on-chain).
+// A ContentNode is created in the content_graph with a `covers_topic` edge
+// to the relevant Topic node.
+
+circuit sage_generate_content(topic: bytes(128), keywords: bytes(512), source_conversations: bytes(2048), pk: bytes(1568)) -> ContentNode
+    lex esn/marketplace/advertising/sage {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [content_generated, generation_errors, avg_seo_score]
+    invariant "topic_not_empty" { topic != 0 }
+    invariant "keywords_not_empty" { keywords != 0 }
+    monitor "generation_error_rate" { generation_errors / content_generated < 0.05 }
+    monitor "seo_quality_floor" { avg_seo_score > 700 }
+    fuzz_target
+{
+    let topic_hash = sha3_256(topic)
+    let content_id = sha3_256(topic_hash)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(content_id, topic)
+    let verified = mldsa_verify(content_id, sig, topic)
+
+    let generated_title = li_infer(topic, keywords)
+    let body = li_infer(topic, source_conversations)
+    let body_hash = sha3_256(body)
+    let seo = li_classify(topic, keywords)
+    let anomaly = streamsight_anomaly(content_id)
+    let baseline = streamsight_baseline("content_generated")
+    let now = 0
+
+    let topic_edge = graph_add_edge(content_graph, content_id, topic_hash, "covers_topic")
+
+    ContentNode {
+        content_id: content_id,
+        title: generated_title,
+        body_hash: body_hash,
+        topic: topic,
+        keywords: keywords,
+        seo_score: 800,
+        created_at: now,
+        published: false,
+    }
+}
+
+// =============================================================================
+// Circuit: Score Content
+// =============================================================================
+//
+// Evaluates the SEO potential of existing content. Computes keyword density,
+// readability, and overall SEO score. The Cortex sage_seo_optimizer model
+// suggests improvements.
+
+circuit sage_score_content(content_id: bytes(32), pk: bytes(1568)) -> u64
+    lex esn/marketplace/advertising/sage {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    streamsight true
+    povc true
+    observe metrics: [content_scored, scoring_errors, score_distribution]
+    invariant "content_id_not_empty" { content_id != 0 }
+    monitor "scoring_error_rate" { scoring_errors / content_scored < 0.02 }
+{
+    let score_hash = sha3_256(content_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(score_hash, content_id)
+    let verified = mldsa_verify(score_hash, sig, content_id)
+
+    let current = kv_get(content_id)
+    let seo_analysis = li_infer(content_id, current.keywords)
+    let anomaly = streamsight_anomaly(score_hash)
+    let baseline = streamsight_baseline("content_scored")
+
+    let score = li_classify(current.title, current.keywords)
+    score
+}
+
+// =============================================================================
+// Circuit: Link Content
+// =============================================================================
+//
+// Builds topic cluster relationships between content nodes. Creates `related`
+// edges in the content_graph. Topic clustering strengthens internal linking
+// and signals topic authority for SEO.
+
+circuit sage_link_content(content_id: bytes(32), related_ids: bytes(1024), pk: bytes(1568)) -> bool
+    lex esn/marketplace/advertising/sage {
+        governance hierarchical
+        audit_trail true
+    }
+    precision B
+    streamsight true
+    povc true
+    witness threshold(2, 3)
+    observe metrics: [content_linked, link_errors, edges_created]
+    invariant "content_id_not_empty" { content_id != 0 }
+    invariant "related_ids_not_empty" { related_ids != 0 }
+    monitor "link_error_rate" { link_errors / content_linked < 0.05 }
+{
+    let link_hash = sha3_256(content_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(link_hash, content_id)
+    let verified = mldsa_verify(link_hash, sig, content_id)
+
+    let edge = graph_add_edge(content_graph, content_id, related_ids, "related")
+    let anomaly = streamsight_anomaly(link_hash)
+    let baseline = streamsight_baseline("content_linked")
+
+    verified
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "generate_content_basic" {
+    let pk = test_keygen(1568)
+    let content = sage_generate_content("disability benefits overview", "va benefits, disability rating, compensation", "", pk)
+    assert content.content_id != 0
+    assert content.topic == "disability benefits overview"
+    assert content.seo_score > 0
+    assert content.published == false
+}
+
+test golden "generate_content_from_conversations" {
+    let pk = test_keygen(1568)
+    let content = sage_generate_content("claim filing guide", "va claim, file claim, evidence", "user asked about filing process", pk)
+    assert content.content_id != 0
+    assert content.body_hash != 0
+}
+
+test golden "score_content_returns_value" {
+    let pk = test_keygen(1568)
+    let content = sage_generate_content("pension eligibility", "pension, eligibility, wartime", "", pk)
+    let score = sage_score_content(content.content_id, pk)
+    assert score > 0
+}
+
+test golden "link_content_creates_edges" {
+    let pk = test_keygen(1568)
+    let c1 = sage_generate_content("topic A", "keyword_a, keyword_b", "", pk)
+    let c2 = sage_generate_content("topic B", "keyword_c, keyword_d", "", pk)
+    let linked = sage_link_content(c1.content_id, c2.content_id, pk)
+    assert linked == true
+}
+
+test property "generated_content_has_valid_id" {
+    forall topic: bytes(128), keywords: bytes(512), sources: bytes(2048), pk: bytes(1568) {
+        let result = sage_generate_content(topic, keywords, sources, pk)
+        assert result.content_id != 0
+    }
+}
+
+test property "score_is_deterministic" {
+    forall content_id: bytes(32), pk: bytes(1568) {
+        let s1 = sage_score_content(content_id, pk)
+        let s2 = sage_score_content(content_id, pk)
+        assert s1 == s2
+    }
+}
+
+test fuzz "generate_content_no_panic" {
+    fuzz topic: bytes(128), keywords: bytes(512), sources: bytes(2048), pk: bytes(1568) {
+        let result = sage_generate_content(topic, keywords, sources, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "score_content_no_panic" {
+    fuzz content_id: bytes(32), pk: bytes(1568) {
+        let result = sage_score_content(content_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "link_content_no_panic" {
+    fuzz content_id: bytes(32), related_ids: bytes(1024), pk: bytes(1568) {
+        let result = sage_link_content(content_id, related_ids, pk)
+        assert no_panic
+    }
+}

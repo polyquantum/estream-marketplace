@@ -1,0 +1,636 @@
+// Relay Affiliate — Referral Links, Attribution Tracking & Compensation
+// Create links -> record clicks -> record conversions -> calculate compensation -> measure virality
+//
+// This file defines the affiliate and referral platform circuit. ReferralLink
+// tracks per-link state (clicks, conversions) with graph edges connecting
+// referrers to referees. ReferralTree stores the multi-level referral chain
+// as a signed graph structure. Compensation records are PoVC-attested with
+// 7-year retention for financial audit compliance.
+//
+// The referral_graph uses CSR storage on BRAM for fast chain traversal with
+// ML-DSA-87 signed edges. Cortex AI powers viral coefficient analysis at the
+// graph level, with an inference-on-threshold consumer that fires when the
+// viral coefficient exceeds 1.5.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import crm_graph from "advertising/crm/circuits/crm_graph"
+
+// =============================================================================
+// Data Declarations — Referral & Compensation Types
+// =============================================================================
+
+data ReferralLink : app v1 {
+    link_id: bytes(32),
+    referrer_id: bytes(32),
+    campaign_id: bytes(32),
+    code: bytes(64),
+    created_at: u64,
+    expires_at: u64,
+    click_count: u64,
+    conversion_count: u64,
+}
+    encode @ bytes(216) {
+        link_id          @ le,
+        referrer_id      @ le,
+        campaign_id      @ le,
+        code             @ le,
+        created_at       @ le,
+        expires_at       @ le,
+        click_count      @ le,
+        conversion_count @ le,
+    }
+    store kv
+    store graph
+    series retain 365d
+    observe events [click_count, conversion_count]
+    observe metrics [click_count, conversion_count] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field link_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field link_id
+        proof_system groth16
+    }
+
+data ReferrerInfo : circuit v1 {
+    referrer_id: bytes(32),
+    name: bytes(128),
+    total_referrals: u64,
+    total_compensation: u64,
+}
+    observe events [referrer_id, total_referrals]
+
+data RefereeInfo : circuit v1 {
+    referee_id: bytes(32),
+    referred_by: bytes(32),
+    converted: u8,
+    converted_at: u64,
+}
+    observe events [referee_id, converted]
+
+data CampaignInfo : circuit v1 {
+    campaign_id: bytes(32),
+    name: bytes(128),
+    active: u8,
+    commission_rate_bps: u32,
+}
+    observe events [campaign_id, active]
+
+data ReferralTree : circuit v1 {
+    tree_id: bytes(32),
+    root_referrer_id: bytes(32),
+    depth: u32,
+    total_nodes: u64,
+    total_conversions: u64,
+}
+    store graph
+    sign {
+        algorithm mldsa87
+        key_field tree_id
+        detached true
+    }
+    observe metrics [depth, total_nodes, total_conversions] level adaptive
+    observe events [tree_id, depth, total_conversions]
+
+// CompensationStatus: 0 = Pending, 1 = Approved, 2 = Paid, 3 = Expired
+
+data Compensation : app v1 {
+    comp_id: bytes(32),
+    referrer_id: bytes(32),
+    referee_id: bytes(32),
+    campaign_id: bytes(32),
+    amount: u64,
+    currency: bytes(8),
+    status: u8,
+    earned_at: u64,
+    paid_at: u64,
+}
+    encode @ bytes(181) {
+        comp_id      @ le,
+        referrer_id  @ le,
+        referee_id   @ le,
+        campaign_id  @ le,
+        amount       @ le,
+        currency     @ le,
+        status       @ le,
+        earned_at    @ le,
+        paid_at      @ le,
+    }
+    store kv
+    series retain 7y
+    cortex {
+        visibility {
+            referrer_id obfuscate
+            referee_id obfuscate
+            amount expose
+        }
+    }
+    observe events [amount, status]
+    observe metrics [amount, status] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field comp_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field comp_id
+        proof_system groth16
+    }
+
+data ViralMetrics : circuit v1 {
+    campaign_id: bytes(32),
+    period: bytes(32),
+    viral_coefficient: u32,
+    referrals_per_user: u32,
+    depth_avg: u32,
+    revenue_per_referral: u64,
+    total_compensation: u64,
+}
+    encode @ bytes(100) {
+        campaign_id          @ le,
+        period               @ le,
+        viral_coefficient    @ le,
+        referrals_per_user   @ le,
+        depth_avg            @ le,
+        revenue_per_referral @ le,
+        total_compensation   @ le,
+    }
+    store series retain 365d
+    cortex {
+        inference on_threshold {
+            consumer "relay_viral_detector"
+            threshold viral_coefficient > 1.5
+        }
+    }
+    observe metrics [viral_coefficient, referrals_per_user, depth_avg] level adaptive
+    observe events [viral_coefficient, referrals_per_user, depth_avg]
+    sign {
+        algorithm mldsa87
+        key_field campaign_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field campaign_id
+        proof_system groth16
+    }
+
+// =============================================================================
+// Graph Declaration — Referral Network
+// =============================================================================
+
+graph referral_graph {
+    node Referrer : ReferrerInfo
+    node Referee : RefereeInfo
+    node Campaign : CampaignInfo
+    edge referred : Referrer -> Referee
+    edge belongs_to : ReferralLink -> Campaign
+    edge earned : Referrer -> Compensation
+    storage csr { tier bram { capacity: 500000 } }
+    sign ml_dsa_87
+    ai_feed viral_coefficient_analysis
+    observe streamsight: [referral_depth, viral_coefficient] threshold: {
+        viral_coefficient 0.9
+        baseline_window 86400
+    }
+}
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream relay_link_events: event<ReferralLink>
+    | filter record.click_count > 0
+    | throttle 1000/s burst 5000
+    retention 365d
+    consumers [streamsight, cortex, analytics, alerting]
+    classify link_id: IDENTIFIER, referrer_id: IDENTIFIER, campaign_id: IDENTIFIER, click_count: METRIC, conversion_count: METRIC
+
+stream relay_compensation_events: event<Compensation>
+    retention 7y
+    consumers [streamsight, audit, cortex, analytics, alerting]
+    classify comp_id: IDENTIFIER, referrer_id: IDENTIFIER, referee_id: IDENTIFIER, amount: METRIC, status: METADATA
+
+stream relay_viral_events: event<ViralMetrics>
+    retention 365d
+    consumers [streamsight, cortex, analytics, alerting]
+    classify campaign_id: IDENTIFIER, period: IDENTIFIER, viral_coefficient: METRIC, referrals_per_user: METRIC
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series relay_compensation_audit: relay_compensation_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+series relay_viral_audit: relay_viral_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Create Referral Link
+// =============================================================================
+//
+// Creates a new referral link for a referrer in a campaign. The link ID is
+// derived deterministically from the referrer and campaign IDs. A `referred`
+// edge placeholder is created in the referral graph. Click and conversion
+// counts start at zero.
+
+circuit relay_create_link(referrer_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568)) -> ReferralLink
+    lex esn/marketplace/advertising/relay {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [links_created, creation_errors, links_by_campaign]
+    invariant "referrer_id_not_empty" { referrer_id != 0 }
+    invariant "campaign_id_not_empty" { campaign_id != 0 }
+    monitor "creation_error_rate" { creation_errors / links_created < 0.01 }
+    fuzz_target
+{
+    let link_seed = sha3_256(referrer_id)
+    let link_id = sha3_256(link_seed)
+    let code = sha3_256(campaign_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(link_id, referrer_id)
+    let verified = mldsa_verify(link_id, sig, referrer_id)
+
+    let anomaly = streamsight_anomaly(link_id)
+    let baseline = streamsight_baseline("links_created")
+
+    let edge = graph_add_edge(referral_graph, referrer_id, link_id, "belongs_to")
+
+    ReferralLink {
+        link_id: link_id,
+        referrer_id: referrer_id,
+        campaign_id: campaign_id,
+        code: code,
+        created_at: timestamp(),
+        expires_at: 0,
+        click_count: 0,
+        conversion_count: 0,
+    }
+}
+
+// =============================================================================
+// Circuit: Record Click
+// =============================================================================
+//
+// Increments the click count on an existing referral link. Each click is
+// signed and fed to StreamSight for traffic anomaly detection (bot
+// filtering, click fraud).
+
+circuit relay_record_click(link_id: bytes(32), pk: bytes(1568)) -> ReferralLink
+    lex esn/marketplace/advertising/relay {
+        governance hierarchical
+        audit_trail true
+    }
+    precision B
+    streamsight true
+    povc true
+    observe metrics: [clicks_recorded, click_errors, clicks_per_link_avg]
+    invariant "link_id_not_empty" { link_id != 0 }
+    monitor "click_error_rate" { click_errors / clicks_recorded < 0.01 }
+    monitor "click_fraud_threshold" { clicks_per_link_avg < 10000 }
+{
+    let click_hash = sha3_256(link_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(click_hash, link_id)
+    let verified = mldsa_verify(click_hash, sig, link_id)
+
+    let current = kv_get(link_id)
+    let anomaly = streamsight_anomaly(click_hash)
+    let baseline = streamsight_baseline("clicks_recorded")
+
+    ReferralLink {
+        link_id: link_id,
+        referrer_id: current.referrer_id,
+        campaign_id: current.campaign_id,
+        code: current.code,
+        created_at: current.created_at,
+        expires_at: current.expires_at,
+        click_count: current.click_count + 1,
+        conversion_count: current.conversion_count,
+    }
+}
+
+// =============================================================================
+// Circuit: Record Conversion
+// =============================================================================
+//
+// Records a conversion event when a referee completes the target action.
+// Increments the conversion count on the link, creates a `referred` edge
+// from the referrer to the referee in the referral graph, and generates
+// a Compensation record in Pending status.
+
+circuit relay_record_conversion(link_id: bytes(32), referee_id: bytes(32), pk: bytes(1568)) -> Compensation
+    lex esn/marketplace/advertising/relay {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    witness threshold(2, 3)
+    observe metrics: [conversions_recorded, conversion_errors, conversion_rate, avg_compensation]
+    invariant "link_id_not_empty" { link_id != 0 }
+    invariant "referee_id_not_empty" { referee_id != 0 }
+    monitor "conversion_error_rate" { conversion_errors / conversions_recorded < 0.02 }
+    fuzz_target
+{
+    let conversion_hash = sha3_256(link_id)
+    let comp_id = sha3_256(referee_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(conversion_hash, link_id)
+    let verified = mldsa_verify(conversion_hash, sig, link_id)
+
+    let link = kv_get(link_id)
+    let campaign = kv_get(link.campaign_id)
+
+    let edge = graph_add_edge(referral_graph, link.referrer_id, referee_id, "referred")
+    let comp_edge = graph_add_edge(referral_graph, link.referrer_id, comp_id, "earned")
+    let anomaly = streamsight_anomaly(conversion_hash)
+    let baseline = streamsight_baseline("conversions_recorded")
+
+    Compensation {
+        comp_id: comp_id,
+        referrer_id: link.referrer_id,
+        referee_id: referee_id,
+        campaign_id: link.campaign_id,
+        amount: 0,
+        currency: "USD",
+        status: 0,
+        earned_at: timestamp(),
+        paid_at: 0,
+    }
+}
+
+// =============================================================================
+// Circuit: Calculate Compensation
+// =============================================================================
+//
+// Computes multi-level attribution compensation for a referrer in a campaign.
+// Traverses the referral graph to resolve the referral chain depth and
+// calculates tiered commission. Transitions compensation status from
+// Pending to Approved.
+
+circuit relay_calculate_compensation(referrer_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568)) -> Compensation
+    lex esn/marketplace/advertising/relay {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    witness threshold(2, 3)
+    observe metrics: [compensations_calculated, total_amount_distributed, avg_compensation_amount, calculation_errors]
+    invariant "referrer_id_not_empty" { referrer_id != 0 }
+    invariant "campaign_id_not_empty" { campaign_id != 0 }
+    property safety "compensation_non_negative" { total_amount_distributed >= 0 }
+    monitor "calculation_error_rate" { calculation_errors / compensations_calculated < 0.01 }
+    esz_emit "verify/relay_calculate_compensation.esz"
+    li_feed full_escir true, optimized_ir true
+{
+    let calc_hash = sha3_256(referrer_id)
+    let comp_id = sha3_256(campaign_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(calc_hash, referrer_id)
+    let verified = mldsa_verify(calc_hash, sig, referrer_id)
+
+    let chain = graph_traverse(referral_graph, referrer_id, "referred", 5)
+    let campaign = kv_get(campaign_id)
+    let attribution = li_infer(referrer_id, campaign_id)
+    let classification = li_classify(referrer_id, campaign_id)
+    let anomaly = streamsight_anomaly(calc_hash)
+    let baseline = streamsight_baseline("compensations_calculated")
+
+    Compensation {
+        comp_id: comp_id,
+        referrer_id: referrer_id,
+        referee_id: 0,
+        campaign_id: campaign_id,
+        amount: attribution,
+        currency: "USD",
+        status: 1,
+        earned_at: timestamp(),
+        paid_at: 0,
+    }
+}
+
+// =============================================================================
+// Circuit: Viral Metrics
+// =============================================================================
+//
+// Computes viral growth metrics for a campaign over a given period. The viral
+// coefficient measures average referrals per user — a coefficient above 1.0
+// indicates organic growth. Cortex AI triggers the relay_viral_detector
+// consumer when the coefficient exceeds 1.5.
+
+circuit relay_viral_metrics(campaign_id: bytes(32), period: bytes(32), pk: bytes(1568)) -> ViralMetrics
+    lex esn/marketplace/advertising/relay {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [metrics_computed, avg_viral_coefficient, avg_depth, high_virality_campaigns]
+    invariant "campaign_id_not_empty" { campaign_id != 0 }
+    invariant "period_not_empty" { period != 0 }
+    monitor "viral_coefficient_ceiling" { avg_viral_coefficient < 10.0 }
+    monitor "depth_ceiling" { avg_depth < 20 }
+    fuzz_target
+{
+    let metrics_hash = sha3_256(campaign_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(metrics_hash, campaign_id)
+    let verified = mldsa_verify(metrics_hash, sig, campaign_id)
+
+    let graph_stats = li_infer(campaign_id, period)
+    let viral_analysis = li_classify(campaign_id, period)
+    let anomaly = streamsight_anomaly(metrics_hash)
+    let baseline = streamsight_baseline("avg_viral_coefficient")
+
+    ViralMetrics {
+        campaign_id: campaign_id,
+        period: period,
+        viral_coefficient: graph_stats,
+        referrals_per_user: graph_stats,
+        depth_avg: viral_analysis,
+        revenue_per_referral: graph_stats,
+        total_compensation: graph_stats,
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "create_link_basic" {
+    let pk = test_keygen(1568)
+    let referrer_id = sha3_256("test_referrer_001")
+    let campaign_id = sha3_256("test_campaign_001")
+    let link = relay_create_link(referrer_id, campaign_id, pk)
+    assert link.link_id != 0
+    assert link.referrer_id == referrer_id
+    assert link.campaign_id == campaign_id
+    assert link.code != 0
+    assert link.click_count == 0
+    assert link.conversion_count == 0
+    assert link.created_at > 0
+}
+
+test golden "create_link_deterministic_id" {
+    let pk = test_keygen(1568)
+    let referrer_id = sha3_256("test_referrer_002")
+    let campaign_id = sha3_256("test_campaign_002")
+    let link1 = relay_create_link(referrer_id, campaign_id, pk)
+    let link2 = relay_create_link(referrer_id, campaign_id, pk)
+    assert link1.link_id == link2.link_id
+}
+
+test golden "record_click_increments_count" {
+    let pk = test_keygen(1568)
+    let referrer_id = sha3_256("test_referrer_003")
+    let campaign_id = sha3_256("test_campaign_003")
+    let link = relay_create_link(referrer_id, campaign_id, pk)
+    let clicked = relay_record_click(link.link_id, pk)
+    assert clicked.click_count == 1
+    assert clicked.link_id == link.link_id
+    assert clicked.referrer_id == referrer_id
+}
+
+test golden "record_conversion_creates_compensation" {
+    let pk = test_keygen(1568)
+    let referrer_id = sha3_256("test_referrer_004")
+    let campaign_id = sha3_256("test_campaign_004")
+    let referee_id = sha3_256("test_referee_001")
+    let link = relay_create_link(referrer_id, campaign_id, pk)
+    let comp = relay_record_conversion(link.link_id, referee_id, pk)
+    assert comp.comp_id != 0
+    assert comp.referrer_id == referrer_id
+    assert comp.referee_id == referee_id
+    assert comp.campaign_id == campaign_id
+    assert comp.status == 0
+    assert comp.earned_at > 0
+}
+
+test golden "calculate_compensation_approves" {
+    let pk = test_keygen(1568)
+    let referrer_id = sha3_256("test_referrer_005")
+    let campaign_id = sha3_256("test_campaign_005")
+    let comp = relay_calculate_compensation(referrer_id, campaign_id, pk)
+    assert comp.referrer_id == referrer_id
+    assert comp.campaign_id == campaign_id
+    assert comp.status == 1
+    assert comp.amount >= 0
+}
+
+test golden "viral_metrics_returns_coefficients" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_006")
+    let period = sha3_256("2025-Q1")
+    let metrics = relay_viral_metrics(campaign_id, period, pk)
+    assert metrics.campaign_id == campaign_id
+    assert metrics.period == period
+    assert metrics.viral_coefficient >= 0
+    assert metrics.referrals_per_user >= 0
+    assert metrics.depth_avg >= 0
+}
+
+test golden "viral_metrics_has_revenue" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_007")
+    let period = sha3_256("2025-Q2")
+    let metrics = relay_viral_metrics(campaign_id, period, pk)
+    assert metrics.revenue_per_referral >= 0
+    assert metrics.total_compensation >= 0
+}
+
+test property "create_link_preserves_ids" {
+    forall referrer_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568) {
+        let link = relay_create_link(referrer_id, campaign_id, pk)
+        assert link.referrer_id == referrer_id
+        assert link.campaign_id == campaign_id
+    }
+}
+
+test property "record_click_preserves_link_id" {
+    forall link_id: bytes(32), pk: bytes(1568) {
+        let clicked = relay_record_click(link_id, pk)
+        assert clicked.link_id == link_id
+    }
+}
+
+test property "record_conversion_preserves_referee" {
+    forall link_id: bytes(32), referee_id: bytes(32), pk: bytes(1568) {
+        let comp = relay_record_conversion(link_id, referee_id, pk)
+        assert comp.referee_id == referee_id
+    }
+}
+
+test property "calculate_compensation_preserves_ids" {
+    forall referrer_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568) {
+        let comp = relay_calculate_compensation(referrer_id, campaign_id, pk)
+        assert comp.referrer_id == referrer_id
+        assert comp.campaign_id == campaign_id
+    }
+}
+
+test property "viral_metrics_preserves_campaign" {
+    forall campaign_id: bytes(32), period: bytes(32), pk: bytes(1568) {
+        let metrics = relay_viral_metrics(campaign_id, period, pk)
+        assert metrics.campaign_id == campaign_id
+        assert metrics.period == period
+    }
+}
+
+test fuzz "create_link_no_panic" {
+    fuzz referrer_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568) {
+        let result = relay_create_link(referrer_id, campaign_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "record_click_no_panic" {
+    fuzz link_id: bytes(32), pk: bytes(1568) {
+        let result = relay_record_click(link_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "record_conversion_no_panic" {
+    fuzz link_id: bytes(32), referee_id: bytes(32), pk: bytes(1568) {
+        let result = relay_record_conversion(link_id, referee_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "calculate_compensation_no_panic" {
+    fuzz referrer_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568) {
+        let result = relay_calculate_compensation(referrer_id, campaign_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "viral_metrics_no_panic" {
+    fuzz campaign_id: bytes(32), period: bytes(32), pk: bytes(1568) {
+        let result = relay_viral_metrics(campaign_id, period, pk)
+        assert no_panic
+    }
+}

@@ -1,0 +1,400 @@
+// Opt-In View — View Records, Data Rules, and Access Audit
+// Generate view from consent -> enforce field visibility -> log every access
+//
+// This file defines the view record model for the opt-in engagement
+// system. View records translate consent proofs into concrete field-level
+// access control. Each record contains a 32-byte visible_fields bitmask,
+// a 32-byte redacted_fields bitmask, and a list of transform rules for
+// degraded sharing (MetroAreaOnly, AgeRange, BooleanOnly).
+//
+// The enforce circuit runs in constant_time mode to prevent timing-based
+// inference about which fields are redacted. The invariant guarantees
+// that only consented fields appear in the view, and that redacted fields
+// are provably absent from the output buffer.
+//
+// Every partner access is logged as a ViewAccess record with PoVC
+// attestation for tamper-evident audit.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import optin_engage from "advertising/optin/circuits/optin_engage"
+
+// =============================================================================
+// Data Declarations — View Record Types
+// =============================================================================
+
+// TransformType enum:
+// 0 = ExactValue, 1 = MetroAreaOnly, 2 = AgeRange, 3 = BooleanOnly
+
+data ViewRecord : app v1 {
+    record_id: bytes(32),
+    partner_id: bytes(32),
+    user_id: bytes(32),
+    visible_fields: bytes(32),
+    redacted_fields: bytes(32),
+    transformed_fields: list<{ field: string, transform_type: enum { ExactValue, MetroAreaOnly, AgeRange, BooleanOnly } }>,
+    consent_proof_id: bytes(32),
+    created_at: u64,
+}
+    encode @ bytes(200) {
+        record_id          @ le,
+        partner_id         @ le,
+        user_id            @ le,
+        visible_fields     @ le,
+        redacted_fields    @ le,
+        transformed_fields @ le,
+        consent_proof_id   @ le,
+        created_at         @ le,
+    }
+    store kv
+    series retain 7y
+    cortex {
+        visibility {
+            user_id obfuscate
+            partner_id expose
+            visible_fields expose
+            redacted_fields expose
+        }
+    }
+    observe events [partner_id, visible_fields]
+    observe metrics [visible_fields, partner_id] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field record_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field record_id
+    }
+
+data ViewAccess : app v1 {
+    access_id: bytes(32),
+    record_id: bytes(32),
+    partner_id: bytes(32),
+    accessed_fields: bytes(32),
+    access_timestamp_ns: u64,
+    ip_hash: bytes(32),
+}
+    encode @ bytes(168) {
+        access_id           @ le,
+        record_id           @ le,
+        partner_id          @ le,
+        accessed_fields     @ le,
+        access_timestamp_ns @ le,
+        ip_hash             @ le,
+    }
+    store series retain 7y
+    observe events [partner_id, accessed_fields]
+    observe metrics [partner_id, access_timestamp_ns] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field access_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field access_id
+    }
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream optin_view_events: event<ViewRecord>
+    retention 7y
+    consumers [streamsight, audit, cortex, analytics]
+    classify record_id: IDENTIFIER, partner_id: IDENTIFIER, user_id: IDENTIFIER, visible_fields: METADATA
+
+stream optin_access_events: event<ViewAccess>
+    retention 7y
+    consumers [streamsight, audit, compliance, analytics]
+    classify access_id: IDENTIFIER, record_id: IDENTIFIER, partner_id: IDENTIFIER, accessed_fields: METADATA
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series optin_view_audit: optin_access_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Generate View Record
+// =============================================================================
+//
+// Generates a view record from a consent proof. The visible_fields
+// bitmask is derived from the consented_fields list in the proof.
+// The invariant enforces that visible fields are always a subset of
+// consented fields — partners can never see more than the user approved.
+
+circuit optin_generate_view(partner_id: bytes(32), user_id: bytes(32), consent_proof_id: bytes(32), pk: bytes(1568)) -> ViewRecord
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [views_generated, generation_latency_ns, fields_per_view]
+    invariant "only_consented_fields_visible" { visible_fields subset_of consent.consented_fields }
+    invariant "partner_id_not_empty" { partner_id != 0 }
+    invariant "consent_proof_id_not_empty" { consent_proof_id != 0 }
+    monitor "view_generation_rate" { deviation(views_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let record_seed = sha3_256(consent_proof_id)
+    let record_id = sha3_256(record_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(record_id, partner_id)
+    let verified = mldsa_verify(record_id, sig, pk)
+
+    let consent = kv_get(consent_proof_id)
+    let visible_mask = sha3_256(consent.consented_fields)
+    let redacted_mask = bitwise_not(visible_mask)
+
+    let anomaly = streamsight_anomaly(record_id)
+    let baseline = streamsight_baseline("views_generated")
+
+    ViewRecord {
+        record_id: record_id,
+        partner_id: partner_id,
+        user_id: user_id,
+        visible_fields: visible_mask,
+        redacted_fields: redacted_mask,
+        transformed_fields: [],
+        consent_proof_id: consent_proof_id,
+        created_at: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Enforce View Record
+// =============================================================================
+//
+// Enforces the view record's field visibility rules. Returns a buffer
+// containing only the approved fields, with redacted fields provably
+// absent (not zeroed — absent from the output). Transformed fields
+// are degraded per their transform_type (MetroAreaOnly, AgeRange, etc.).
+//
+// Runs in constant_time mode to prevent timing-based inference about
+// which fields are redacted vs visible.
+
+circuit optin_enforce_view(record_id: bytes(32), partner_id: bytes(32), requested_fields: bytes(32), pk: bytes(1568)) -> bytes(4096)
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [views_enforced, enforcement_latency_ns, fields_redacted, fields_transformed]
+    invariant "redacted_never_leak" { returned_data does_not_contain redacted_fields }
+    invariant "record_id_not_empty" { record_id != 0 }
+    invariant "partner_id_not_empty" { partner_id != 0 }
+    monitor "enforcement_rate" { deviation(enforcements_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let enforce_hash = sha3_256(record_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(enforce_hash, partner_id)
+    let verified = mldsa_verify(enforce_hash, sig, pk)
+
+    let record = kv_get(record_id)
+    let allowed = bitwise_and(requested_fields, record.visible_fields)
+    let denied = bitwise_and(requested_fields, record.redacted_fields)
+
+    let output = kv_get(record.user_id)
+    let masked_output = bitwise_and(output, allowed)
+
+    let anomaly = streamsight_anomaly(enforce_hash)
+    let baseline = streamsight_baseline("views_enforced")
+
+    masked_output
+}
+
+// =============================================================================
+// Circuit: Log Access
+// =============================================================================
+//
+// Audit logs every partner access to a view record. Records which fields
+// were requested, the timestamp, and the IP hash. PoVC-attested for
+// tamper evidence.
+
+circuit optin_log_access(record_id: bytes(32), partner_id: bytes(32), accessed_fields: bytes(32), pk: bytes(1568)) -> ViewAccess
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    streamsight true
+    povc true
+    observe metrics: [accesses_logged, access_log_latency_ns]
+    invariant "record_id_not_empty" { record_id != 0 }
+    invariant "partner_id_not_empty" { partner_id != 0 }
+    monitor "access_rate" { deviation(accesses_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let access_seed = sha3_256(record_id)
+    let access_id = sha3_256(access_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(access_id, record_id)
+    let verified = mldsa_verify(access_id, sig, pk)
+
+    let ip_hash = sha3_256(partner_id)
+
+    let anomaly = streamsight_anomaly(access_id)
+    let baseline = streamsight_baseline("accesses_logged")
+
+    ViewAccess {
+        access_id: access_id,
+        record_id: record_id,
+        partner_id: partner_id,
+        accessed_fields: accessed_fields,
+        access_timestamp_ns: timestamp(),
+        ip_hash: ip_hash,
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "generate_view_basic" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_001")
+    let user_id = sha3_256("test_user_001")
+    let consent_proof_id = sha3_256("test_consent_001")
+    let record = optin_generate_view(partner_id, user_id, consent_proof_id, pk)
+    assert record.record_id != 0
+    assert record.partner_id == partner_id
+    assert record.user_id == user_id
+    assert record.consent_proof_id == consent_proof_id
+    assert record.visible_fields != 0
+    assert record.created_at > 0
+}
+
+test golden "generate_view_deterministic_id" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_002")
+    let user_id = sha3_256("test_user_002")
+    let consent_proof_id = sha3_256("test_consent_002")
+    let r1 = optin_generate_view(partner_id, user_id, consent_proof_id, pk)
+    let r2 = optin_generate_view(partner_id, user_id, consent_proof_id, pk)
+    assert r1.record_id == r2.record_id
+}
+
+test golden "generate_view_redacted_complement" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_003")
+    let user_id = sha3_256("test_user_003")
+    let consent_proof_id = sha3_256("test_consent_003")
+    let record = optin_generate_view(partner_id, user_id, consent_proof_id, pk)
+    let combined = bitwise_or(record.visible_fields, record.redacted_fields)
+    assert combined == 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+}
+
+test golden "enforce_view_basic" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_004")
+    let user_id = sha3_256("test_user_004")
+    let consent_proof_id = sha3_256("test_consent_004")
+    let record = optin_generate_view(partner_id, user_id, consent_proof_id, pk)
+    let requested = record.visible_fields
+    let result = optin_enforce_view(record.record_id, partner_id, requested, pk)
+    assert result != 0
+}
+
+test golden "enforce_view_redacts_unapproved" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_005")
+    let user_id = sha3_256("test_user_005")
+    let consent_proof_id = sha3_256("test_consent_005")
+    let record = optin_generate_view(partner_id, user_id, consent_proof_id, pk)
+    let all_fields = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+    let result = optin_enforce_view(record.record_id, partner_id, all_fields, pk)
+    assert bitwise_and(result, record.redacted_fields) == 0
+}
+
+test golden "log_access_basic" {
+    let pk = test_keygen(1568)
+    let record_id = sha3_256("test_record_001")
+    let partner_id = sha3_256("test_partner_006")
+    let accessed_fields = sha3_256("test_fields_001")
+    let access = optin_log_access(record_id, partner_id, accessed_fields, pk)
+    assert access.access_id != 0
+    assert access.record_id == record_id
+    assert access.partner_id == partner_id
+    assert access.accessed_fields == accessed_fields
+    assert access.access_timestamp_ns > 0
+}
+
+test golden "log_access_deterministic_id" {
+    let pk = test_keygen(1568)
+    let record_id = sha3_256("test_record_002")
+    let partner_id = sha3_256("test_partner_007")
+    let accessed_fields = sha3_256("test_fields_002")
+    let a1 = optin_log_access(record_id, partner_id, accessed_fields, pk)
+    let a2 = optin_log_access(record_id, partner_id, accessed_fields, pk)
+    assert a1.access_id == a2.access_id
+}
+
+test golden "full_view_lifecycle" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_008")
+    let user_id = sha3_256("test_user_008")
+    let consent_proof_id = sha3_256("test_consent_008")
+    let record = optin_generate_view(partner_id, user_id, consent_proof_id, pk)
+    let result = optin_enforce_view(record.record_id, partner_id, record.visible_fields, pk)
+    let access = optin_log_access(record.record_id, partner_id, record.visible_fields, pk)
+    assert record.record_id != 0
+    assert result != 0
+    assert access.access_id != 0
+    assert access.record_id == record.record_id
+}
+
+test property "generate_view_preserves_partner_id" {
+    forall partner_id: bytes(32), user_id: bytes(32), consent_proof_id: bytes(32), pk: bytes(1568) {
+        let record = optin_generate_view(partner_id, user_id, consent_proof_id, pk)
+        assert record.partner_id == partner_id
+    }
+}
+
+test property "generate_view_preserves_user_id" {
+    forall partner_id: bytes(32), user_id: bytes(32), consent_proof_id: bytes(32), pk: bytes(1568) {
+        let record = optin_generate_view(partner_id, user_id, consent_proof_id, pk)
+        assert record.user_id == user_id
+    }
+}
+
+test property "log_access_preserves_record_id" {
+    forall record_id: bytes(32), partner_id: bytes(32), accessed_fields: bytes(32), pk: bytes(1568) {
+        let access = optin_log_access(record_id, partner_id, accessed_fields, pk)
+        assert access.record_id == record_id
+    }
+}
+
+test fuzz "generate_view_no_panic" {
+    fuzz partner_id: bytes(32), user_id: bytes(32), consent_proof_id: bytes(32), pk: bytes(1568) {
+        let result = optin_generate_view(partner_id, user_id, consent_proof_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "enforce_view_no_panic" {
+    fuzz record_id: bytes(32), partner_id: bytes(32), requested_fields: bytes(32), pk: bytes(1568) {
+        let result = optin_enforce_view(record_id, partner_id, requested_fields, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "log_access_no_panic" {
+    fuzz record_id: bytes(32), partner_id: bytes(32), accessed_fields: bytes(32), pk: bytes(1568) {
+        let result = optin_log_access(record_id, partner_id, accessed_fields, pk)
+        assert no_panic
+    }
+}

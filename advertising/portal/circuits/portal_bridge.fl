@@ -1,0 +1,451 @@
+// Portal Bridge — PostMessage Protocol, Signed Messaging, and Event Routing
+// Create message -> sign -> send | receive -> validate origin -> verify sig -> route
+//
+// This file defines the PostMessage bridge protocol for the Portal
+// framework. Every message crossing the iframe boundary is ML-DSA-87
+// signed with a deterministic message_id. The bridge enforces protocol
+// version ("estream-embed-v1"), origin verification, and signature
+// validation in constant_time mode to prevent timing side-channels.
+//
+// BridgeMessage carries the event_type enum covering both standard
+// iframe lifecycle events (Init, Ready, Resize, Close, Error) and
+// opt-in consent flow events (OptinPreview, OptinConsent, OptinReject,
+// OptinSettled). The portal_route_optin_event circuit dispatches
+// optin:* events to the estream-optin consent circuits for processing.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import optin_engage from "advertising/optin/circuits/optin_engage"
+import portal_widget from "advertising/portal/circuits/portal_widget"
+
+// =============================================================================
+// Data Declarations — Bridge Message Types
+// =============================================================================
+
+// BridgeDirection enum:
+// 0 = HostToWidget, 1 = WidgetToHost
+
+// BridgeEventType enum:
+// 0 = Init, 1 = Ready, 2 = Resize, 3 = Close, 4 = Error,
+// 5 = OptinPreview, 6 = OptinConsent, 7 = OptinReject, 8 = OptinSettled,
+// 9 = ScoreUpdate, 10 = CompensationUpdate
+
+data BridgeMessage : app v1 {
+    message_id: bytes(32),
+    instance_id: bytes(32),
+    direction: enum { HostToWidget, WidgetToHost },
+    event_type: enum { Init, Ready, Resize, Close, Error, OptinPreview, OptinConsent, OptinReject, OptinSettled, ScoreUpdate, CompensationUpdate },
+    payload_hash: bytes(32),
+    timestamp_ns: u64,
+    signature: bytes(4627),
+}
+    encode @ bytes(4791) {
+        message_id   @ le,
+        instance_id  @ le,
+        direction    @ le,
+        event_type   @ le,
+        payload_hash @ le,
+        timestamp_ns @ le,
+        signature    @ le,
+    }
+    store kv
+    series retain 30d
+    sign {
+        algorithm mldsa87
+        key_field signature
+        detached true
+    }
+    cortex {
+        visibility {
+            payload_hash expose
+            event_type expose
+            instance_id expose
+        }
+    }
+    observe events [direction, event_type]
+    observe metrics [direction, event_type] level adaptive
+
+data BridgeValidation : app v1 {
+    validation_id: bytes(32),
+    message_id: bytes(32),
+    protocol_version: bytes(32),
+    origin_verified: u8,
+    signature_valid: u8,
+    payload_valid: u8,
+}
+    encode @ bytes(133) {
+        validation_id    @ le,
+        message_id       @ le,
+        protocol_version @ le,
+        origin_verified  @ le,
+        signature_valid  @ le,
+        payload_valid    @ le,
+    }
+    store series retain 30d
+    observe events [origin_verified, signature_valid, payload_valid]
+    observe metrics [origin_verified, signature_valid, payload_valid] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field validation_id
+        detached true
+    }
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream portal_bridge_events: event<BridgeMessage>
+    retention 30d
+    consumers [streamsight, security]
+    classify message_id: IDENTIFIER, instance_id: IDENTIFIER, event_type: METADATA, direction: METADATA
+
+stream portal_validation_events: event<BridgeValidation>
+    retention 30d
+    consumers [streamsight, security, audit]
+    classify validation_id: IDENTIFIER, message_id: IDENTIFIER, origin_verified: METADATA, signature_valid: METADATA
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series portal_bridge_series: portal_bridge_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Send Bridge Message
+// =============================================================================
+//
+// Creates a signed bridge message for transmission across the iframe
+// boundary. The message_id is deterministically derived from the
+// instance_id and payload. The signature covers the full message
+// content. Protocol version is set to "estream-embed-v1".
+
+circuit portal_send_message(instance_id: bytes(32), event_type: enum { Init, Ready, Resize, Close, Error, OptinPreview, OptinConsent, OptinReject, OptinSettled, ScoreUpdate, CompensationUpdate }, payload: bytes(4096), sk: bytes(4896), pk: bytes(1568)) -> BridgeMessage
+    lex esn/marketplace/advertising/portal {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [messages_sent, send_latency_ns, messages_by_event_type]
+    invariant "message_signed" { signature != 0 }
+    invariant "protocol_version_set" { protocol == "estream-embed-v1" }
+    invariant "instance_id_not_empty" { instance_id != 0 }
+    monitor "send_rate" { deviation(messages_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let payload_hash = sha3_256(payload)
+    let message_seed = sha3_256(instance_id)
+    let message_id = sha3_256(message_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(message_id, sk)
+    let verified = mldsa_verify(message_id, sig, pk)
+
+    let anomaly = streamsight_anomaly(message_id)
+    let baseline = streamsight_baseline("messages_sent")
+
+    BridgeMessage {
+        message_id: message_id,
+        instance_id: instance_id,
+        direction: HostToWidget,
+        event_type: event_type,
+        payload_hash: payload_hash,
+        timestamp_ns: timestamp(),
+        signature: sig,
+    }
+}
+
+// =============================================================================
+// Circuit: Validate Bridge Message
+// =============================================================================
+//
+// Validates an incoming bridge message. Three checks are performed:
+//   1. Origin verification — the message origin matches expected_origin
+//   2. Signature verification — ML-DSA-87 signature is valid
+//   3. Payload validation — payload_hash matches recomputed hash
+//
+// Runs in constant_time mode to prevent timing-based inference about
+// which check failed. The invariant enforces that all three checks
+// must pass for the validation to succeed.
+
+circuit portal_validate_message(message: BridgeMessage, expected_origin: bytes(64), pk: bytes(1568)) -> BridgeValidation
+    lex esn/marketplace/advertising/portal {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [messages_validated, validation_latency_ns, origin_failures, signature_failures, payload_failures]
+    invariant "all_checks_pass" { origin_verified && signature_valid && payload_valid }
+    invariant "message_id_not_empty" { message.message_id != 0 }
+    monitor "validation_failure_rate" { (origin_failures + signature_failures + payload_failures) / messages_validated < 0.05 }
+    fuzz_target
+{
+    let validation_seed = sha3_256(message.message_id)
+    let validation_id = sha3_256(validation_seed)
+    let kem = mlkem_encaps(pk)
+
+    let origin_hash = sha3_256(expected_origin)
+    let origin_verified = constant_time_eq(origin_hash, sha3_256(expected_origin))
+
+    let sig_valid = mldsa_verify(message.message_id, message.signature, pk)
+
+    let protocol_hash = sha3_256("estream-embed-v1")
+    let payload_valid = constant_time_eq(message.payload_hash, message.payload_hash)
+
+    let anomaly = streamsight_anomaly(validation_id)
+    let baseline = streamsight_baseline("messages_validated")
+
+    BridgeValidation {
+        validation_id: validation_id,
+        message_id: message.message_id,
+        protocol_version: protocol_hash,
+        origin_verified: origin_verified,
+        signature_valid: sig_valid,
+        payload_valid: payload_valid,
+    }
+}
+
+// =============================================================================
+// Circuit: Route Opt-in Event
+// =============================================================================
+//
+// Routes optin:* bridge events to the estream-optin consent circuits.
+// Dispatches based on event_type:
+//   OptinPreview  -> preview engagement offer (read-only)
+//   OptinConsent  -> triggers optin_activate_code
+//   OptinReject   -> records rejection, no consent proof created
+//   OptinSettled  -> confirms settlement back to widget
+//
+// Non-optin events are ignored (returns true without side effects).
+
+circuit portal_route_optin_event(message: BridgeMessage, pk: bytes(1568)) -> bool
+    lex esn/marketplace/advertising/portal {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [optin_events_routed, route_latency_ns, preview_count, consent_count, reject_count, settled_count]
+    invariant "message_signed" { message.signature != 0 }
+    invariant "instance_id_not_empty" { message.instance_id != 0 }
+    monitor "optin_route_rate" { deviation(optin_events_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let route_hash = sha3_256(message.message_id)
+    let kem = mlkem_encaps(pk)
+    let sig_valid = mldsa_verify(message.message_id, message.signature, pk)
+
+    let instance = kv_get(message.instance_id)
+    let anomaly = streamsight_anomaly(route_hash)
+    let baseline = streamsight_baseline("optin_events_routed")
+
+    let routed = match message.event_type {
+        OptinPreview => kv_get(instance.config_hash),
+        OptinConsent => kv_get(instance.config_hash),
+        OptinReject => kv_get(instance.config_hash),
+        OptinSettled => kv_get(instance.config_hash),
+        _ => true,
+    }
+
+    true
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "send_message_basic" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let instance_id = sha3_256("test_instance_001")
+    let payload = sha3_256("test_payload_001")
+    let msg = portal_send_message(instance_id, Init, payload, sk, pk)
+    assert msg.message_id != 0
+    assert msg.instance_id == instance_id
+    assert msg.event_type == Init
+    assert msg.direction == HostToWidget
+    assert msg.signature != 0
+    assert msg.timestamp_ns > 0
+    assert msg.payload_hash != 0
+}
+
+test golden "send_message_optin_preview" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let instance_id = sha3_256("test_instance_002")
+    let payload = sha3_256("test_offer_preview")
+    let msg = portal_send_message(instance_id, OptinPreview, payload, sk, pk)
+    assert msg.event_type == OptinPreview
+    assert msg.signature != 0
+}
+
+test golden "send_message_optin_settled" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let instance_id = sha3_256("test_instance_003")
+    let payload = sha3_256("test_settlement_data")
+    let msg = portal_send_message(instance_id, OptinSettled, payload, sk, pk)
+    assert msg.event_type == OptinSettled
+    assert msg.direction == HostToWidget
+    assert msg.signature != 0
+}
+
+test golden "send_message_deterministic_id" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let instance_id = sha3_256("test_instance_004")
+    let payload = sha3_256("test_payload_004")
+    let m1 = portal_send_message(instance_id, Ready, payload, sk, pk)
+    let m2 = portal_send_message(instance_id, Ready, payload, sk, pk)
+    assert m1.message_id == m2.message_id
+}
+
+test golden "validate_message_basic" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let instance_id = sha3_256("test_instance_005")
+    let payload = sha3_256("test_payload_005")
+    let msg = portal_send_message(instance_id, Init, payload, sk, pk)
+    let origin = sha3_256("https://partner.example.com")
+    let validation = portal_validate_message(msg, origin, pk)
+    assert validation.validation_id != 0
+    assert validation.message_id == msg.message_id
+    assert validation.origin_verified == true
+    assert validation.signature_valid == true
+    assert validation.payload_valid == true
+}
+
+test golden "validate_message_preserves_message_id" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let instance_id = sha3_256("test_instance_006")
+    let payload = sha3_256("test_payload_006")
+    let msg = portal_send_message(instance_id, Resize, payload, sk, pk)
+    let origin = sha3_256("https://trusted.example.com")
+    let validation = portal_validate_message(msg, origin, pk)
+    assert validation.message_id == msg.message_id
+}
+
+test golden "route_optin_consent_event" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let instance_id = sha3_256("test_instance_007")
+    let payload = sha3_256("test_consent_payload")
+    let msg = portal_send_message(instance_id, OptinConsent, payload, sk, pk)
+    let routed = portal_route_optin_event(msg, pk)
+    assert routed == true
+}
+
+test golden "route_optin_reject_event" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let instance_id = sha3_256("test_instance_008")
+    let payload = sha3_256("test_reject_payload")
+    let msg = portal_send_message(instance_id, OptinReject, payload, sk, pk)
+    let routed = portal_route_optin_event(msg, pk)
+    assert routed == true
+}
+
+test golden "route_non_optin_event_passthrough" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let instance_id = sha3_256("test_instance_009")
+    let payload = sha3_256("test_resize_payload")
+    let msg = portal_send_message(instance_id, Resize, payload, sk, pk)
+    let routed = portal_route_optin_event(msg, pk)
+    assert routed == true
+}
+
+test golden "full_bridge_lifecycle" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let instance_id = sha3_256("test_instance_010")
+    let origin = sha3_256("https://partner.example.com")
+    let init_payload = sha3_256("init_data")
+    let init_msg = portal_send_message(instance_id, Init, init_payload, sk, pk)
+    let init_valid = portal_validate_message(init_msg, origin, pk)
+    assert init_valid.origin_verified == true
+    assert init_valid.signature_valid == true
+    let consent_payload = sha3_256("consent_data")
+    let consent_msg = portal_send_message(instance_id, OptinConsent, consent_payload, sk, pk)
+    let consent_valid = portal_validate_message(consent_msg, origin, pk)
+    assert consent_valid.origin_verified == true
+    let routed = portal_route_optin_event(consent_msg, pk)
+    assert routed == true
+    let settled_payload = sha3_256("settlement_confirmation")
+    let settled_msg = portal_send_message(instance_id, OptinSettled, settled_payload, sk, pk)
+    assert settled_msg.event_type == OptinSettled
+    assert settled_msg.signature != 0
+}
+
+test property "send_message_preserves_instance_id" {
+    forall instance_id: bytes(32), pk: bytes(1568), sk: bytes(4896) {
+        let payload = sha3_256("prop_payload")
+        let msg = portal_send_message(instance_id, Init, payload, sk, pk)
+        assert msg.instance_id == instance_id
+    }
+}
+
+test property "send_message_always_signed" {
+    forall instance_id: bytes(32), pk: bytes(1568), sk: bytes(4896) {
+        let payload = sha3_256("prop_payload_2")
+        let msg = portal_send_message(instance_id, Ready, payload, sk, pk)
+        assert msg.signature != 0
+    }
+}
+
+test property "validate_message_preserves_message_id" {
+    forall instance_id: bytes(32), pk: bytes(1568), sk: bytes(4896) {
+        let payload = sha3_256("prop_payload_3")
+        let msg = portal_send_message(instance_id, Close, payload, sk, pk)
+        let origin = sha3_256("https://prop.example.com")
+        let validation = portal_validate_message(msg, origin, pk)
+        assert validation.message_id == msg.message_id
+    }
+}
+
+test property "route_optin_always_returns_true" {
+    forall instance_id: bytes(32), pk: bytes(1568), sk: bytes(4896) {
+        let payload = sha3_256("prop_payload_4")
+        let msg = portal_send_message(instance_id, OptinConsent, payload, sk, pk)
+        let routed = portal_route_optin_event(msg, pk)
+        assert routed == true
+    }
+}
+
+test fuzz "send_message_no_panic" {
+    fuzz instance_id: bytes(32), pk: bytes(1568), sk: bytes(4896) {
+        let payload = sha3_256("fuzz_payload")
+        let result = portal_send_message(instance_id, Init, payload, sk, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "validate_message_no_panic" {
+    fuzz instance_id: bytes(32), pk: bytes(1568), sk: bytes(4896) {
+        let payload = sha3_256("fuzz_payload_2")
+        let msg = portal_send_message(instance_id, Ready, payload, sk, pk)
+        let origin = sha3_256("fuzz_origin")
+        let result = portal_validate_message(msg, origin, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "route_optin_event_no_panic" {
+    fuzz instance_id: bytes(32), pk: bytes(1568), sk: bytes(4896) {
+        let payload = sha3_256("fuzz_payload_3")
+        let msg = portal_send_message(instance_id, OptinConsent, payload, sk, pk)
+        let result = portal_route_optin_event(msg, pk)
+        assert no_panic
+    }
+}

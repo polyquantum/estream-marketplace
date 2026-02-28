@@ -1,0 +1,418 @@
+// Scope Console — Partner Configuration & Lead Pipeline View
+// Onboard partners → score leads → summarize pipeline → track ROI
+//
+// This file defines the partner console circuit. PartnerConfig stores partner
+// identity, industry, budget, and cost-per-lead settings. LeadPipelineView
+// aggregates period-level pipeline metrics (generated, qualified, converted)
+// with ROI. LeadQualityScore provides multi-dimensional scoring across
+// engagement, authenticity, intent, and fit.
+//
+// Cortex AI powers the `scope_quality_scorer` model using user activity,
+// engagement events, source, and partner criteria as inputs. Scores are
+// computed per-lead with dimension breakdowns and match confidence.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import crm_lead from "advertising/crm/circuits/crm_lead"
+
+// =============================================================================
+// Data Declarations — Partner & Pipeline Types
+// =============================================================================
+
+data PartnerConfig : app v1 {
+    partner_id: bytes(32),
+    name: bytes(128),
+    industry: bytes(64),
+    budget_monthly: u64,
+    cost_per_lead: u64,
+    target_volume: u64,
+    active: u8,
+    onboarded_at: u64,
+}
+    encode @ bytes(316) {
+        partner_id    @ le,
+        name          @ le,
+        industry      @ le,
+        budget_monthly @ le,
+        cost_per_lead @ le,
+        target_volume @ le,
+        active        @ le,
+        onboarded_at  @ le,
+    }
+    store kv
+    series retain 365d
+    cortex {
+        visibility {
+            name expose
+            budget_monthly redact for non-owner
+            cost_per_lead redact for non-owner
+        }
+    }
+    observe events [active, budget_monthly]
+    observe metrics [budget_monthly, cost_per_lead, target_volume] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field partner_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field partner_id
+        proof_system groth16
+    }
+
+data LeadPipelineView : app v1 {
+    partner_id: bytes(32),
+    period: bytes(32),
+    leads_generated: u64,
+    leads_qualified: u64,
+    leads_converted: u64,
+    conversion_rate_pct: u32,
+    revenue: u64,
+    cost: u64,
+    roi_pct: u32,
+}
+    encode @ bytes(168) {
+        partner_id         @ le,
+        period             @ le,
+        leads_generated    @ le,
+        leads_qualified    @ le,
+        leads_converted    @ le,
+        conversion_rate_pct @ le,
+        revenue            @ le,
+        cost               @ le,
+        roi_pct            @ le,
+    }
+    store kv
+    series retain 365d
+    observe metrics [leads_generated, leads_qualified, leads_converted, conversion_rate_pct, roi_pct] level adaptive
+    observe events [leads_generated, leads_qualified, leads_converted, conversion_rate_pct, roi_pct]
+    sign {
+        algorithm mldsa87
+        key_field partner_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field partner_id
+        proof_system groth16
+    }
+
+data LeadQualityScore : circuit v1 {
+    lead_id: bytes(32),
+    partner_id: bytes(32),
+    quality_score: u32,
+    dim_engagement: u32,
+    dim_authenticity: u32,
+    dim_intent: u32,
+    dim_fit: u32,
+    scored_at: u64,
+}
+    encode @ bytes(92) {
+        lead_id          @ le,
+        partner_id       @ le,
+        quality_score    @ le,
+        dim_engagement   @ le,
+        dim_authenticity @ le,
+        dim_intent       @ le,
+        dim_fit          @ le,
+        scored_at        @ le,
+    }
+    store kv
+    series retain 90d
+    cortex {
+        ai_feed {
+            model "scope_quality_scorer"
+            input [user_activity, engagement_events, source, partner_criteria]
+            output [quality_score, dimension_breakdown, match_confidence]
+            retrain on_drift
+            drift_threshold 0.08
+        }
+    }
+    observe metrics [quality_score, dim_engagement, dim_authenticity, dim_intent, dim_fit] level adaptive
+    observe events [quality_score, dim_engagement, dim_intent]
+    sign {
+        algorithm mldsa87
+        key_field lead_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field lead_id
+        proof_system groth16
+    }
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream scope_partner_events: event<PartnerConfig>
+    retention 365d
+    consumers [streamsight, cortex, analytics, alerting]
+    classify partner_id: IDENTIFIER, name: METADATA, industry: METADATA, budget_monthly: METRIC
+
+stream scope_pipeline_events: event<LeadPipelineView>
+    retention 365d
+    consumers [streamsight, cortex, analytics, alerting]
+    classify partner_id: IDENTIFIER, period: IDENTIFIER, leads_generated: METRIC, conversion_rate_pct: METRIC, roi_pct: METRIC
+
+stream scope_quality_events: event<LeadQualityScore>
+    retention 90d
+    consumers [streamsight, cortex, analytics]
+    classify lead_id: IDENTIFIER, partner_id: IDENTIFIER, quality_score: METRIC
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series scope_partner_audit: scope_partner_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+series scope_pipeline_audit: scope_pipeline_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Onboard Partner
+// =============================================================================
+//
+// Creates a new PartnerConfig with budget, cost-per-lead, and volume targets.
+// The partner is marked active and onboarded with the current timestamp.
+// Signs the config and attests via PoVC for audit integrity.
+
+circuit scope_onboard_partner(name: bytes(128), industry: bytes(64), budget: u64, cpl: u64, pk: bytes(1568)) -> PartnerConfig
+    lex esn/marketplace/advertising/scope {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [partners_onboarded, onboarding_errors, budget_total]
+    invariant "name_not_empty" { name != 0 }
+    invariant "budget_positive" { budget > 0 }
+    invariant "cpl_positive" { cpl > 0 }
+    monitor "onboarding_error_rate" { onboarding_errors / partners_onboarded < 0.01 }
+    fuzz_target
+{
+    let partner_id = sha3_256(name)
+    let config_hash = sha3_256(partner_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(config_hash, partner_id)
+    let verified = mldsa_verify(config_hash, sig, partner_id)
+
+    let anomaly = streamsight_anomaly(partner_id)
+    let baseline = streamsight_baseline("partners_onboarded")
+
+    PartnerConfig {
+        partner_id: partner_id,
+        name: name,
+        industry: industry,
+        budget_monthly: budget,
+        cost_per_lead: cpl,
+        target_volume: budget / cpl,
+        active: 1,
+        onboarded_at: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Score Lead
+// =============================================================================
+//
+// Scores a lead across four dimensions (engagement, authenticity, intent, fit)
+// using Cortex AI. The composite quality_score is a weighted aggregate.
+// Returns a LeadQualityScore with dimension breakdowns.
+
+circuit scope_score_lead(lead_id: bytes(32), partner_id: bytes(32), pk: bytes(1568)) -> LeadQualityScore
+    lex esn/marketplace/advertising/scope {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [leads_scored, avg_quality_score, low_quality_count, scoring_errors]
+    invariant "lead_id_not_empty" { lead_id != 0 }
+    invariant "partner_id_not_empty" { partner_id != 0 }
+    monitor "scoring_error_rate" { scoring_errors / leads_scored < 0.02 }
+    monitor "quality_score_floor" { avg_quality_score > 30 }
+    fuzz_target
+{
+    let score_hash = sha3_256(lead_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(score_hash, lead_id)
+    let verified = mldsa_verify(score_hash, sig, lead_id)
+
+    let dimensions = li_infer(lead_id, partner_id)
+    let classification = li_classify(lead_id, partner_id)
+    let anomaly = streamsight_anomaly(score_hash)
+    let baseline = streamsight_baseline("leads_scored")
+
+    let lead = kv_get(lead_id)
+
+    LeadQualityScore {
+        lead_id: lead_id,
+        partner_id: partner_id,
+        quality_score: dimensions,
+        dim_engagement: classification,
+        dim_authenticity: classification,
+        dim_intent: classification,
+        dim_fit: classification,
+        scored_at: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Pipeline Summary
+// =============================================================================
+//
+// Aggregates lead pipeline metrics for a partner over a given period. Computes
+// leads generated, qualified, converted, conversion rate, revenue, cost, and
+// ROI percentage. Feeds metrics to StreamSight for anomaly detection.
+
+circuit scope_pipeline_summary(partner_id: bytes(32), period: bytes(32), pk: bytes(1568)) -> LeadPipelineView
+    lex esn/marketplace/advertising/scope {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [summaries_generated, avg_conversion_rate, avg_roi, summary_errors]
+    invariant "partner_id_not_empty" { partner_id != 0 }
+    invariant "period_not_empty" { period != 0 }
+    monitor "summary_error_rate" { summary_errors / summaries_generated < 0.01 }
+    monitor "roi_floor" { avg_roi > 0 }
+    esz_emit "verify/scope_pipeline_summary.esz"
+    li_feed full_escir true, optimized_ir true
+{
+    let summary_hash = sha3_256(partner_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(summary_hash, partner_id)
+    let verified = mldsa_verify(summary_hash, sig, partner_id)
+
+    let pipeline = li_infer(partner_id, period)
+    let classification = li_classify(partner_id, period)
+    let anomaly = streamsight_anomaly(summary_hash)
+    let baseline = streamsight_baseline("summaries_generated")
+
+    let config = kv_get(partner_id)
+
+    LeadPipelineView {
+        partner_id: partner_id,
+        period: period,
+        leads_generated: pipeline,
+        leads_qualified: pipeline,
+        leads_converted: pipeline,
+        conversion_rate_pct: classification,
+        revenue: pipeline,
+        cost: pipeline,
+        roi_pct: classification,
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "onboard_partner_basic" {
+    let pk = test_keygen(1568)
+    let config = scope_onboard_partner("Acme Corp", "Technology", 50000, 25, pk)
+    assert config.partner_id != 0
+    assert config.name == "Acme Corp"
+    assert config.industry == "Technology"
+    assert config.budget_monthly == 50000
+    assert config.cost_per_lead == 25
+    assert config.active == 1
+    assert config.onboarded_at > 0
+}
+
+test golden "onboard_partner_computes_volume" {
+    let pk = test_keygen(1568)
+    let config = scope_onboard_partner("Beta Inc", "Finance", 100000, 50, pk)
+    assert config.target_volume == 2000
+    assert config.budget_monthly == 100000
+}
+
+test golden "score_lead_returns_dimensions" {
+    let pk = test_keygen(1568)
+    let lead_id = sha3_256("test_lead_001")
+    let partner_id = sha3_256("test_partner_001")
+    let score = scope_score_lead(lead_id, partner_id, pk)
+    assert score.lead_id == lead_id
+    assert score.partner_id == partner_id
+    assert score.quality_score >= 0
+    assert score.scored_at > 0
+}
+
+test golden "pipeline_summary_returns_view" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_002")
+    let period = sha3_256("2025-Q1")
+    let view = scope_pipeline_summary(partner_id, period, pk)
+    assert view.partner_id == partner_id
+    assert view.period == period
+    assert view.leads_generated >= 0
+}
+
+test golden "pipeline_summary_has_roi" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_003")
+    let period = sha3_256("2025-Q2")
+    let view = scope_pipeline_summary(partner_id, period, pk)
+    assert view.roi_pct >= 0
+    assert view.conversion_rate_pct >= 0
+}
+
+test property "onboard_partner_preserves_budget" {
+    forall name: bytes(128), industry: bytes(64), budget: u64, cpl: u64, pk: bytes(1568) {
+        let config = scope_onboard_partner(name, industry, budget, cpl, pk)
+        assert config.budget_monthly == budget
+        assert config.cost_per_lead == cpl
+    }
+}
+
+test property "score_lead_preserves_ids" {
+    forall lead_id: bytes(32), partner_id: bytes(32), pk: bytes(1568) {
+        let score = scope_score_lead(lead_id, partner_id, pk)
+        assert score.lead_id == lead_id
+        assert score.partner_id == partner_id
+    }
+}
+
+test property "pipeline_summary_preserves_partner" {
+    forall partner_id: bytes(32), period: bytes(32), pk: bytes(1568) {
+        let view = scope_pipeline_summary(partner_id, period, pk)
+        assert view.partner_id == partner_id
+        assert view.period == period
+    }
+}
+
+test fuzz "onboard_partner_no_panic" {
+    fuzz name: bytes(128), industry: bytes(64), budget: u64, cpl: u64, pk: bytes(1568) {
+        let result = scope_onboard_partner(name, industry, budget, cpl, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "score_lead_no_panic" {
+    fuzz lead_id: bytes(32), partner_id: bytes(32), pk: bytes(1568) {
+        let result = scope_score_lead(lead_id, partner_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "pipeline_summary_no_panic" {
+    fuzz partner_id: bytes(32), period: bytes(32), pk: bytes(1568) {
+        let result = scope_pipeline_summary(partner_id, period, pk)
+        assert no_panic
+    }
+}

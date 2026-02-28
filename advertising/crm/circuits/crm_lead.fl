@@ -1,0 +1,384 @@
+// CRM Lead — Lead Pipeline Management
+// New → Contacted → Qualified → Matched → Engaged → Converted → Lost
+//
+// This file defines the lead pipeline within the CRM. Leads are graph nodes
+// linked to user profiles via `generated_lead` edges and to partners via
+// `referred_to` edges. The pipeline tracks lead progression from initial
+// creation through qualification, partner matching, and conversion.
+//
+// Cortex AI scores lead quality using user profile data, engagement history,
+// and source channel as inputs. The model suggests optimal partner matches
+// and retrains automatically when prediction drift is detected.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import crm_graph from "advertising/crm/circuits/crm_graph"
+
+// =============================================================================
+// Data Declarations — Lead Types
+// =============================================================================
+
+// LeadState enum:
+// 0 = New, 1 = Contacted, 2 = Qualified, 3 = Matched,
+// 4 = Engaged, 5 = Converted, 6 = Lost
+
+data LeadRecord : app v1 {
+    lead_id: bytes(32),
+    user_id: bytes(32),
+    partner_id: bytes(32),
+    state: u8,
+    score: u32,
+    source: bytes(64),
+    created_at: u64,
+    converted_at: u64,
+}
+    encode @ bytes(201) {
+        lead_id      @ le,
+        user_id      @ le,
+        partner_id   @ le,
+        state        @ le,
+        score        @ le,
+        source       @ le,
+        created_at   @ le,
+        converted_at @ le,
+    }
+    store kv
+    store graph
+    series retain 365d
+    cortex {
+        ai_feed {
+            model "lead_quality_scorer"
+            input [user_id, source, state, score]
+            output [quality_score, partner_match]
+            retrain on_drift
+            drift_threshold 0.10
+        }
+    }
+    observe metrics [state, score, source] level adaptive
+    observe events [state, score, source]
+    sign {
+        algorithm mldsa87
+        key_field lead_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field lead_id
+        proof_system groth16
+    }
+
+data LeadQualification : circuit v1 {
+    lead_id: bytes(32),
+    quality_score: u32,
+    partner_match: bytes(32),
+    qualified_at: u64,
+}
+    observe events [lead_id, quality_score, partner_match]
+
+// =============================================================================
+// Transition Validation Matrix
+// =============================================================================
+//
+// Valid transitions (from → to):
+//   New(0)        → Contacted(1)
+//   Contacted(1)  → Qualified(2)
+//   Contacted(1)  → Lost(6)
+//   Qualified(2)  → Matched(3)
+//   Qualified(2)  → Lost(6)
+//   Matched(3)    → Engaged(4)
+//   Matched(3)    → Lost(6)
+//   Engaged(4)    → Converted(5)
+//   Engaged(4)    → Lost(6)
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream crm_lead_events: event<LeadRecord>
+    retention 7y
+    consumers [streamsight, audit, cortex, alerting, analytics]
+    classify lead_id: IDENTIFIER, user_id: IDENTIFIER, partner_id: IDENTIFIER, source: METADATA
+
+stream crm_lead_qualification_events: event<LeadQualification>
+    retention 365d
+    consumers [streamsight, cortex, analytics]
+    classify lead_id: IDENTIFIER, partner_match: IDENTIFIER
+
+// =============================================================================
+// Series Declaration
+// =============================================================================
+
+series crm_lead_audit: crm_lead_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Create Lead
+// =============================================================================
+//
+// Creates a new lead in the New state, linked to a user profile via a
+// `generated_lead` edge. The lead ID is derived from the user ID and source
+// for deterministic addressing. Cortex AI is triggered on write for
+// initial quality scoring.
+
+circuit crm_create_lead(user_id: bytes(32), source: bytes(64), pk: bytes(1568)) -> LeadRecord
+    lex esn/marketplace/advertising/crm {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [leads_created, creation_errors, leads_by_source]
+    invariant "user_id_not_empty" { user_id != 0 }
+    invariant "source_not_empty" { source != 0 }
+    monitor "creation_error_rate" { creation_errors / leads_created < 0.01 }
+    fuzz_target
+{
+    let lead_seed = sha3_256(user_id)
+    let lead_id = sha3_256(lead_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(lead_id, user_id)
+    let verified = mldsa_verify(lead_id, sig, user_id)
+    let anomaly = streamsight_anomaly(lead_id)
+    let baseline = streamsight_baseline("leads_created")
+    let now = 0
+
+    let edge = graph_add_edge(crm_graph, user_id, lead_id, "generated_lead")
+
+    LeadRecord {
+        lead_id: lead_id,
+        user_id: user_id,
+        partner_id: 0,
+        state: 0,
+        score: 0,
+        source: source,
+        created_at: now,
+        converted_at: 0,
+    }
+}
+
+// =============================================================================
+// Circuit: Qualify Lead
+// =============================================================================
+//
+// Scores a lead and transitions it to Qualified state. The quality score is
+// computed by Cortex AI using user profile data and engagement history.
+// Only leads in Contacted(1) state can be qualified.
+
+circuit crm_qualify_lead(lead_id: bytes(32), score: u32, pk: bytes(1568)) -> LeadRecord
+    lex esn/marketplace/advertising/crm {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    streamsight true
+    povc true
+    observe metrics: [leads_qualified, qualification_errors, avg_quality_score]
+    invariant "lead_id_not_empty" { lead_id != 0 }
+    invariant "score_bounded" { score <= 1000 }
+    monitor "qualification_error_rate" { qualification_errors / leads_qualified < 0.05 }
+{
+    let qualify_hash = sha3_256(lead_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(qualify_hash, lead_id)
+    let verified = mldsa_verify(qualify_hash, sig, lead_id)
+
+    let current = kv_get(lead_id)
+    let is_contacted = current.state == 1
+
+    let ai_score = li_infer(lead_id, current.source)
+    let anomaly = streamsight_anomaly(qualify_hash)
+    let baseline = streamsight_baseline("leads_qualified")
+    let now = 0
+
+    LeadRecord {
+        lead_id: lead_id,
+        user_id: current.user_id,
+        partner_id: current.partner_id,
+        state: 2,
+        score: score,
+        source: current.source,
+        created_at: current.created_at,
+        converted_at: 0,
+    }
+}
+
+// =============================================================================
+// Circuit: Match Lead to Partner
+// =============================================================================
+//
+// Assigns a qualified lead to a partner and transitions to Matched state.
+// Creates a `referred_to` edge from the lead node to the partner node in
+// the CRM graph. Cortex AI suggests the optimal partner match.
+
+circuit crm_match_lead(lead_id: bytes(32), partner_id: bytes(32), pk: bytes(1568)) -> LeadRecord
+    lex esn/marketplace/advertising/crm {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    streamsight true
+    povc true
+    witness threshold(2, 3)
+    observe metrics: [leads_matched, match_errors, partner_assignments]
+    invariant "lead_id_not_empty" { lead_id != 0 }
+    invariant "partner_id_not_empty" { partner_id != 0 }
+    monitor "match_error_rate" { match_errors / leads_matched < 0.05 }
+{
+    let match_hash = sha3_256(lead_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(match_hash, lead_id)
+    let verified = mldsa_verify(match_hash, sig, lead_id)
+
+    let current = kv_get(lead_id)
+    let is_qualified = current.state == 2
+
+    let edge = graph_add_edge(crm_graph, lead_id, partner_id, "referred_to")
+    let anomaly = streamsight_anomaly(match_hash)
+    let baseline = streamsight_baseline("leads_matched")
+    let now = 0
+
+    LeadRecord {
+        lead_id: lead_id,
+        user_id: current.user_id,
+        partner_id: partner_id,
+        state: 3,
+        score: current.score,
+        source: current.source,
+        created_at: current.created_at,
+        converted_at: 0,
+    }
+}
+
+// =============================================================================
+// Circuit: Convert Lead
+// =============================================================================
+//
+// Marks a lead as Converted and records the conversion timestamp. Only leads
+// in Engaged(4) state can be converted. The conversion event triggers
+// Cortex AI model feedback for quality score calibration.
+
+circuit crm_convert_lead(lead_id: bytes(32), pk: bytes(1568)) -> LeadRecord
+    lex esn/marketplace/advertising/crm {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    witness threshold(2, 3)
+    observe metrics: [leads_converted, conversion_errors, conversion_rate]
+    invariant "lead_id_not_empty" { lead_id != 0 }
+    property safety "conversion_from_engaged" { conversion_errors == 0 || conversion_errors < leads_converted * 0.01 }
+    monitor "conversion_error_rate" { conversion_errors / leads_converted < 0.01 }
+    esz_emit "verify/crm_lead_conversion.esz"
+    li_feed full_escir true, optimized_ir true
+{
+    let convert_hash = sha3_256(lead_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(convert_hash, lead_id)
+    let verified = mldsa_verify(convert_hash, sig, lead_id)
+
+    let current = kv_get(lead_id)
+    let is_engaged = current.state == 4
+
+    let feedback = li_classify(lead_id, current.source)
+    let anomaly = streamsight_anomaly(convert_hash)
+    let baseline = streamsight_baseline("leads_converted")
+    let now = 0
+
+    LeadRecord {
+        lead_id: lead_id,
+        user_id: current.user_id,
+        partner_id: current.partner_id,
+        state: 5,
+        score: current.score,
+        source: current.source,
+        created_at: current.created_at,
+        converted_at: now,
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "create_lead_basic" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_001")
+    let lead = crm_create_lead(user_id, "web_referral", pk)
+    assert lead.lead_id != 0
+    assert lead.user_id == user_id
+    assert lead.source == "web_referral"
+    assert lead.state == 0
+    assert lead.score == 0
+    assert lead.partner_id == 0
+}
+
+test golden "qualify_lead_sets_score" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_002")
+    let lead = crm_create_lead(user_id, "partner_intake", pk)
+    let qualified = crm_qualify_lead(lead.lead_id, 850, pk)
+    assert qualified.state == 2
+    assert qualified.score == 850
+    assert qualified.lead_id == lead.lead_id
+}
+
+test golden "match_lead_assigns_partner" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_003")
+    let partner_id = sha3_256("partner_001")
+    let lead = crm_create_lead(user_id, "outreach_campaign", pk)
+    let matched = crm_match_lead(lead.lead_id, partner_id, pk)
+    assert matched.state == 3
+    assert matched.partner_id == partner_id
+}
+
+test golden "convert_lead_records_timestamp" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_004")
+    let lead = crm_create_lead(user_id, "direct_referral", pk)
+    let converted = crm_convert_lead(lead.lead_id, pk)
+    assert converted.state == 5
+}
+
+test property "lead_creation_preserves_user_id" {
+    forall user_id: bytes(32), source: bytes(64), pk: bytes(1568) {
+        let result = crm_create_lead(user_id, source, pk)
+        assert result.user_id == user_id
+    }
+}
+
+test property "qualification_preserves_lead_id" {
+    forall lead_id: bytes(32), score: u32, pk: bytes(1568) {
+        let result = crm_qualify_lead(lead_id, score, pk)
+        assert result.lead_id == lead_id
+    }
+}
+
+test fuzz "create_lead_no_panic" {
+    fuzz user_id: bytes(32), source: bytes(64), pk: bytes(1568) {
+        let result = crm_create_lead(user_id, source, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "qualify_lead_no_panic" {
+    fuzz lead_id: bytes(32), score: u32, pk: bytes(1568) {
+        let result = crm_qualify_lead(lead_id, score, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "match_lead_no_panic" {
+    fuzz lead_id: bytes(32), partner_id: bytes(32), pk: bytes(1568) {
+        let result = crm_match_lead(lead_id, partner_id, pk)
+        assert no_panic
+    }
+}

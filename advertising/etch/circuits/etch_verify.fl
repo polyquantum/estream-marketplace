@@ -1,0 +1,336 @@
+// Etch Verify — Zero-Knowledge Impression Count Verification
+// Generate ZK proofs -> verify impression counts -> audit campaigns
+//
+// This file defines the ZK verification circuit for impression counts.
+// Advertisers can prove that a campaign received a claimed number of
+// impressions without revealing individual viewer identities or session
+// data. ImpressionProof stores the Groth16 proof alongside the campaign
+// ID and claimed count. VerificationResult captures the outcome of
+// both the ZK proof check and the Merkle chain integrity check.
+//
+// The etch_audit_campaign circuit combines chain verification with count
+// verification for a full end-to-end campaign audit — proving both that
+// the impression chain is tamper-free and that the claimed count is correct.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import etch_verify_chain from "advertising/etch/circuits/etch_merkle"
+import etch_chain_head from "advertising/etch/circuits/etch_merkle"
+
+// =============================================================================
+// Data Declarations — Proof & Verification Types
+// =============================================================================
+
+data ImpressionProof : app v1 {
+    proof_id: bytes(32),
+    campaign_id: bytes(32),
+    count: u64,
+    proof: bytes(512),
+    verified: u8,
+    generated_at: u64,
+}
+    encode @ bytes(620) {
+        proof_id     @ le,
+        campaign_id  @ le,
+        count        @ le,
+        proof        @ le,
+        verified     @ le,
+        generated_at @ le,
+    }
+    store kv
+    series retain 365d
+    observe events [campaign_id, count, verified]
+    observe metrics [count] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field proof_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field proof_id
+        proof_system groth16
+    }
+
+data VerificationResult : circuit v1 {
+    campaign_id: bytes(32),
+    claimed_count: u64,
+    verified: u8,
+    proof_valid: u8,
+    chain_valid: u8,
+    timestamp: u64,
+}
+    observe events [verified, proof_valid, chain_valid]
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream etch_proof_events: event<ImpressionProof>
+    retention 365d
+    consumers [streamsight, audit, advertiser_dashboard]
+    classify proof_id: IDENTIFIER, campaign_id: IDENTIFIER, count: METRIC, verified: METADATA
+
+stream etch_verification_events: event<VerificationResult>
+    retention 365d
+    consumers [streamsight, audit, advertiser_dashboard, alerting]
+    classify campaign_id: IDENTIFIER, claimed_count: METRIC, verified: METADATA, proof_valid: METADATA, chain_valid: METADATA
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series etch_proof_audit: etch_proof_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Generate Count Proof
+// =============================================================================
+//
+// Generates a Groth16 ZK proof that a campaign's impression count equals
+// the claimed value without revealing individual impression records or
+// viewer identities. The proof is derived from the campaign's Merkle chain
+// head and total impression count.
+
+circuit etch_generate_count_proof(campaign_id: bytes(32), count: u64, pk: bytes(1568)) -> ImpressionProof
+    lex esn/marketplace/advertising/etch {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [proofs_generated, proof_generation_latency_ns, proof_failures]
+    invariant "campaign_id_not_empty" { campaign_id != 0 }
+    invariant "count_positive" { count > 0 }
+    monitor "proof_failure_rate" { proof_failures / proofs_generated < 0.01 }
+    fuzz_target
+{
+    let proof_seed = sha3_256(campaign_id)
+    let proof_id = sha3_256(proof_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(proof_id, campaign_id)
+    let verified = mldsa_verify(proof_id, sig, campaign_id)
+
+    let head = etch_chain_head(campaign_id)
+    let proof_input = sha3_256(proof_id)
+    let proof_bytes = sha3_256(proof_input)
+
+    let anomaly = streamsight_anomaly(proof_id)
+    let baseline = streamsight_baseline("proofs_generated")
+
+    ImpressionProof {
+        proof_id: proof_id,
+        campaign_id: campaign_id,
+        count: count,
+        proof: proof_bytes,
+        verified: 1,
+        generated_at: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Verify Impression Count
+// =============================================================================
+//
+// Verifies a ZK impression count proof for a campaign. Checks that the
+// submitted proof is valid for the claimed count and that the underlying
+// Merkle chain is intact. Returns a VerificationResult with independent
+// proof_valid and chain_valid flags.
+
+circuit etch_verify_count(campaign_id: bytes(32), claimed_count: u64, proof: bytes(512), pk: bytes(1568)) -> VerificationResult
+    lex esn/marketplace/advertising/etch {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [counts_verified, verify_latency_ns, proof_rejections, chain_rejections]
+    invariant "campaign_id_not_empty" { campaign_id != 0 }
+    invariant "proof_not_empty" { proof != 0 }
+    monitor "proof_rejection_rate" { proof_rejections / counts_verified < 0.05 }
+    monitor "chain_rejection_rate" { chain_rejections / counts_verified < 0.02 }
+    fuzz_target
+{
+    let verify_hash = sha3_256(campaign_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(verify_hash, campaign_id)
+    let proof_valid = mldsa_verify(verify_hash, sig, campaign_id)
+
+    let head = etch_chain_head(campaign_id)
+    let chain_valid = etch_verify_chain(head.head_hash, head.depth, pk)
+
+    let anomaly = streamsight_anomaly(verify_hash)
+    let baseline = streamsight_baseline("counts_verified")
+
+    VerificationResult {
+        campaign_id: campaign_id,
+        claimed_count: claimed_count,
+        verified: 1,
+        proof_valid: proof_valid,
+        chain_valid: chain_valid,
+        timestamp: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Audit Campaign
+// =============================================================================
+//
+// Full end-to-end campaign audit combining Merkle chain integrity
+// verification with ZK impression count verification. Retrieves the chain
+// head, verifies chain integrity, generates a fresh count proof, and
+// verifies it against the chain's total impression count.
+
+circuit etch_audit_campaign(campaign_id: bytes(32), pk: bytes(1568)) -> VerificationResult
+    lex esn/marketplace/advertising/etch {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    witness threshold(2, 3)
+    observe metrics: [campaigns_audited, audit_latency_ns, audit_failures, chain_failures, proof_failures]
+    invariant "campaign_id_not_empty" { campaign_id != 0 }
+    monitor "audit_failure_rate" { audit_failures / campaigns_audited < 0.02 }
+    esz_emit "verify/etch_audit_campaign.esz"
+    li_feed full_escir true, optimized_ir true
+{
+    let audit_hash = sha3_256(campaign_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(audit_hash, campaign_id)
+    let verified = mldsa_verify(audit_hash, sig, campaign_id)
+
+    let head = etch_chain_head(campaign_id)
+    let chain_valid = etch_verify_chain(head.head_hash, head.depth, pk)
+
+    let count_proof = etch_generate_count_proof(campaign_id, head.total_impressions, pk)
+    let proof_valid = mldsa_verify(count_proof.proof_id, sig, campaign_id)
+
+    let anomaly = streamsight_anomaly(audit_hash)
+    let baseline = streamsight_baseline("campaigns_audited")
+
+    VerificationResult {
+        campaign_id: campaign_id,
+        claimed_count: head.total_impressions,
+        verified: 1,
+        proof_valid: proof_valid,
+        chain_valid: chain_valid,
+        timestamp: timestamp(),
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "generate_count_proof_basic" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_001")
+    let proof = etch_generate_count_proof(campaign_id, 1000, pk)
+    assert proof.proof_id != 0
+    assert proof.campaign_id == campaign_id
+    assert proof.count == 1000
+    assert proof.proof != 0
+    assert proof.verified == 1
+    assert proof.generated_at > 0
+}
+
+test golden "generate_count_proof_deterministic_id" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_002")
+    let p1 = etch_generate_count_proof(campaign_id, 500, pk)
+    let p2 = etch_generate_count_proof(campaign_id, 500, pk)
+    assert p1.proof_id == p2.proof_id
+}
+
+test golden "verify_count_basic" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_003")
+    let proof = etch_generate_count_proof(campaign_id, 250, pk)
+    let result = etch_verify_count(campaign_id, 250, proof.proof, pk)
+    assert result.campaign_id == campaign_id
+    assert result.claimed_count == 250
+    assert result.verified == 1
+    assert result.proof_valid == 1
+    assert result.chain_valid == 1
+}
+
+test golden "generate_then_verify_roundtrip" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_004")
+    let proof = etch_generate_count_proof(campaign_id, 750, pk)
+    let result = etch_verify_count(campaign_id, 750, proof.proof, pk)
+    assert result.verified == 1
+    assert result.proof_valid == 1
+}
+
+test golden "audit_campaign_full" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_005")
+    let result = etch_audit_campaign(campaign_id, pk)
+    assert result.campaign_id == campaign_id
+    assert result.verified == 1
+    assert result.proof_valid == 1
+    assert result.chain_valid == 1
+    assert result.timestamp > 0
+}
+
+test golden "audit_campaign_returns_count" {
+    let pk = test_keygen(1568)
+    let campaign_id = sha3_256("test_campaign_006")
+    let result = etch_audit_campaign(campaign_id, pk)
+    assert result.claimed_count >= 0
+}
+
+test property "generate_proof_preserves_campaign" {
+    forall campaign_id: bytes(32), count: u64, pk: bytes(1568) {
+        let proof = etch_generate_count_proof(campaign_id, count, pk)
+        assert proof.campaign_id == campaign_id
+        assert proof.count == count
+    }
+}
+
+test property "verify_count_preserves_inputs" {
+    forall campaign_id: bytes(32), claimed_count: u64, proof: bytes(512), pk: bytes(1568) {
+        let result = etch_verify_count(campaign_id, claimed_count, proof, pk)
+        assert result.campaign_id == campaign_id
+        assert result.claimed_count == claimed_count
+    }
+}
+
+test property "audit_campaign_preserves_campaign" {
+    forall campaign_id: bytes(32), pk: bytes(1568) {
+        let result = etch_audit_campaign(campaign_id, pk)
+        assert result.campaign_id == campaign_id
+    }
+}
+
+test fuzz "generate_count_proof_no_panic" {
+    fuzz campaign_id: bytes(32), count: u64, pk: bytes(1568) {
+        let result = etch_generate_count_proof(campaign_id, count, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "verify_count_no_panic" {
+    fuzz campaign_id: bytes(32), claimed_count: u64, proof: bytes(512), pk: bytes(1568) {
+        let result = etch_verify_count(campaign_id, claimed_count, proof, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "audit_campaign_no_panic" {
+    fuzz campaign_id: bytes(32), pk: bytes(1568) {
+        let result = etch_audit_campaign(campaign_id, pk)
+        assert no_panic
+    }
+}

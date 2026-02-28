@@ -1,0 +1,43 @@
+[component]
+name = "estream-crm"
+version = "0.1.0"
+category = "smart-circuit"
+implementation_type = "FastLang"
+status = "Draft"
+description = "Graph-native CRM and lifecycle management engine — user profiles, claim lifecycles, lead pipelines, and partner relationships on Stratum with Cortex AI governance"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-crm"
+readme = "README.md"
+keywords = ["crm", "lifecycle", "graph", "pipeline", "leads", "claims", "advertising"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "freemium"
+visibility = "open"
+
+[component.estream]
+min_version = "0.10.0"
+
+[component.dependencies]
+
+[component.schemas]
+provides = ["UserProfile", "Relationship", "LifecycleTransition", "ClaimRecord", "LeadRecord"]
+requires = []
+
+[component.circuits]
+provides = ["crm_graph", "crm_lifecycle", "crm_claim", "crm_lead"]
+target = ["cpu"]
+
+[component.lifecycle]
+status = "draft"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
+
+[component.include]
+circuits = ["circuits/*.fl"]
+docs = ["README.md"]

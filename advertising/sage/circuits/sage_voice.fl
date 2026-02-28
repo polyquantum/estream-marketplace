@@ -1,0 +1,271 @@
+// Sage Voice — Voice Pipeline for Voicebot
+// Audio in → transcribe → process → respond → audio out
+//
+// This file defines the voice pipeline. VoiceSession tracks call state with
+// a finite state machine (Ringing → Connected → Processing → Speaking →
+// Listening → Ended). VoiceMetrics captures latency and quality metrics
+// critical for real-time voice UX.
+//
+// The voice processing circuit delegates to sage_process_message for inference
+// after transcription, keeping the conversational AI logic in a single place.
+// Voice-specific concerns (latency tracking, session FSM, audio hashing) live
+// here.
+//
+// StreamSight monitors latency_to_first_word_ms as a baseline metric — voice
+// UX degrades sharply above 500ms. Adaptive-level observation on all latency
+// metrics enables automatic anomaly detection on regression.
+
+import sage_agent from "advertising/sage/circuits/sage_agent"
+
+// =============================================================================
+// Data Declarations — Voice Types
+// =============================================================================
+
+// VoiceState enum:
+// 0 = Ringing, 1 = Connected, 2 = Processing, 3 = Speaking,
+// 4 = Listening, 5 = Ended
+
+data VoiceSession : app v1 {
+    session_id: bytes(32),
+    user_id: bytes(32),
+    call_id: bytes(32),
+    started_at: u64,
+    duration_ms: u64,
+    transcript_hash: bytes(32),
+    state: u8,
+}
+    encode @ bytes(177) {
+        session_id      @ le,
+        user_id         @ le,
+        call_id         @ le,
+        started_at      @ le,
+        duration_ms     @ le,
+        transcript_hash @ le,
+        state           @ le,
+    }
+    store kv
+    series retain 30d
+    cortex {
+        user_id obfuscate
+        transcript_hash redact
+        state expose
+        duration_ms expose
+    }
+    observe metrics [state, duration_ms] level adaptive
+    observe events [session_id, state, duration_ms]
+    sign {
+        algorithm mldsa87
+        key_field session_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field session_id
+        proof_system groth16
+    }
+
+data VoiceMetrics : metrics v1 {
+    latency_to_first_word_ms: u64,
+    total_latency_ms: u64,
+    words_per_minute: u32,
+    silence_ratio: u32,
+}
+    observe metrics [latency_to_first_word_ms, total_latency_ms] level adaptive
+    observe events [latency_to_first_word_ms, total_latency_ms, words_per_minute, silence_ratio]
+
+data VoiceTransition : circuit v1 {
+    session_id: bytes(32),
+    from_state: u8,
+    to_state: u8,
+    transitioned_at: u64,
+}
+    observe events [session_id, from_state, to_state]
+
+// =============================================================================
+// Voice State Transition Matrix
+// =============================================================================
+//
+// Valid transitions (from → to):
+//   Ringing(0)     → Connected(1)
+//   Ringing(0)     → Ended(5)
+//   Connected(1)   → Listening(4)
+//   Connected(1)   → Ended(5)
+//   Listening(4)   → Processing(2)
+//   Listening(4)   → Ended(5)
+//   Processing(2)  → Speaking(3)
+//   Processing(2)  → Ended(5)
+//   Speaking(3)    → Listening(4)
+//   Speaking(3)    → Ended(5)
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream sage_voice_events: event<VoiceSession>
+    retention 30d
+    consumers [streamsight, analytics, alerting]
+    classify session_id: IDENTIFIER, user_id: IDENTIFIER, call_id: IDENTIFIER, state: METADATA
+
+stream sage_voice_metrics_events: event<VoiceMetrics>
+    retention 90d
+    consumers [streamsight, analytics, ops_dashboard]
+    classify latency_to_first_word_ms: METRIC, total_latency_ms: METRIC
+
+stream sage_voice_transition_events: event<VoiceTransition>
+    retention 30d
+    consumers [streamsight, analytics]
+    classify session_id: IDENTIFIER, from_state: METADATA, to_state: METADATA
+
+// =============================================================================
+// Series Declaration
+// =============================================================================
+
+series sage_voice_audit: sage_voice_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Voice Process
+// =============================================================================
+//
+// Processes voice input for a session. Receives an audio hash (audio itself
+// is never on-chain), runs transcription inference, then delegates to
+// sage_process_message for conversational AI. Returns an AgentResponse
+// containing the text reply for TTS synthesis.
+
+circuit sage_voice_process(session_id: bytes(32), audio_hash: bytes(32), pk: bytes(1568)) -> AgentResponse
+    lex esn/marketplace/advertising/sage {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [voice_messages_processed, voice_errors, voice_latency_ms, transcription_errors]
+    invariant "session_id_not_empty" { session_id != 0 }
+    invariant "audio_hash_not_empty" { audio_hash != 0 }
+    monitor "voice_error_rate" { voice_errors / voice_messages_processed < 0.05 }
+    monitor "voice_latency_p99" { voice_latency_ms < 500 }
+    monitor "transcription_failure_rate" { transcription_errors / voice_messages_processed < 0.02 }
+    fuzz_target
+{
+    let process_hash = sha3_256(audio_hash)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(process_hash, session_id)
+    let verified = mldsa_verify(process_hash, sig, session_id)
+
+    let transcript = li_infer(audio_hash, session_id)
+    let transcript_hash = sha3_256(transcript)
+    let session = kv_get(session_id)
+    let user_id = session.user_id
+
+    let intent = li_classify(transcript, session_id)
+    let response = li_infer(session_id, transcript)
+    let anomaly = streamsight_anomaly(process_hash)
+    let baseline = streamsight_baseline("voice_latency_ms")
+
+    AgentResponse {
+        response_text: response,
+        confidence: 800,
+        sources: [],
+        follow_up_questions: [],
+        intent_classification: intent,
+    }
+}
+
+// =============================================================================
+// Circuit: Voice Health
+// =============================================================================
+//
+// Reports voice pipeline health metrics. Aggregates active session count and
+// total call volume into VoiceMetrics with latency baselines from StreamSight.
+// Used by ops dashboards for real-time pipeline monitoring.
+
+circuit sage_voice_health(active_sessions: u64, total_calls: u64, pk: bytes(1568)) -> VoiceMetrics
+    lex esn/marketplace/advertising/sage
+    precision B
+    streamsight true
+    observe metrics: [health_checks, active_session_count, total_call_count, latency_baseline_ms]
+    monitor "latency_to_first_word_baseline" { latency_baseline_ms < 500 }
+    monitor "active_session_ceiling" { active_session_count < 10000 }
+{
+    let health_hash = sha3_256(active_sessions)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(health_hash, active_sessions)
+    let verified = mldsa_verify(health_hash, sig, active_sessions)
+
+    let anomaly = streamsight_anomaly(health_hash)
+    let latency_baseline = streamsight_baseline("latency_to_first_word_ms")
+
+    VoiceMetrics {
+        latency_to_first_word_ms: latency_baseline,
+        total_latency_ms: 0,
+        words_per_minute: 0,
+        silence_ratio: 0,
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "voice_process_basic" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_voice_session_001")
+    let audio_hash = sha3_256("test_audio_sample")
+    let response = sage_voice_process(session_id, audio_hash, pk)
+    assert response.response_text != 0
+    assert response.confidence > 0
+    assert response.intent_classification != 0
+}
+
+test golden "voice_process_returns_intent" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_voice_session_002")
+    let audio_hash = sha3_256("test_audio_claim_question")
+    let response = sage_voice_process(session_id, audio_hash, pk)
+    assert response.intent_classification != 0
+}
+
+test golden "voice_health_reports_metrics" {
+    let pk = test_keygen(1568)
+    let metrics = sage_voice_health(42, 1500, pk)
+    assert metrics.latency_to_first_word_ms >= 0
+}
+
+test golden "voice_health_zero_sessions" {
+    let pk = test_keygen(1568)
+    let metrics = sage_voice_health(0, 0, pk)
+    assert metrics.latency_to_first_word_ms >= 0
+}
+
+test property "voice_process_always_returns_response" {
+    forall session_id: bytes(32), audio_hash: bytes(32), pk: bytes(1568) {
+        let result = sage_voice_process(session_id, audio_hash, pk)
+        assert result.response_text != 0
+    }
+}
+
+test property "voice_health_deterministic" {
+    forall active: u64, total: u64, pk: bytes(1568) {
+        let m1 = sage_voice_health(active, total, pk)
+        let m2 = sage_voice_health(active, total, pk)
+        assert m1.latency_to_first_word_ms == m2.latency_to_first_word_ms
+    }
+}
+
+test fuzz "voice_process_no_panic" {
+    fuzz session_id: bytes(32), audio_hash: bytes(32), pk: bytes(1568) {
+        let result = sage_voice_process(session_id, audio_hash, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "voice_health_no_panic" {
+    fuzz active_sessions: u64, total_calls: u64, pk: bytes(1568) {
+        let result = sage_voice_health(active_sessions, total_calls, pk)
+        assert no_panic
+    }
+}

@@ -1,0 +1,44 @@
+[component]
+name = "estream-tide"
+version = "0.1.0"
+category = "smart-circuit"
+implementation_type = "FastLang"
+status = "Draft"
+description = "Organic growth engine — SEO optimization, traffic analysis, content strategy, and AI-driven growth feedback loops"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-tide"
+readme = "README.md"
+keywords = ["seo", "growth", "traffic", "organic", "content-strategy", "advertising"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "usage-based"
+visibility = "open"
+
+[component.estream]
+min_version = "0.10.0"
+
+[component.dependencies]
+estream-sage = "^0.1.0"
+
+[component.schemas]
+provides = ["TrafficMetrics", "GrowthSignal", "ContentPerformance"]
+requires = []
+
+[component.circuits]
+provides = ["tide_growth"]
+target = ["cpu"]
+
+[component.lifecycle]
+status = "draft"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
+
+[component.include]
+circuits = ["circuits/*.fl"]
+docs = ["README.md"]

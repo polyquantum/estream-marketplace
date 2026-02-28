@@ -1,0 +1,44 @@
+[component]
+name = "estream-relay"
+version = "0.1.0"
+category = "smart-circuit"
+implementation_type = "FastLang"
+status = "Draft"
+description = "Affiliate and referral platform — user-to-user referral programs with attribution tracking, compensation chains, and viral growth analytics"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-relay"
+readme = "README.md"
+keywords = ["affiliate", "referral", "attribution", "compensation", "viral", "growth", "advertising"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "usage-based"
+visibility = "open"
+
+[component.estream]
+min_version = "0.10.0"
+
+[component.dependencies]
+estream-crm = "^0.1.0"
+
+[component.schemas]
+provides = ["ReferralLink", "ReferralTree", "Compensation", "ViralMetrics"]
+requires = []
+
+[component.circuits]
+provides = ["relay_affiliate"]
+target = ["cpu"]
+
+[component.lifecycle]
+status = "draft"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
+
+[component.include]
+circuits = ["circuits/*.fl"]
+docs = ["README.md"]

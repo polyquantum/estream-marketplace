@@ -1,0 +1,44 @@
+[component]
+name = "estream-portal"
+version = "0.1.0"
+category = "integration"
+implementation_type = "FastLang"
+status = "Draft"
+description = "Embeddable widget framework — extends @estream/embed with partner engagement widgets, RBAC-gated interactions, and sandboxed consent flows in iframes"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-portal"
+readme = "README.md"
+keywords = ["portal", "embed", "widget", "iframe", "rbac", "consent", "integration", "advertising"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "free"
+visibility = "open"
+
+[component.estream]
+min_version = "0.10.0"
+
+[component.dependencies]
+estream-optin = "^0.1.0"
+
+[component.schemas]
+provides = ["WidgetInstance", "WidgetConfig", "RbacCheck", "BridgeMessage", "BridgeValidation"]
+requires = []
+
+[component.circuits]
+provides = ["portal_widget", "portal_bridge"]
+target = ["cpu"]
+
+[component.lifecycle]
+status = "draft"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
+
+[component.include]
+circuits = ["circuits/*.fl"]
+docs = ["README.md"]

@@ -1,0 +1,444 @@
+// Opt-In Engage — Engagement Codes and Cryptographic Consent
+// Generate codes -> user activates (THE opt-in moment) -> consent signed -> revoke
+//
+// This file defines the engagement code lifecycle and consent chain for
+// the opt-in model. Partners create offers tied to escrow reservations;
+// users receive engagement codes specifying exactly which data fields
+// will be shared and what compensation they receive. When the user
+// activates a code, consent is ML-DSA-87 signed and recorded as an
+// immutable DAG node — producing a cryptographically provable consent
+// chain linked to the Thread provenance system.
+//
+// The activation circuit runs in constant_time mode to prevent
+// side-channel leakage of the consent decision. Revocation is
+// immediate but does not delete the immutable consent proof.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import thread_chain from "advertising/thread/circuits/thread_chain"
+import optin_profile from "advertising/optin/circuits/optin_profile"
+
+// =============================================================================
+// Data Declarations — Engagement Code Types
+// =============================================================================
+
+// CompensationType enum:
+// 0 = PrioritySupport, 1 = EarlyAccess, 2 = AffiliateCredit, 3 = CharitableDonation
+
+// EngagementStatus enum:
+// 0 = Generated, 1 = Viewed, 2 = Activated, 3 = Expired, 4 = Revoked
+
+data EngagementCode : app v1 {
+    code_id: bytes(32),
+    partner_id: bytes(32),
+    user_id: bytes(32),
+    offer_description_hash: bytes(32),
+    visible_fields: list<string>,
+    user_compensation_type: enum { PrioritySupport, EarlyAccess, AffiliateCredit, CharitableDonation },
+    escrow_id: bytes(32),
+    status: enum { Generated, Viewed, Activated, Expired, Revoked },
+    created_at: u64,
+    activated_at: u64,
+    consent_signature: bytes(4627),
+}
+    encode @ bytes(4883) {
+        code_id                 @ le,
+        partner_id              @ le,
+        user_id                 @ le,
+        offer_description_hash  @ le,
+        visible_fields          @ le,
+        user_compensation_type  @ le,
+        escrow_id               @ le,
+        status                  @ le,
+        created_at              @ le,
+        activated_at            @ le,
+        consent_signature       @ le,
+    }
+    store kv
+    series retain 7y
+    cortex {
+        visibility {
+            user_id obfuscate
+            partner_id expose
+            status expose
+            visible_fields expose
+            user_compensation_type expose
+        }
+    }
+    observe events [status, partner_id]
+    observe metrics [status, partner_id] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field consent_signature
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field code_id
+    }
+
+data ConsentProof : app v1 {
+    proof_id: bytes(32),
+    code_id: bytes(32),
+    user_id: bytes(32),
+    partner_id: bytes(32),
+    consented_fields: list<string>,
+    consent_hash: bytes(32),
+    signature: bytes(4627),
+    timestamp_ns: u64,
+    provenance_hop_id: bytes(32),
+}
+    encode @ bytes(4851) {
+        proof_id          @ le,
+        code_id           @ le,
+        user_id           @ le,
+        partner_id        @ le,
+        consented_fields  @ le,
+        consent_hash      @ le,
+        signature         @ le,
+        timestamp_ns      @ le,
+        provenance_hop_id @ le,
+    }
+    store dag
+    series retain 7y
+    cortex {
+        visibility {
+            user_id obfuscate
+            partner_id expose
+            consented_fields expose
+            consent_hash expose
+        }
+    }
+    observe events [code_id, partner_id, consent_hash]
+    observe metrics [consent_hash] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field signature
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field consent_hash
+        proof_system groth16
+    }
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream optin_engagement_events: event<EngagementCode>
+    retention 7y
+    consumers [streamsight, audit, cortex, analytics, alerting]
+    classify code_id: IDENTIFIER, partner_id: IDENTIFIER, user_id: IDENTIFIER, status: METADATA
+
+stream optin_consent_proofs: event<ConsentProof>
+    retention 7y
+    consumers [streamsight, audit, cortex, analytics]
+    classify proof_id: IDENTIFIER, code_id: IDENTIFIER, consent_hash: IDENTIFIER
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series optin_consent_chain: optin_consent_proofs
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Generate Engagement Code
+// =============================================================================
+//
+// Creates an engagement code tying a partner offer to a specific user,
+// with a defined set of visible fields, compensation type, and escrow
+// backing. The code starts in Generated status. The code_id is
+// deterministically derived from the partner, user, and offer hash.
+
+circuit optin_generate_code(partner_id: bytes(32), user_id: bytes(32), offer_hash: bytes(32), visible_fields: list<string>, compensation_type: enum { PrioritySupport, EarlyAccess, AffiliateCredit, CharitableDonation }, escrow_id: bytes(32), pk: bytes(1568)) -> EngagementCode
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [codes_generated, generation_latency_ns, codes_per_partner]
+    invariant "partner_id_not_empty" { partner_id != 0 }
+    invariant "user_id_not_empty" { user_id != 0 }
+    invariant "escrow_id_not_empty" { escrow_id != 0 }
+    monitor "generation_rate" { deviation(codes_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let code_seed = sha3_256(partner_id)
+    let code_id = sha3_256(code_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(code_id, partner_id)
+    let verified = mldsa_verify(code_id, sig, pk)
+
+    let anomaly = streamsight_anomaly(code_id)
+    let baseline = streamsight_baseline("codes_generated")
+
+    EngagementCode {
+        code_id: code_id,
+        partner_id: partner_id,
+        user_id: user_id,
+        offer_description_hash: offer_hash,
+        visible_fields: visible_fields,
+        user_compensation_type: compensation_type,
+        escrow_id: escrow_id,
+        status: Generated,
+        created_at: timestamp(),
+        activated_at: 0,
+        consent_signature: 0,
+    }
+}
+
+// =============================================================================
+// Circuit: Activate Engagement Code (THE Opt-In Moment)
+// =============================================================================
+//
+// User activates an engagement code, producing a lattice-signed consent
+// proof recorded as an immutable DAG node. This is the cryptographic
+// opt-in moment — the user signs with their private key, consenting to
+// the specific fields listed in the code. The consent proof links to
+// the Thread provenance chain via provenance_hop_id.
+//
+// Runs in constant_time mode to prevent side-channel leakage of the
+// consent decision. The invariant enforces that Activated status always
+// implies a non-zero consent signature.
+
+circuit optin_activate_code(code_id: bytes(32), user_sk: bytes(4896), user_pk: bytes(1568)) -> ConsentProof
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [codes_activated, activation_latency_ns, consent_proofs_created]
+    invariant "consent_requires_activation" { status == Activated implies consent_signature != 0 }
+    invariant "code_id_not_empty" { code_id != 0 }
+    monitor "activation_rate" { deviation(activations_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let consent_seed = sha3_256(code_id)
+    let consent_hash = sha3_256(consent_seed)
+    let proof_id = sha3_256(consent_hash)
+    let kem = mlkem_encaps(user_pk)
+    let sig = mldsa_sign(consent_hash, user_sk)
+    let verified = mldsa_verify(consent_hash, sig, user_pk)
+
+    let code = kv_get(code_id)
+    let hop_id = sha3_256(code.partner_id)
+
+    let anomaly = streamsight_anomaly(proof_id)
+    let baseline = streamsight_baseline("codes_activated")
+
+    ConsentProof {
+        proof_id: proof_id,
+        code_id: code_id,
+        user_id: code.user_id,
+        partner_id: code.partner_id,
+        consented_fields: code.visible_fields,
+        consent_hash: consent_hash,
+        signature: sig,
+        timestamp_ns: timestamp(),
+        provenance_hop_id: hop_id,
+    }
+}
+
+// =============================================================================
+// Circuit: Revoke Engagement Code
+// =============================================================================
+//
+// User revokes consent on an engagement code. Sets status to Revoked,
+// preventing further data access via view records. The immutable consent
+// proof is NOT deleted (audit trail integrity). Already-settled funds
+// are not clawed back — settlement is final.
+
+circuit optin_revoke_code(code_id: bytes(32), user_sk: bytes(4896), pk: bytes(1568)) -> EngagementCode
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [codes_revoked, revocation_latency_ns]
+    invariant "code_id_not_empty" { code_id != 0 }
+    monitor "revocation_rate" { deviation(revocations_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let revoke_hash = sha3_256(code_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(revoke_hash, user_sk)
+    let verified = mldsa_verify(revoke_hash, sig, pk)
+
+    let code = kv_get(code_id)
+
+    let anomaly = streamsight_anomaly(revoke_hash)
+    let baseline = streamsight_baseline("codes_revoked")
+
+    EngagementCode {
+        code_id: code.code_id,
+        partner_id: code.partner_id,
+        user_id: code.user_id,
+        offer_description_hash: code.offer_description_hash,
+        visible_fields: code.visible_fields,
+        user_compensation_type: code.user_compensation_type,
+        escrow_id: code.escrow_id,
+        status: Revoked,
+        created_at: code.created_at,
+        activated_at: code.activated_at,
+        consent_signature: code.consent_signature,
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "generate_code_basic" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_001")
+    let user_id = sha3_256("test_user_001")
+    let offer_hash = sha3_256("test_offer_001")
+    let escrow_id = sha3_256("test_escrow_001")
+    let code = optin_generate_code(partner_id, user_id, offer_hash, ["email", "name"], PrioritySupport, escrow_id, pk)
+    assert code.code_id != 0
+    assert code.partner_id == partner_id
+    assert code.user_id == user_id
+    assert code.status == Generated
+    assert code.activated_at == 0
+    assert code.consent_signature == 0
+}
+
+test golden "generate_code_deterministic_id" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_002")
+    let user_id = sha3_256("test_user_002")
+    let offer_hash = sha3_256("test_offer_002")
+    let escrow_id = sha3_256("test_escrow_002")
+    let c1 = optin_generate_code(partner_id, user_id, offer_hash, ["email"], EarlyAccess, escrow_id, pk)
+    let c2 = optin_generate_code(partner_id, user_id, offer_hash, ["email"], EarlyAccess, escrow_id, pk)
+    assert c1.code_id == c2.code_id
+}
+
+test golden "generate_code_all_compensation_types" {
+    let pk = test_keygen(1568)
+    let partner_id = sha3_256("test_partner_003")
+    let user_id = sha3_256("test_user_003")
+    let offer_hash = sha3_256("test_offer_003")
+    let escrow_id = sha3_256("test_escrow_003")
+    let c1 = optin_generate_code(partner_id, user_id, offer_hash, ["email"], PrioritySupport, escrow_id, pk)
+    let c2 = optin_generate_code(partner_id, user_id, offer_hash, ["email"], EarlyAccess, escrow_id, pk)
+    let c3 = optin_generate_code(partner_id, user_id, offer_hash, ["email"], AffiliateCredit, escrow_id, pk)
+    let c4 = optin_generate_code(partner_id, user_id, offer_hash, ["email"], CharitableDonation, escrow_id, pk)
+    assert c1.user_compensation_type == PrioritySupport
+    assert c2.user_compensation_type == EarlyAccess
+    assert c3.user_compensation_type == AffiliateCredit
+    assert c4.user_compensation_type == CharitableDonation
+}
+
+test golden "activate_code_produces_consent_proof" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let partner_id = sha3_256("test_partner_004")
+    let user_id = sha3_256("test_user_004")
+    let offer_hash = sha3_256("test_offer_004")
+    let escrow_id = sha3_256("test_escrow_004")
+    let code = optin_generate_code(partner_id, user_id, offer_hash, ["email", "phone"], PrioritySupport, escrow_id, pk)
+    let proof = optin_activate_code(code.code_id, sk, pk)
+    assert proof.proof_id != 0
+    assert proof.code_id == code.code_id
+    assert proof.consent_hash != 0
+    assert proof.signature != 0
+    assert proof.timestamp_ns > 0
+}
+
+test golden "activate_code_preserves_consented_fields" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let partner_id = sha3_256("test_partner_005")
+    let user_id = sha3_256("test_user_005")
+    let offer_hash = sha3_256("test_offer_005")
+    let escrow_id = sha3_256("test_escrow_005")
+    let code = optin_generate_code(partner_id, user_id, offer_hash, ["email", "name", "phone"], EarlyAccess, escrow_id, pk)
+    let proof = optin_activate_code(code.code_id, sk, pk)
+    assert proof.consented_fields == ["email", "name", "phone"]
+    assert proof.partner_id == partner_id
+}
+
+test golden "revoke_code_sets_status" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let partner_id = sha3_256("test_partner_006")
+    let user_id = sha3_256("test_user_006")
+    let offer_hash = sha3_256("test_offer_006")
+    let escrow_id = sha3_256("test_escrow_006")
+    let code = optin_generate_code(partner_id, user_id, offer_hash, ["email"], PrioritySupport, escrow_id, pk)
+    let proof = optin_activate_code(code.code_id, sk, pk)
+    let revoked = optin_revoke_code(code.code_id, sk, pk)
+    assert revoked.status == Revoked
+    assert revoked.code_id == code.code_id
+    assert revoked.partner_id == partner_id
+}
+
+test golden "revoke_preserves_consent_signature" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let partner_id = sha3_256("test_partner_007")
+    let user_id = sha3_256("test_user_007")
+    let offer_hash = sha3_256("test_offer_007")
+    let escrow_id = sha3_256("test_escrow_007")
+    let code = optin_generate_code(partner_id, user_id, offer_hash, ["email"], PrioritySupport, escrow_id, pk)
+    let proof = optin_activate_code(code.code_id, sk, pk)
+    let revoked = optin_revoke_code(code.code_id, sk, pk)
+    assert revoked.consent_signature != 0
+}
+
+test property "generate_code_preserves_partner_id" {
+    forall partner_id: bytes(32), user_id: bytes(32), offer_hash: bytes(32), escrow_id: bytes(32), pk: bytes(1568) {
+        let code = optin_generate_code(partner_id, user_id, offer_hash, ["email"], PrioritySupport, escrow_id, pk)
+        assert code.partner_id == partner_id
+    }
+}
+
+test property "generate_code_preserves_user_id" {
+    forall partner_id: bytes(32), user_id: bytes(32), offer_hash: bytes(32), escrow_id: bytes(32), pk: bytes(1568) {
+        let code = optin_generate_code(partner_id, user_id, offer_hash, ["email"], EarlyAccess, escrow_id, pk)
+        assert code.user_id == user_id
+    }
+}
+
+test property "generate_code_starts_as_generated" {
+    forall partner_id: bytes(32), user_id: bytes(32), offer_hash: bytes(32), escrow_id: bytes(32), pk: bytes(1568) {
+        let code = optin_generate_code(partner_id, user_id, offer_hash, ["email"], AffiliateCredit, escrow_id, pk)
+        assert code.status == Generated
+    }
+}
+
+test fuzz "generate_code_no_panic" {
+    fuzz partner_id: bytes(32), user_id: bytes(32), offer_hash: bytes(32), escrow_id: bytes(32), pk: bytes(1568) {
+        let result = optin_generate_code(partner_id, user_id, offer_hash, ["email"], PrioritySupport, escrow_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "activate_code_no_panic" {
+    fuzz code_id: bytes(32), user_sk: bytes(4896), user_pk: bytes(1568) {
+        let result = optin_activate_code(code_id, user_sk, user_pk)
+        assert no_panic
+    }
+}
+
+test fuzz "revoke_code_no_panic" {
+    fuzz code_id: bytes(32), user_sk: bytes(4896), pk: bytes(1568) {
+        let result = optin_revoke_code(code_id, user_sk, pk)
+        assert no_panic
+    }
+}

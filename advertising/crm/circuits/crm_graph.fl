@@ -1,0 +1,352 @@
+// CRM Graph — Core Data Model
+// User profiles, relationships, claims, leads, partners as graph nodes and edges
+//
+// This file defines the core CRM graph structure on Stratum. All entities are
+// graph nodes with typed edges representing relationships (claims, leads,
+// referrals, partnerships). The graph uses CSR storage on BRAM for fast
+// traversal, with KV overlay for direct ID lookups.
+//
+// Data types use `data` declarations with verbs (encode, observe, cortex, attest)
+// for wire layout, inline StreamSight hooks, privacy masks, and PoVC attestation.
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+// =============================================================================
+// Data Declarations — CRM Core Types
+// =============================================================================
+
+data UserProfile : app v1 {
+    id: bytes(32),
+    name: bytes(128),
+    email: bytes(256),
+    phone: bytes(32),
+    status: u8,
+    created_at: u64,
+    updated_at: u64,
+    metadata: bytes(512),
+}
+    encode @ bytes(1000) {
+        id          @ le,
+        name        @ le,
+        email       @ le,
+        phone       @ le,
+        status      @ le,
+        created_at  @ le,
+        updated_at  @ le,
+        metadata    @ le,
+    }
+    store graph
+    store kv
+    series retain 365d
+    cortex {
+        name obfuscate
+        email obfuscate
+        phone redact
+        status expose
+    }
+    observe metrics [status, created_at, updated_at] level adaptive
+    observe events [status, updated_at]
+    sign {
+        algorithm mldsa87
+        key_field id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field id
+        proof_system groth16
+    }
+
+// Status: 0 = Inactive, 1 = Active, 2 = Suspended, 3 = Archived
+
+data Relationship : app v1 {
+    from_id: bytes(32),
+    to_id: bytes(32),
+    relationship_type: u8,
+    strength: u32,
+    created_at: u64,
+}
+    encode @ bytes(77) {
+        from_id           @ le,
+        to_id             @ le,
+        relationship_type @ le,
+        strength          @ le,
+        created_at        @ le,
+    }
+    store graph
+    observe metrics [relationship_type, strength] level adaptive
+    observe events [relationship_type, strength]
+
+// RelationshipType: 0 = CLAIM, 1 = LEAD, 2 = PARTNER, 3 = REFERRAL
+
+data ClaimInfo : circuit v1 {
+    claim_id: bytes(32),
+    claim_type: bytes(64),
+    state: u8,
+    filed_at: u64,
+}
+    observe events [claim_id, state]
+
+data LeadInfo : circuit v1 {
+    lead_id: bytes(32),
+    source: bytes(64),
+    state: u8,
+    score: u32,
+}
+    observe events [lead_id, state, score]
+
+data PartnerInfo : circuit v1 {
+    partner_id: bytes(32),
+    partner_name: bytes(128),
+    partner_type: u8,
+    active: bool,
+}
+    observe events [partner_id, active]
+
+data UserProfileInfo : circuit v1 {
+    id: bytes(32),
+    name: bytes(128),
+    status: u8,
+}
+    observe events [id, status]
+
+data TraversalResult : circuit v1 {
+    node_ids: list<bytes(32)>,
+    depth_reached: u32,
+    edge_count: u32,
+}
+    observe metrics [depth_reached, edge_count] level adaptive
+
+// =============================================================================
+// Graph Declaration
+// =============================================================================
+
+graph crm_graph {
+    node UserProfile : UserProfileInfo
+    node Claim : ClaimInfo
+    node Lead : LeadInfo
+    node Partner : PartnerInfo
+    edge filed_claim : UserProfile -> Claim
+    edge generated_lead : UserProfile -> Lead
+    edge referred_to : Lead -> Partner
+    edge referred_by : UserProfile -> UserProfile
+    storage csr { tier bram { capacity: 100000 } }
+    sign ml_dsa_87
+    ai_feed relationship_analysis
+    observe streamsight: [node_count, edge_count, traversal_depth] threshold: {
+        node_count 0.9
+        baseline_window 3600
+    }
+}
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream crm_profile_events: event<UserProfile>
+    retention 7y
+    consumers [streamsight, audit, cortex]
+    classify id: IDENTIFIER, name: PII, email: PII, status: METADATA
+
+stream crm_relationship_events: event<Relationship>
+    retention 7y
+    consumers [streamsight, audit]
+    classify from_id: IDENTIFIER, to_id: IDENTIFIER, relationship_type: METADATA
+
+// =============================================================================
+// Series Declaration
+// =============================================================================
+
+series crm_audit_series: crm_profile_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Create User Profile
+// =============================================================================
+//
+// Creates a new user profile node in the CRM graph. Generates a deterministic
+// profile ID from the input fields, signs with ML-DSA-87, and emits the profile
+// to the event stream. Cortex PII governance is applied inline.
+
+circuit crm_create_profile(name: bytes(128), email: bytes(256), phone: bytes(32), pk: bytes(1568)) -> UserProfile
+    lex esn/marketplace/advertising/crm {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [profiles_created, create_errors]
+    invariant "name_not_empty" { name != 0 }
+    invariant "email_not_empty" { email != 0 }
+    monitor "create_error_rate" { create_errors / profiles_created < 0.01 }
+    fuzz_target
+{
+    let id_seed = sha3_256(name)
+    let profile_id = sha3_256(id_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(profile_id, name)
+    let verified = mldsa_verify(profile_id, sig, name)
+    let anomaly = streamsight_anomaly(profile_id)
+    let baseline = streamsight_baseline("profiles_created")
+    let now = 0
+
+    UserProfile {
+        id: profile_id,
+        name: name,
+        email: email,
+        phone: phone,
+        status: 1,
+        created_at: now,
+        updated_at: now,
+        metadata: 0,
+    }
+}
+
+// =============================================================================
+// Circuit: Update User Profile
+// =============================================================================
+//
+// Updates mutable fields on an existing user profile. The profile ID is
+// immutable — only name, email, phone, status, and metadata can change.
+// Every update is signed and produces an audit event.
+
+circuit crm_update_profile(profile_id: bytes(32), updates: bytes(512), pk: bytes(1568)) -> UserProfile
+    lex esn/marketplace/advertising/crm {
+        governance hierarchical
+        audit_trail true
+    }
+    precision B
+    streamsight true
+    povc true
+    observe metrics: [profiles_updated, update_errors]
+    invariant "profile_id_not_empty" { profile_id != 0 }
+    monitor "update_error_rate" { update_errors / profiles_updated < 0.01 }
+{
+    let update_hash = sha3_256(updates)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(update_hash, profile_id)
+    let verified = mldsa_verify(update_hash, sig, profile_id)
+    let anomaly = streamsight_anomaly(update_hash)
+    let baseline = streamsight_baseline("profiles_updated")
+    let now = 0
+
+    UserProfile {
+        id: profile_id,
+        name: 0,
+        email: 0,
+        phone: 0,
+        status: 1,
+        created_at: 0,
+        updated_at: now,
+        metadata: updates,
+    }
+}
+
+// =============================================================================
+// Circuit: Add Relationship
+// =============================================================================
+//
+// Adds a typed edge between two nodes in the CRM graph. Relationship types
+// are CLAIM (0), LEAD (1), PARTNER (2), REFERRAL (3). The edge is signed
+// and produces a relationship event for StreamSight tracking.
+
+circuit crm_add_relationship(from_id: bytes(32), to_id: bytes(32), rel_type: u8, pk: bytes(1568)) -> Relationship
+    lex esn/marketplace/advertising/crm {
+        governance hierarchical
+        audit_trail true
+    }
+    precision B
+    streamsight true
+    povc true
+    observe metrics: [relationships_added, relationship_errors, edge_count]
+    invariant "from_id_not_empty" { from_id != 0 }
+    invariant "to_id_not_empty" { to_id != 0 }
+    invariant "rel_type_valid" { rel_type <= 3 }
+    monitor "relationship_error_rate" { relationship_errors / relationships_added < 0.01 }
+{
+    let edge_hash = sha3_256(from_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(edge_hash, from_id)
+    let verified = mldsa_verify(edge_hash, sig, from_id)
+    let anomaly = streamsight_anomaly(edge_hash)
+    let baseline = streamsight_baseline("relationships_added")
+    let now = 0
+
+    Relationship {
+        from_id: from_id,
+        to_id: to_id,
+        relationship_type: rel_type,
+        strength: 100,
+        created_at: now,
+    }
+}
+
+// =============================================================================
+// Circuit: Traverse Relationships
+// =============================================================================
+//
+// Performs a depth-bounded graph traversal from a user node, following edges
+// of the specified relationship type. Returns a list of reachable node IDs.
+// Traversal depth is capped to prevent unbounded fan-out.
+
+circuit crm_traverse_relationships(user_id: bytes(32), rel_type: u8, depth: u32, pk: bytes(1568)) -> list<bytes(32)>
+    lex esn/marketplace/advertising/crm
+    precision C
+    streamsight true
+    observe metrics: [traversals_executed, nodes_visited, max_depth_reached]
+    invariant "user_id_not_empty" { user_id != 0 }
+    invariant "depth_bounded" { depth <= 10 }
+    monitor "traversal_fanout" { nodes_visited / traversals_executed < 1000 }
+{
+    let traversal_hash = sha3_256(user_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(traversal_hash, user_id)
+    let verified = mldsa_verify(traversal_hash, sig, user_id)
+    let anomaly = streamsight_anomaly(traversal_hash)
+    let baseline = streamsight_baseline("nodes_visited")
+    let result = graph_traverse(crm_graph, user_id, rel_type, depth)
+    result
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "create_profile_basic" {
+    let pk = test_keygen(1568)
+    let profile = crm_create_profile("Alice Johnson", "alice@example.com", "+15551234567", pk)
+    assert profile.id != 0
+    assert profile.name == "Alice Johnson"
+    assert profile.email == "alice@example.com"
+    assert profile.phone == "+15551234567"
+    assert profile.status == 1
+}
+
+test golden "add_relationship" {
+    let pk = test_keygen(1568)
+    let p1 = crm_create_profile("Alice", "alice@example.com", "+15551111111", pk)
+    let p2 = crm_create_profile("Bob", "bob@example.com", "+15552222222", pk)
+    let rel = crm_add_relationship(p1.id, p2.id, 3, pk)
+    assert rel.from_id == p1.id
+    assert rel.to_id == p2.id
+    assert rel.relationship_type == 3
+    assert rel.strength == 100
+}
+
+test property "profile_updates_preserve_id" {
+    forall profile_id: bytes(32), updates: bytes(512), pk: bytes(1568) {
+        let result = crm_update_profile(profile_id, updates, pk)
+        assert result.id == profile_id
+    }
+}
+
+test fuzz "create_profile_no_panic" {
+    fuzz name: bytes(128), email: bytes(256), phone: bytes(32), pk: bytes(1568) {
+        let result = crm_create_profile(name, email, phone, pk)
+        assert no_panic
+    }
+}

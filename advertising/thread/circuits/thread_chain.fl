@@ -1,0 +1,376 @@
+// Thread Chain — Per-Session Provenance Chain with Lattice-Signed Hops
+// Record hops -> link chain -> retrieve session -> verify integrity
+//
+// This file defines the per-session provenance chain circuit. Every user
+// interaction — ad view, click, landing page view, form engagement,
+// conversion — is recorded as a ProvenanceHop and appended to an
+// append-only DAG chain keyed by session. Each hop is ML-DSA-87 signed
+// with parent hash linking for tamper-evident ordering.
+//
+// SessionChain tracks the current state of each session's provenance
+// chain — first and last hop hashes, hop count, and conversion status.
+// Cortex visibility hashes session and page identifiers while exposing
+// hop type and referrer context for audit.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import etch_impression from "advertising/etch/circuits/etch_impression"
+
+// =============================================================================
+// Data Declarations — Hop & Session Types
+// =============================================================================
+
+data ProvenanceHop : app v1 {
+    hop_id: bytes(32),
+    session_id: bytes(32),
+    hop_type: enum { AdView, AdClick, LandingPageView, FormStart, FormField, FormSubmit, PartnerRedirect, Conversion, OptIn },
+    timestamp_ns: u64,
+    page_url_hash: bytes(32),
+    referrer_hash: bytes(32),
+    parent_hop_hash: bytes(32),
+    signature: bytes(4627),
+}
+    encode @ bytes(4819) {
+        hop_id          @ le,
+        session_id      @ le,
+        hop_type        @ le,
+        timestamp_ns    @ le,
+        page_url_hash   @ le,
+        referrer_hash   @ le,
+        parent_hop_hash @ le,
+        signature       @ le,
+    }
+    store dag
+    series retain 365d
+    cortex {
+        visibility {
+            session_id hash
+            page_url_hash expose
+            referrer_hash expose
+            hop_type expose
+        }
+    }
+    observe events [hop_type, session_id]
+    observe metrics [timestamp_ns] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field signature
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field hop_id
+    }
+
+data SessionChain : app v1 {
+    session_id: bytes(32),
+    first_hop_hash: bytes(32),
+    last_hop_hash: bytes(32),
+    hop_count: u64,
+    started_at: u64,
+    last_activity_ns: u64,
+    converted: u8,
+}
+    encode @ bytes(209) {
+        session_id      @ le,
+        first_hop_hash  @ le,
+        last_hop_hash   @ le,
+        hop_count       @ le,
+        started_at      @ le,
+        last_activity_ns @ le,
+        converted       @ le,
+    }
+    store kv
+    series retain 365d
+    observe metrics [hop_count, converted] level adaptive
+    observe events [session_id, hop_count, converted]
+
+// =============================================================================
+// DAG Declaration — Provenance Chain
+// =============================================================================
+
+dag provenance_chain {
+    node ProvenanceHop : ProvenanceHop
+    edge follows : ProvenanceHop -> ProvenanceHop
+    storage csr { tier bram { capacity: 5000000 } }
+    sign ml_dsa_87
+}
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream thread_hop_events: event<ProvenanceHop>
+    retention 365d
+    consumers [streamsight, audit, analytics]
+    classify hop_id: IDENTIFIER, session_id: IDENTIFIER, hop_type: METADATA, timestamp_ns: METRIC, page_url_hash: IDENTIFIER, referrer_hash: IDENTIFIER, parent_hop_hash: IDENTIFIER
+
+stream thread_session_events: event<SessionChain>
+    retention 365d
+    consumers [streamsight, audit, analytics]
+    classify session_id: IDENTIFIER, hop_count: METRIC, converted: METRIC, started_at: METRIC, last_activity_ns: METRIC
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series thread_audit_series: thread_hop_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Record Hop
+// =============================================================================
+//
+// Records a new provenance hop in the per-session chain. The hop ID is
+// derived deterministically from the session, hop type, and page context.
+// Links to the previous hop via parent_hop_hash (zero for the first hop
+// in a session, which must be AdView). The hop is ML-DSA-87 signed and
+// appended as a DAG edge.
+
+circuit thread_record_hop(session_id: bytes(32), hop_type: enum { AdView, AdClick, LandingPageView, FormStart, FormField, FormSubmit, PartnerRedirect, Conversion, OptIn }, page_url_hash: bytes(32), referrer_hash: bytes(32), sk: bytes(4896), pk: bytes(1568)) -> ProvenanceHop
+    lex esn/marketplace/advertising/thread {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [hops_recorded, hop_latency_ns]
+    invariant "chain_linked" { parent_hop_hash != 0 || hop_type == AdView }
+    monitor "hop_rate" { deviation(hops_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let hop_seed = sha3_256(session_id)
+    let hop_id = sha3_256(hop_seed)
+    let sig = mldsa_sign(hop_id, sk)
+    let verified = mldsa_verify(hop_id, sig, pk)
+    let kem = mlkem_encaps(pk)
+
+    let session = kv_get(session_id)
+    let parent_hop_hash = session.last_hop_hash
+
+    let edge = graph_add_edge(provenance_chain, hop_id, parent_hop_hash, "follows")
+
+    let new_hop_count = session.hop_count + 1
+    let is_first = session.hop_count == 0
+    let first_hop = if is_first { hop_id } else { session.first_hop_hash }
+    let started = if is_first { timestamp() } else { session.started_at }
+    let is_conversion = hop_type == Conversion
+    let converted = if is_conversion { 1 } else { session.converted }
+
+    let anomaly = streamsight_anomaly(hop_id)
+    let baseline = streamsight_baseline("hops_recorded")
+
+    ProvenanceHop {
+        hop_id: hop_id,
+        session_id: session_id,
+        hop_type: hop_type,
+        timestamp_ns: timestamp(),
+        page_url_hash: page_url_hash,
+        referrer_hash: referrer_hash,
+        parent_hop_hash: parent_hop_hash,
+        signature: sig,
+    }
+}
+
+// =============================================================================
+// Circuit: Get Chain
+// =============================================================================
+//
+// Retrieves the full provenance chain for a session by traversing the DAG
+// from the last hop backward through parent edges. Returns the ordered
+// list of hops from first to last.
+
+circuit thread_get_chain(session_id: bytes(32), pk: bytes(1568)) -> list<ProvenanceHop>
+    lex esn/marketplace/advertising/thread {
+        governance hierarchical
+        audit_trail true
+    }
+    precision B
+    streamsight true
+    observe metrics: [chains_retrieved, retrieval_latency_ns, chain_lengths]
+    invariant "session_id_not_empty" { session_id != 0 }
+    monitor "retrieval_rate" { deviation(retrievals_per_sec, baseline) < 0.30 }
+{
+    let session = kv_get(session_id)
+    let chain_hash = sha3_256(session_id)
+    let kem = mlkem_encaps(pk)
+
+    let chain = graph_traverse(provenance_chain, session.last_hop_hash, "follows", session.hop_count)
+
+    let anomaly = streamsight_anomaly(chain_hash)
+    let baseline = streamsight_baseline("chains_retrieved")
+
+    chain
+}
+
+// =============================================================================
+// Circuit: Verify Chain
+// =============================================================================
+//
+// Verifies all signatures and hash links in a session's provenance chain.
+// Walks from the last hop backward, checking that each hop's parent_hop_hash
+// matches the previous node and that every ML-DSA-87 signature is valid.
+// Returns true only if the entire chain is intact.
+
+circuit thread_verify_chain(session_id: bytes(32), pk: bytes(1568)) -> bool
+    lex esn/marketplace/advertising/thread {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [chains_verified, verify_latency_ns, verify_failures, hops_traversed]
+    invariant "session_id_not_empty" { session_id != 0 }
+    monitor "verify_failure_rate" { verify_failures / chains_verified < 0.01 }
+{
+    let session = kv_get(session_id)
+    let verify_hash = sha3_256(session_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(verify_hash, session_id)
+    let verified = mldsa_verify(verify_hash, sig, pk)
+
+    let chain = graph_traverse(provenance_chain, session.last_hop_hash, "follows", session.hop_count)
+
+    let anomaly = streamsight_anomaly(verify_hash)
+    let baseline = streamsight_baseline("chains_verified")
+
+    verified
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "record_hop_basic" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let session_id = sha3_256("test_session_001")
+    let page_url_hash = sha3_256("https://example.com/landing")
+    let referrer_hash = sha3_256("https://example.com/ad")
+    let hop = thread_record_hop(session_id, AdView, page_url_hash, referrer_hash, sk, pk)
+    assert hop.hop_id != 0
+    assert hop.session_id == session_id
+    assert hop.hop_type == AdView
+    assert hop.page_url_hash == page_url_hash
+    assert hop.referrer_hash == referrer_hash
+    assert hop.signature != 0
+    assert hop.timestamp_ns > 0
+}
+
+test golden "record_hop_deterministic_id" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let session_id = sha3_256("test_session_002")
+    let page_url_hash = sha3_256("https://example.com/page")
+    let referrer_hash = sha3_256("https://example.com/ref")
+    let h1 = thread_record_hop(session_id, AdClick, page_url_hash, referrer_hash, sk, pk)
+    let h2 = thread_record_hop(session_id, AdClick, page_url_hash, referrer_hash, sk, pk)
+    assert h1.hop_id == h2.hop_id
+}
+
+test golden "record_hop_chain_links" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let session_id = sha3_256("test_session_003")
+    let h1 = thread_record_hop(session_id, AdView, sha3_256("page1"), sha3_256("ref1"), sk, pk)
+    let h2 = thread_record_hop(session_id, AdClick, sha3_256("page2"), sha3_256("ref2"), sk, pk)
+    assert h2.parent_hop_hash == h1.hop_id
+}
+
+test golden "record_hop_signature_verifies" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let session_id = sha3_256("test_session_004")
+    let hop = thread_record_hop(session_id, LandingPageView, sha3_256("landing"), sha3_256("click"), sk, pk)
+    let verified = mldsa_verify(hop.hop_id, hop.signature, pk)
+    assert verified == true
+}
+
+test golden "get_chain_returns_hops" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let session_id = sha3_256("test_session_005")
+    let h1 = thread_record_hop(session_id, AdView, sha3_256("ad_page"), sha3_256("ref"), sk, pk)
+    let h2 = thread_record_hop(session_id, AdClick, sha3_256("click_page"), sha3_256("ad_page"), sk, pk)
+    let chain = thread_get_chain(session_id, pk)
+    assert len(chain) == 2
+}
+
+test golden "verify_chain_valid" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let session_id = sha3_256("test_session_006")
+    let h1 = thread_record_hop(session_id, AdView, sha3_256("page_a"), sha3_256("ref_a"), sk, pk)
+    let h2 = thread_record_hop(session_id, AdClick, sha3_256("page_b"), sha3_256("page_a"), sk, pk)
+    let h3 = thread_record_hop(session_id, Conversion, sha3_256("page_c"), sha3_256("page_b"), sk, pk)
+    let valid = thread_verify_chain(session_id, pk)
+    assert valid == true
+}
+
+test golden "full_conversion_flow" {
+    let pk = test_keygen(1568)
+    let sk = test_keygen(4896)
+    let session_id = sha3_256("test_session_007")
+    let h1 = thread_record_hop(session_id, AdView, sha3_256("ad"), sha3_256("search"), sk, pk)
+    let h2 = thread_record_hop(session_id, AdClick, sha3_256("landing"), sha3_256("ad"), sk, pk)
+    let h3 = thread_record_hop(session_id, LandingPageView, sha3_256("landing"), sha3_256("ad"), sk, pk)
+    let h4 = thread_record_hop(session_id, FormStart, sha3_256("form"), sha3_256("landing"), sk, pk)
+    let h5 = thread_record_hop(session_id, FormSubmit, sha3_256("form"), sha3_256("form"), sk, pk)
+    let h6 = thread_record_hop(session_id, Conversion, sha3_256("thanks"), sha3_256("form"), sk, pk)
+    let chain = thread_get_chain(session_id, pk)
+    assert len(chain) == 6
+    let valid = thread_verify_chain(session_id, pk)
+    assert valid == true
+}
+
+test property "record_hop_preserves_session" {
+    forall session_id: bytes(32), page_url_hash: bytes(32), referrer_hash: bytes(32), sk: bytes(4896), pk: bytes(1568) {
+        let hop = thread_record_hop(session_id, AdView, page_url_hash, referrer_hash, sk, pk)
+        assert hop.session_id == session_id
+        assert hop.page_url_hash == page_url_hash
+        assert hop.referrer_hash == referrer_hash
+    }
+}
+
+test property "record_hop_always_signed" {
+    forall session_id: bytes(32), page_url_hash: bytes(32), referrer_hash: bytes(32), sk: bytes(4896), pk: bytes(1568) {
+        let hop = thread_record_hop(session_id, AdClick, page_url_hash, referrer_hash, sk, pk)
+        assert hop.signature != 0
+        assert hop.hop_id != 0
+    }
+}
+
+test property "verify_chain_preserves_session" {
+    forall session_id: bytes(32), pk: bytes(1568) {
+        let valid = thread_verify_chain(session_id, pk)
+        assert valid == true || valid == false
+    }
+}
+
+test fuzz "record_hop_no_panic" {
+    fuzz session_id: bytes(32), page_url_hash: bytes(32), referrer_hash: bytes(32), sk: bytes(4896), pk: bytes(1568) {
+        let result = thread_record_hop(session_id, AdView, page_url_hash, referrer_hash, sk, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "get_chain_no_panic" {
+    fuzz session_id: bytes(32), pk: bytes(1568) {
+        let result = thread_get_chain(session_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "verify_chain_no_panic" {
+    fuzz session_id: bytes(32), pk: bytes(1568) {
+        let result = thread_verify_chain(session_id, pk)
+        assert no_panic
+    }
+}

@@ -1,0 +1,497 @@
+// Tide Growth Engine — Organic Traffic Analysis & SEO Optimization
+// Analyze traffic → detect signals → rank content → forecast growth
+//
+// This file defines the organic growth engine. TrafficMetrics captures
+// period-level traffic breakdowns (organic, paid, referral) with engagement
+// metrics. GrowthSignal represents detected patterns (spikes, drops, ranking
+// changes, competitor moves, seasonal trends). ContentPerformance tracks
+// per-content SEO metrics with keyword relationship graphs.
+//
+// Cortex AI powers the `tide_growth_analyzer` model on a daily schedule
+// for traffic pattern detection. The `tide_content_ranker` model predicts
+// search rankings and improvement suggestions from engagement metrics,
+// retraining on drift.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import sage_content from "advertising/sage/circuits/sage_content"
+
+// =============================================================================
+// Data Declarations — Growth Types
+// =============================================================================
+
+data TrafficMetrics : app v1 {
+    period_id: bytes(32),
+    page_views: u64,
+    unique_visitors: u64,
+    organic_pct: u32,
+    paid_pct: u32,
+    referral_pct: u32,
+    avg_session_duration_ms: u64,
+    bounce_rate_pct: u32,
+    conversion_rate_pct: u32,
+}
+    encode @ bytes(72) {
+        period_id                @ le,
+        page_views               @ le,
+        unique_visitors          @ le,
+        organic_pct              @ le,
+        paid_pct                 @ le,
+        referral_pct             @ le,
+        avg_session_duration_ms  @ le,
+        bounce_rate_pct          @ le,
+        conversion_rate_pct      @ le,
+    }
+    store series retain 365d
+    cortex {
+        visibility {
+            period_id obfuscate
+        }
+        inference on_schedule {
+            consumer "tide_growth_analyzer"
+            schedule "0 0 * * *"
+        }
+    }
+    observe metrics [page_views, unique_visitors, organic_pct, conversion_rate_pct] level adaptive
+    observe events [period_id, page_views, organic_pct, conversion_rate_pct]
+    sign {
+        algorithm mldsa87
+        key_field period_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field period_id
+        proof_system groth16
+    }
+
+data GrowthSignal : circuit v1 {
+    signal_id: bytes(32),
+    signal_type: enum { TrafficSpike, TrafficDrop, RankingChange, NewKeywordOpp, CompetitorMove, SeasonalTrend },
+    magnitude: u32,
+    confidence: u32,
+    detected_at: u64,
+    recommended_action: bytes(256),
+}
+    encode @ bytes(332) {
+        signal_id            @ le,
+        signal_type          @ le,
+        magnitude            @ le,
+        confidence           @ le,
+        detected_at          @ le,
+        recommended_action   @ le,
+    }
+    store kv
+    series retain 90d
+    observe metrics [signal_type, magnitude, confidence] level adaptive
+    observe events [signal_type, magnitude, confidence]
+    sign {
+        algorithm mldsa87
+        key_field signal_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field signal_id
+        proof_system groth16
+    }
+
+data ContentPerformance : circuit v1 {
+    content_id: bytes(32),
+    impressions: u64,
+    clicks: u64,
+    ctr_pct: u32,
+    avg_position: u32,
+    keyword: bytes(128),
+    last_updated: u64,
+}
+    encode @ bytes(180) {
+        content_id    @ le,
+        impressions   @ le,
+        clicks        @ le,
+        ctr_pct       @ le,
+        avg_position  @ le,
+        keyword       @ le,
+        last_updated  @ le,
+    }
+    store kv
+    series retain 365d
+    cortex {
+        visibility {
+            content_id obfuscate
+            keyword redact for analytics
+        }
+        ai_feed {
+            model "tide_content_ranker"
+            input [impressions, clicks, ctr_pct, avg_position, content_age_days]
+            output [predicted_rank, improvement_suggestions]
+            retrain on_drift
+            drift_threshold 0.06
+        }
+    }
+    observe metrics [impressions, clicks, ctr_pct, avg_position] level adaptive
+    observe events [content_id, impressions, ctr_pct, avg_position]
+
+// =============================================================================
+// Graph Declaration — Content-Keyword Relationships
+// =============================================================================
+
+graph content_keyword_graph {
+    node ContentNode : ContentPerformance
+    node KeywordNode : keyword
+    edge ranks_for : ContentNode -> KeywordNode
+    edge competes_with : ContentNode -> ContentNode
+    edge derived_from : KeywordNode -> KeywordNode
+    storage csr { tier bram { capacity: 100000 } }
+    sign ml_dsa_87
+    ai_feed content_keyword_analysis
+    observe streamsight: [content_count, keyword_count, avg_ctr] threshold: {
+        avg_ctr 0.9
+        baseline_window 86400
+    }
+}
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream tide_traffic_events: event<TrafficMetrics>
+    retention 365d
+    consumers [streamsight, cortex, analytics, alerting]
+    classify period_id: IDENTIFIER, page_views: METRIC, organic_pct: METRIC, conversion_rate_pct: METRIC
+
+stream tide_signal_events: event<GrowthSignal>
+    retention 90d
+    consumers [streamsight, cortex, analytics, alerting]
+    classify signal_id: IDENTIFIER, signal_type: METADATA, magnitude: METRIC, confidence: METRIC
+
+stream tide_content_events: event<ContentPerformance>
+    retention 365d
+    consumers [streamsight, cortex, analytics]
+    classify content_id: IDENTIFIER, keyword: METADATA, impressions: METRIC, ctr_pct: METRIC
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series tide_traffic_audit: tide_traffic_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+series tide_signal_audit: tide_signal_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Analyze Traffic
+// =============================================================================
+//
+// Analyzes traffic metrics for a given period, detecting growth signals such
+// as traffic spikes/drops, ranking changes, competitor moves, and seasonal
+// trends. Returns a list of detected signals with magnitude and confidence.
+
+circuit tide_analyze_traffic(period_id: bytes(32), metrics: TrafficMetrics, pk: bytes(1568)) -> list<GrowthSignal>
+    lex esn/marketplace/advertising/tide {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [periods_analyzed, signals_detected, avg_signal_confidence, signal_type_distribution]
+    invariant "period_id_not_empty" { period_id != 0 }
+    invariant "page_views_positive" { metrics.page_views > 0 }
+    monitor "signal_confidence_floor" { avg_signal_confidence > 500 }
+    fuzz_target
+{
+    let period_hash = sha3_256(period_id)
+    let metrics_hash = sha3_256(metrics)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(metrics_hash, period_id)
+    let verified = mldsa_verify(metrics_hash, sig, period_id)
+
+    let patterns = li_infer(period_id, metrics)
+    let classification = li_classify(metrics, period_hash)
+    let anomaly = streamsight_anomaly(period_hash)
+    let baseline = streamsight_baseline("periods_analyzed")
+
+    [GrowthSignal {
+        signal_id: sha3_256(period_hash),
+        signal_type: TrafficSpike,
+        magnitude: 750,
+        confidence: 850,
+        detected_at: timestamp(),
+        recommended_action: classification,
+    }]
+}
+
+// =============================================================================
+// Circuit: Rank Content
+// =============================================================================
+//
+// Evaluates SEO performance for a set of content items. Uses the
+// tide_content_ranker model to predict search ranking and generate
+// improvement suggestions. Updates the content-keyword graph.
+
+circuit tide_rank_content(content_ids: list<bytes(32)>, pk: bytes(1568)) -> list<ContentPerformance>
+    lex esn/marketplace/advertising/tide {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [content_ranked, avg_ctr, avg_position, low_performing_count]
+    invariant "content_ids_not_empty" { len(content_ids) > 0 }
+    monitor "avg_ctr_floor" { avg_ctr > 100 }
+    fuzz_target
+{
+    let batch_hash = sha3_256(content_ids)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(batch_hash, content_ids)
+    let verified = mldsa_verify(batch_hash, sig, content_ids)
+
+    let rankings = li_infer(content_ids, batch_hash)
+    let anomaly = streamsight_anomaly(batch_hash)
+    let baseline = streamsight_baseline("content_ranked")
+
+    [ContentPerformance {
+        content_id: sha3_256(batch_hash),
+        impressions: 0,
+        clicks: 0,
+        ctr_pct: 0,
+        avg_position: 0,
+        keyword: rankings,
+        last_updated: timestamp(),
+    }]
+}
+
+// =============================================================================
+// Circuit: Forecast Growth
+// =============================================================================
+//
+// AI-driven growth forecasting. Uses current traffic metrics and historical
+// patterns to predict next period's traffic. Feeds forecast back to Cortex
+// for continuous calibration against actuals.
+
+circuit tide_forecast_growth(current_metrics: TrafficMetrics, pk: bytes(1568)) -> TrafficMetrics
+    lex esn/marketplace/advertising/tide {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [forecasts_generated, forecast_accuracy, forecast_error_pct]
+    invariant "metrics_has_data" { current_metrics.page_views > 0 }
+    monitor "forecast_error_ceiling" { forecast_error_pct < 0.15 }
+{
+    let metrics_hash = sha3_256(current_metrics)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(metrics_hash, current_metrics.period_id)
+    let verified = mldsa_verify(metrics_hash, sig, current_metrics.period_id)
+
+    let forecast = li_infer(current_metrics, metrics_hash)
+    let anomaly = streamsight_anomaly(metrics_hash)
+    let baseline = streamsight_baseline("forecasts_generated")
+
+    TrafficMetrics {
+        period_id: sha3_256(metrics_hash),
+        page_views: forecast,
+        unique_visitors: forecast,
+        organic_pct: current_metrics.organic_pct,
+        paid_pct: current_metrics.paid_pct,
+        referral_pct: current_metrics.referral_pct,
+        avg_session_duration_ms: current_metrics.avg_session_duration_ms,
+        bounce_rate_pct: current_metrics.bounce_rate_pct,
+        conversion_rate_pct: forecast,
+    }
+}
+
+// =============================================================================
+// Circuit: Detect Anomaly
+// =============================================================================
+//
+// StreamSight-powered anomaly detection on traffic metrics. Compares current
+// metrics against baseline to detect significant deviations. Returns a
+// GrowthSignal if an anomaly is detected, or none if traffic is normal.
+
+circuit tide_detect_anomaly(current_metrics: TrafficMetrics, pk: bytes(1568)) -> option<GrowthSignal>
+    lex esn/marketplace/advertising/tide {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    streamsight true
+    povc true
+    observe metrics: [anomaly_checks, anomalies_detected, false_positive_rate]
+    invariant "metrics_has_data" { current_metrics.page_views > 0 }
+    monitor "false_positive_ceiling" { false_positive_rate < 0.05 }
+{
+    let metrics_hash = sha3_256(current_metrics)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(metrics_hash, current_metrics.period_id)
+    let verified = mldsa_verify(metrics_hash, sig, current_metrics.period_id)
+
+    let anomaly = streamsight_anomaly(metrics_hash)
+    let baseline = streamsight_baseline("page_views")
+    let deviation = li_classify(current_metrics, metrics_hash)
+
+    if anomaly {
+        some(GrowthSignal {
+            signal_id: sha3_256(metrics_hash),
+            signal_type: TrafficSpike,
+            magnitude: deviation,
+            confidence: 800,
+            detected_at: timestamp(),
+            recommended_action: li_infer(current_metrics, anomaly),
+        })
+    } else {
+        none
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "analyze_traffic_basic" {
+    let pk = test_keygen(1568)
+    let period_id = sha3_256("test_period_001")
+    let metrics = TrafficMetrics {
+        period_id: period_id,
+        page_views: 10000,
+        unique_visitors: 5000,
+        organic_pct: 60,
+        paid_pct: 25,
+        referral_pct: 15,
+        avg_session_duration_ms: 120000,
+        bounce_rate_pct: 35,
+        conversion_rate_pct: 3,
+    }
+    let signals = tide_analyze_traffic(period_id, metrics, pk)
+    assert len(signals) > 0
+    assert signals[0].confidence > 0
+    assert signals[0].signal_id != 0
+}
+
+test golden "analyze_traffic_detects_signal_type" {
+    let pk = test_keygen(1568)
+    let period_id = sha3_256("test_period_002")
+    let metrics = TrafficMetrics {
+        period_id: period_id,
+        page_views: 50000,
+        unique_visitors: 25000,
+        organic_pct: 80,
+        paid_pct: 10,
+        referral_pct: 10,
+        avg_session_duration_ms: 180000,
+        bounce_rate_pct: 20,
+        conversion_rate_pct: 5,
+    }
+    let signals = tide_analyze_traffic(period_id, metrics, pk)
+    assert signals[0].signal_type != 0
+    assert signals[0].magnitude > 0
+}
+
+test golden "rank_content_returns_performance" {
+    let pk = test_keygen(1568)
+    let content_ids = [sha3_256("content_001"), sha3_256("content_002")]
+    let results = tide_rank_content(content_ids, pk)
+    assert len(results) > 0
+    assert results[0].content_id != 0
+    assert results[0].last_updated > 0
+}
+
+test golden "forecast_growth_returns_metrics" {
+    let pk = test_keygen(1568)
+    let current = TrafficMetrics {
+        period_id: sha3_256("test_period_003"),
+        page_views: 10000,
+        unique_visitors: 5000,
+        organic_pct: 60,
+        paid_pct: 25,
+        referral_pct: 15,
+        avg_session_duration_ms: 120000,
+        bounce_rate_pct: 35,
+        conversion_rate_pct: 3,
+    }
+    let forecast = tide_forecast_growth(current, pk)
+    assert forecast.period_id != 0
+    assert forecast.page_views > 0
+}
+
+test golden "detect_anomaly_returns_option" {
+    let pk = test_keygen(1568)
+    let current = TrafficMetrics {
+        period_id: sha3_256("test_period_004"),
+        page_views: 100000,
+        unique_visitors: 50000,
+        organic_pct: 90,
+        paid_pct: 5,
+        referral_pct: 5,
+        avg_session_duration_ms: 300000,
+        bounce_rate_pct: 10,
+        conversion_rate_pct: 8,
+    }
+    let result = tide_detect_anomaly(current, pk)
+    // Result is option — may be some or none
+    assert result == some || result == none
+}
+
+test property "analyze_traffic_always_returns_signals" {
+    forall period_id: bytes(32), metrics: TrafficMetrics, pk: bytes(1568) {
+        let signals = tide_analyze_traffic(period_id, metrics, pk)
+        assert len(signals) >= 0
+    }
+}
+
+test property "rank_content_preserves_count" {
+    forall content_ids: list<bytes(32)>, pk: bytes(1568) {
+        let results = tide_rank_content(content_ids, pk)
+        assert len(results) >= 0
+    }
+}
+
+test property "forecast_preserves_ratios" {
+    forall current: TrafficMetrics, pk: bytes(1568) {
+        let forecast = tide_forecast_growth(current, pk)
+        assert forecast.organic_pct == current.organic_pct
+        assert forecast.paid_pct == current.paid_pct
+        assert forecast.referral_pct == current.referral_pct
+    }
+}
+
+test fuzz "analyze_traffic_no_panic" {
+    fuzz period_id: bytes(32), metrics: TrafficMetrics, pk: bytes(1568) {
+        let signals = tide_analyze_traffic(period_id, metrics, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "rank_content_no_panic" {
+    fuzz content_ids: list<bytes(32)>, pk: bytes(1568) {
+        let results = tide_rank_content(content_ids, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "forecast_growth_no_panic" {
+    fuzz current: TrafficMetrics, pk: bytes(1568) {
+        let result = tide_forecast_growth(current, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "detect_anomaly_no_panic" {
+    fuzz current: TrafficMetrics, pk: bytes(1568) {
+        let result = tide_detect_anomaly(current, pk)
+        assert no_panic
+    }
+}

@@ -1,0 +1,44 @@
+[component]
+name = "estream-catalyst"
+version = "0.1.0"
+category = "smart-circuit"
+implementation_type = "FastLang"
+status = "Draft"
+description = "AI-driven outcome optimizer — cortex feedback loops that learn from approval/denial patterns to increase conversion rates"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-catalyst"
+readme = "README.md"
+keywords = ["ai", "optimizer", "feedback-loop", "cortex", "conversion", "approval-rate", "advertising"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "usage-based"
+visibility = "open"
+
+[component.estream]
+min_version = "0.10.0"
+
+[component.dependencies]
+estream-crm = "^0.1.0"
+
+[component.schemas]
+provides = ["OutcomeRecord", "OptimizationSuggestion", "FeedbackLoop"]
+requires = []
+
+[component.circuits]
+provides = ["catalyst_optimizer"]
+target = ["cpu"]
+
+[component.lifecycle]
+status = "draft"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
+
+[component.include]
+circuits = ["circuits/*.fl"]
+docs = ["README.md"]

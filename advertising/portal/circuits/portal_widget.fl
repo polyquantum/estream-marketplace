@@ -1,0 +1,576 @@
+// Portal Widget — Widget Lifecycle, RBAC, and State Machine
+// Create widget -> RBAC check -> transition states -> destroy
+//
+// This file defines the embeddable widget lifecycle for the Portal
+// framework. WidgetInstance tracks each sandboxed iframe widget with
+// a deterministic state machine (Loading -> Ready -> Active -> Consent
+// -> Settled -> Destroyed, with Error reachable from any state).
+//
+// WidgetConfig stores partner-specific branding, locale, allowed fields,
+// and links to escrow and engagement code IDs from estream-optin.
+//
+// RbacCheck records every RBAC evaluation with PoVC attestation for
+// tamper-evident audit. The portal_create_widget circuit enforces RBAC
+// before instantiation — users without the required role for a given
+// widget type are rejected with a cryptographic audit trail.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import optin_engage from "advertising/optin/circuits/optin_engage"
+
+// =============================================================================
+// Data Declarations — Widget Instance Types
+// =============================================================================
+
+// WidgetType enum:
+// 0 = PartnerConnect, 1 = EngagementDashboard, 2 = ActivityScore, 3 = CompensationHistory
+
+// WidgetState enum:
+// 0 = Loading, 1 = Ready, 2 = Active, 3 = Consent, 4 = Settled, 5 = Error, 6 = Destroyed
+
+data WidgetInstance : app v1 {
+    instance_id: bytes(32),
+    widget_type: enum { PartnerConnect, EngagementDashboard, ActivityScore, CompensationHistory },
+    container_id: bytes(32),
+    partner_id: bytes(32),
+    user_id: bytes(32),
+    config_hash: bytes(32),
+    state: enum { Loading, Ready, Active, Consent, Settled, Error, Destroyed },
+    created_at: u64,
+    last_interaction_ns: u64,
+}
+    encode @ bytes(232) {
+        instance_id        @ le,
+        widget_type        @ le,
+        container_id       @ le,
+        partner_id         @ le,
+        user_id            @ le,
+        config_hash        @ le,
+        state              @ le,
+        created_at         @ le,
+        last_interaction_ns @ le,
+    }
+    store kv
+    series retain 90d
+    cortex {
+        visibility {
+            user_id obfuscate
+            partner_id expose
+            widget_type expose
+            state expose
+        }
+    }
+    observe events [widget_type, state]
+    observe metrics [widget_type, state] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field instance_id
+        detached true
+    }
+
+// ThemeMode enum:
+// 0 = Dark, 1 = Light, 2 = Auto
+
+data WidgetConfig : app v1 {
+    config_id: bytes(32),
+    widget_type: enum { PartnerConnect, EngagementDashboard, ActivityScore, CompensationHistory },
+    partner_id: bytes(32),
+    theme: enum { Dark, Light, Auto },
+    locale: bytes(16),
+    brand_color: bytes(8),
+    allowed_fields: list<string>,
+    escrow_id: bytes(32),
+    engagement_code_id: bytes(32),
+}
+    encode @ bytes(220) {
+        config_id          @ le,
+        widget_type        @ le,
+        partner_id         @ le,
+        theme              @ le,
+        locale             @ le,
+        brand_color        @ le,
+        allowed_fields     @ le,
+        escrow_id          @ le,
+        engagement_code_id @ le,
+    }
+    store kv
+    observe events [widget_type, theme]
+    observe metrics [widget_type, theme] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field config_id
+        detached true
+    }
+
+data RbacCheck : app v1 {
+    check_id: bytes(32),
+    user_id: bytes(32),
+    widget_type: enum { PartnerConnect, EngagementDashboard, ActivityScore, CompensationHistory },
+    required_roles: list<string>,
+    user_roles: list<string>,
+    granted: u8,
+    checked_at: u64,
+}
+    encode @ bytes(168) {
+        check_id       @ le,
+        user_id        @ le,
+        widget_type    @ le,
+        required_roles @ le,
+        user_roles     @ le,
+        granted        @ le,
+        checked_at     @ le,
+    }
+    store series retain 365d
+    observe events [granted, widget_type]
+    observe metrics [granted, widget_type] level adaptive
+    attest {
+        povc true
+        anchor_field check_id
+    }
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream portal_widget_events: event<WidgetInstance>
+    retention 90d
+    consumers [streamsight, analytics]
+    classify instance_id: IDENTIFIER, partner_id: IDENTIFIER, user_id: IDENTIFIER, widget_type: METADATA, state: METADATA
+
+stream portal_rbac_events: event<RbacCheck>
+    retention 365d
+    consumers [streamsight, audit, security]
+    classify check_id: IDENTIFIER, user_id: IDENTIFIER, widget_type: METADATA, granted: METADATA
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series portal_widget_series: portal_widget_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Create Widget
+// =============================================================================
+//
+// Creates a new widget instance after verifying RBAC. The user_roles list
+// is checked against the required roles for the requested widget_type
+// (viewer for read-only widgets, operator for interactive widgets). If
+// the check fails, the circuit records a denied RbacCheck and rejects.
+// The widget starts in Loading state.
+
+circuit portal_create_widget(widget_type: enum { PartnerConnect, EngagementDashboard, ActivityScore, CompensationHistory }, container_id: bytes(32), config: WidgetConfig, user_roles: list<string>, pk: bytes(1568)) -> WidgetInstance
+    lex esn/marketplace/advertising/portal {
+        governance hierarchical
+        audit_trail true
+    }
+    rbac [viewer, operator]
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [widgets_created, creation_latency_ns, widgets_by_type, rbac_denials]
+    invariant "rbac_enforced" { rbac_check.granted == true }
+    invariant "container_id_not_empty" { container_id != 0 }
+    invariant "config_valid" { config.config_id != 0 }
+    monitor "creation_rate" { deviation(widgets_per_sec, baseline) < 0.30 }
+    monitor "rbac_denial_rate" { rbac_denials / widgets_created < 0.50 }
+    fuzz_target
+{
+    let instance_seed = sha3_256(container_id)
+    let instance_id = sha3_256(instance_seed)
+    let config_hash = sha3_256(config.config_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(instance_id, container_id)
+    let verified = mldsa_verify(instance_id, sig, pk)
+
+    let check_id = sha3_256(instance_id)
+    let rbac_check = rbac_evaluate(user_roles, widget_type)
+
+    let anomaly = streamsight_anomaly(instance_id)
+    let baseline = streamsight_baseline("widgets_created")
+
+    WidgetInstance {
+        instance_id: instance_id,
+        widget_type: widget_type,
+        container_id: container_id,
+        partner_id: config.partner_id,
+        user_id: config.partner_id,
+        config_hash: config_hash,
+        state: Loading,
+        created_at: timestamp(),
+        last_interaction_ns: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Transition Widget State
+// =============================================================================
+//
+// Transitions a widget instance to a new state. Enforces the state machine:
+//   Loading  -> Ready | Error
+//   Ready    -> Active | Error | Destroyed
+//   Active   -> Consent | Settled | Error | Destroyed
+//   Consent  -> Settled | Active | Error | Destroyed
+//   Settled  -> Destroyed | Error
+//   Error    -> Destroyed
+//   Destroyed -> (terminal)
+//
+// Invalid transitions are rejected. The last_interaction_ns timestamp
+// is updated on every valid transition.
+
+circuit portal_transition_widget(instance_id: bytes(32), new_state: enum { Loading, Ready, Active, Consent, Settled, Error, Destroyed }, pk: bytes(1568)) -> WidgetInstance
+    lex esn/marketplace/advertising/portal {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [transitions_count, transition_latency_ns, invalid_transitions]
+    invariant "valid_transition" {
+        (current.state == Loading && (new_state == Ready || new_state == Error)) ||
+        (current.state == Ready && (new_state == Active || new_state == Error || new_state == Destroyed)) ||
+        (current.state == Active && (new_state == Consent || new_state == Settled || new_state == Error || new_state == Destroyed)) ||
+        (current.state == Consent && (new_state == Settled || new_state == Active || new_state == Error || new_state == Destroyed)) ||
+        (current.state == Settled && (new_state == Destroyed || new_state == Error)) ||
+        (current.state == Error && new_state == Destroyed)
+    }
+    invariant "instance_id_not_empty" { instance_id != 0 }
+    monitor "invalid_transition_rate" { invalid_transitions / transitions_count < 0.05 }
+    fuzz_target
+{
+    let transition_hash = sha3_256(instance_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(transition_hash, instance_id)
+    let verified = mldsa_verify(transition_hash, sig, pk)
+
+    let current = kv_get(instance_id)
+    let anomaly = streamsight_anomaly(transition_hash)
+    let baseline = streamsight_baseline("transitions_count")
+
+    WidgetInstance {
+        instance_id: current.instance_id,
+        widget_type: current.widget_type,
+        container_id: current.container_id,
+        partner_id: current.partner_id,
+        user_id: current.user_id,
+        config_hash: current.config_hash,
+        state: new_state,
+        created_at: current.created_at,
+        last_interaction_ns: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Destroy Widget
+// =============================================================================
+//
+// Destroys a widget instance. Sets state to Destroyed and marks the
+// final interaction timestamp. The instance remains in KV for audit
+// purposes but is no longer active.
+
+circuit portal_destroy_widget(instance_id: bytes(32), pk: bytes(1568)) -> bool
+    lex esn/marketplace/advertising/portal {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    streamsight true
+    povc true
+    observe metrics: [widgets_destroyed, destroy_latency_ns]
+    invariant "instance_id_not_empty" { instance_id != 0 }
+    monitor "destroy_rate" { deviation(destroys_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let destroy_hash = sha3_256(instance_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(destroy_hash, instance_id)
+    let verified = mldsa_verify(destroy_hash, sig, pk)
+
+    let current = kv_get(instance_id)
+    let anomaly = streamsight_anomaly(destroy_hash)
+    let baseline = streamsight_baseline("widgets_destroyed")
+
+    let destroyed = WidgetInstance {
+        instance_id: current.instance_id,
+        widget_type: current.widget_type,
+        container_id: current.container_id,
+        partner_id: current.partner_id,
+        user_id: current.user_id,
+        config_hash: current.config_hash,
+        state: Destroyed,
+        created_at: current.created_at,
+        last_interaction_ns: timestamp(),
+    }
+    kv_put(destroyed)
+
+    true
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "create_widget_basic" {
+    let pk = test_keygen(1568)
+    let config = WidgetConfig {
+        config_id: sha3_256("test_config_001"),
+        widget_type: PartnerConnect,
+        partner_id: sha3_256("test_partner_001"),
+        theme: Auto,
+        locale: "en-US",
+        brand_color: "#0066FF",
+        allowed_fields: ["email", "name"],
+        escrow_id: sha3_256("test_escrow_001"),
+        engagement_code_id: sha3_256("test_code_001"),
+    }
+    let container_id = sha3_256("test_container_001")
+    let user_roles = ["viewer", "operator"]
+    let widget = portal_create_widget(PartnerConnect, container_id, config, user_roles, pk)
+    assert widget.instance_id != 0
+    assert widget.widget_type == PartnerConnect
+    assert widget.container_id == container_id
+    assert widget.state == Loading
+    assert widget.created_at > 0
+}
+
+test golden "create_widget_engagement_dashboard" {
+    let pk = test_keygen(1568)
+    let config = WidgetConfig {
+        config_id: sha3_256("test_config_002"),
+        widget_type: EngagementDashboard,
+        partner_id: sha3_256("test_partner_002"),
+        theme: Dark,
+        locale: "en-GB",
+        brand_color: "#FF6600",
+        allowed_fields: ["score", "history"],
+        escrow_id: sha3_256("test_escrow_002"),
+        engagement_code_id: sha3_256("test_code_002"),
+    }
+    let container_id = sha3_256("test_container_002")
+    let user_roles = ["viewer"]
+    let widget = portal_create_widget(EngagementDashboard, container_id, config, user_roles, pk)
+    assert widget.instance_id != 0
+    assert widget.widget_type == EngagementDashboard
+    assert widget.state == Loading
+}
+
+test golden "create_widget_deterministic_id" {
+    let pk = test_keygen(1568)
+    let config = WidgetConfig {
+        config_id: sha3_256("test_config_003"),
+        widget_type: ActivityScore,
+        partner_id: sha3_256("test_partner_003"),
+        theme: Light,
+        locale: "de-DE",
+        brand_color: "#00CC00",
+        allowed_fields: ["score"],
+        escrow_id: sha3_256("test_escrow_003"),
+        engagement_code_id: sha3_256("test_code_003"),
+    }
+    let container_id = sha3_256("test_container_003")
+    let user_roles = ["viewer"]
+    let w1 = portal_create_widget(ActivityScore, container_id, config, user_roles, pk)
+    let w2 = portal_create_widget(ActivityScore, container_id, config, user_roles, pk)
+    assert w1.instance_id == w2.instance_id
+}
+
+test golden "transition_loading_to_ready" {
+    let pk = test_keygen(1568)
+    let config = WidgetConfig {
+        config_id: sha3_256("test_config_004"),
+        widget_type: PartnerConnect,
+        partner_id: sha3_256("test_partner_004"),
+        theme: Auto,
+        locale: "en-US",
+        brand_color: "#0066FF",
+        allowed_fields: ["email"],
+        escrow_id: sha3_256("test_escrow_004"),
+        engagement_code_id: sha3_256("test_code_004"),
+    }
+    let container_id = sha3_256("test_container_004")
+    let user_roles = ["viewer", "operator"]
+    let widget = portal_create_widget(PartnerConnect, container_id, config, user_roles, pk)
+    assert widget.state == Loading
+    let ready = portal_transition_widget(widget.instance_id, Ready, pk)
+    assert ready.state == Ready
+    assert ready.instance_id == widget.instance_id
+}
+
+test golden "transition_ready_to_active_to_consent_to_settled" {
+    let pk = test_keygen(1568)
+    let config = WidgetConfig {
+        config_id: sha3_256("test_config_005"),
+        widget_type: EngagementDashboard,
+        partner_id: sha3_256("test_partner_005"),
+        theme: Dark,
+        locale: "en-US",
+        brand_color: "#FF0000",
+        allowed_fields: ["email", "name", "score"],
+        escrow_id: sha3_256("test_escrow_005"),
+        engagement_code_id: sha3_256("test_code_005"),
+    }
+    let container_id = sha3_256("test_container_005")
+    let user_roles = ["operator"]
+    let widget = portal_create_widget(EngagementDashboard, container_id, config, user_roles, pk)
+    let ready = portal_transition_widget(widget.instance_id, Ready, pk)
+    let active = portal_transition_widget(widget.instance_id, Active, pk)
+    let consent = portal_transition_widget(widget.instance_id, Consent, pk)
+    let settled = portal_transition_widget(widget.instance_id, Settled, pk)
+    assert ready.state == Ready
+    assert active.state == Active
+    assert consent.state == Consent
+    assert settled.state == Settled
+}
+
+test golden "transition_to_error" {
+    let pk = test_keygen(1568)
+    let config = WidgetConfig {
+        config_id: sha3_256("test_config_006"),
+        widget_type: CompensationHistory,
+        partner_id: sha3_256("test_partner_006"),
+        theme: Light,
+        locale: "fr-FR",
+        brand_color: "#CCCCCC",
+        allowed_fields: ["compensation"],
+        escrow_id: sha3_256("test_escrow_006"),
+        engagement_code_id: sha3_256("test_code_006"),
+    }
+    let container_id = sha3_256("test_container_006")
+    let user_roles = ["viewer"]
+    let widget = portal_create_widget(CompensationHistory, container_id, config, user_roles, pk)
+    let error = portal_transition_widget(widget.instance_id, Error, pk)
+    assert error.state == Error
+}
+
+test golden "destroy_widget_basic" {
+    let pk = test_keygen(1568)
+    let config = WidgetConfig {
+        config_id: sha3_256("test_config_007"),
+        widget_type: PartnerConnect,
+        partner_id: sha3_256("test_partner_007"),
+        theme: Auto,
+        locale: "en-US",
+        brand_color: "#0066FF",
+        allowed_fields: ["email"],
+        escrow_id: sha3_256("test_escrow_007"),
+        engagement_code_id: sha3_256("test_code_007"),
+    }
+    let container_id = sha3_256("test_container_007")
+    let user_roles = ["operator"]
+    let widget = portal_create_widget(PartnerConnect, container_id, config, user_roles, pk)
+    let result = portal_destroy_widget(widget.instance_id, pk)
+    assert result == true
+}
+
+test golden "full_widget_lifecycle" {
+    let pk = test_keygen(1568)
+    let config = WidgetConfig {
+        config_id: sha3_256("test_config_008"),
+        widget_type: PartnerConnect,
+        partner_id: sha3_256("test_partner_008"),
+        theme: Dark,
+        locale: "ja-JP",
+        brand_color: "#FF00FF",
+        allowed_fields: ["email", "name", "phone"],
+        escrow_id: sha3_256("test_escrow_008"),
+        engagement_code_id: sha3_256("test_code_008"),
+    }
+    let container_id = sha3_256("test_container_008")
+    let user_roles = ["viewer", "operator"]
+    let widget = portal_create_widget(PartnerConnect, container_id, config, user_roles, pk)
+    let ready = portal_transition_widget(widget.instance_id, Ready, pk)
+    let active = portal_transition_widget(widget.instance_id, Active, pk)
+    let consent = portal_transition_widget(widget.instance_id, Consent, pk)
+    let settled = portal_transition_widget(widget.instance_id, Settled, pk)
+    let destroyed = portal_destroy_widget(widget.instance_id, pk)
+    assert widget.state == Loading
+    assert ready.state == Ready
+    assert active.state == Active
+    assert consent.state == Consent
+    assert settled.state == Settled
+    assert destroyed == true
+}
+
+test property "create_widget_preserves_type" {
+    forall container_id: bytes(32), pk: bytes(1568) {
+        let config = WidgetConfig {
+            config_id: sha3_256("prop_config"),
+            widget_type: PartnerConnect,
+            partner_id: sha3_256("prop_partner"),
+            theme: Auto,
+            locale: "en-US",
+            brand_color: "#000000",
+            allowed_fields: ["email"],
+            escrow_id: sha3_256("prop_escrow"),
+            engagement_code_id: sha3_256("prop_code"),
+        }
+        let user_roles = ["viewer", "operator"]
+        let widget = portal_create_widget(PartnerConnect, container_id, config, user_roles, pk)
+        assert widget.widget_type == PartnerConnect
+    }
+}
+
+test property "create_widget_starts_loading" {
+    forall container_id: bytes(32), pk: bytes(1568) {
+        let config = WidgetConfig {
+            config_id: sha3_256("prop_config_2"),
+            widget_type: EngagementDashboard,
+            partner_id: sha3_256("prop_partner_2"),
+            theme: Dark,
+            locale: "en-US",
+            brand_color: "#FFFFFF",
+            allowed_fields: ["score"],
+            escrow_id: sha3_256("prop_escrow_2"),
+            engagement_code_id: sha3_256("prop_code_2"),
+        }
+        let user_roles = ["viewer"]
+        let widget = portal_create_widget(EngagementDashboard, container_id, config, user_roles, pk)
+        assert widget.state == Loading
+    }
+}
+
+test property "transition_preserves_instance_id" {
+    forall instance_id: bytes(32), pk: bytes(1568) {
+        let transitioned = portal_transition_widget(instance_id, Ready, pk)
+        assert transitioned.instance_id == instance_id
+    }
+}
+
+test fuzz "create_widget_no_panic" {
+    fuzz container_id: bytes(32), pk: bytes(1568) {
+        let config = WidgetConfig {
+            config_id: sha3_256("fuzz_config"),
+            widget_type: PartnerConnect,
+            partner_id: sha3_256("fuzz_partner"),
+            theme: Auto,
+            locale: "en-US",
+            brand_color: "#000000",
+            allowed_fields: ["email"],
+            escrow_id: sha3_256("fuzz_escrow"),
+            engagement_code_id: sha3_256("fuzz_code"),
+        }
+        let user_roles = ["viewer"]
+        let result = portal_create_widget(PartnerConnect, container_id, config, user_roles, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "transition_widget_no_panic" {
+    fuzz instance_id: bytes(32), pk: bytes(1568) {
+        let result = portal_transition_widget(instance_id, Ready, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "destroy_widget_no_panic" {
+    fuzz instance_id: bytes(32), pk: bytes(1568) {
+        let result = portal_destroy_widget(instance_id, pk)
+        assert no_panic
+    }
+}

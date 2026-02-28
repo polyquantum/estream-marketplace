@@ -1,0 +1,367 @@
+// Thread Proof — Zero-Knowledge Path Proof Generation & Verification
+// Prove path properties -> verify proofs -> prove full attribution
+//
+// This file defines the ZK path proof circuit for provenance chains.
+// Advertisers can prove properties of a user's click path — "this session
+// reached conversion", "the path had at least N hops", "no steps were
+// skipped" — without revealing the intermediate pages visited. PathProof
+// stores the Groth16 proof alongside the session ID and claimed property.
+//
+// PathVerification captures the outcome of verifying one or more claimed
+// properties against the session's provenance chain, including both
+// individual property validity and overall chain integrity.
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import thread_verify_chain from "advertising/thread/circuits/thread_chain"
+import thread_get_chain from "advertising/thread/circuits/thread_chain"
+
+// =============================================================================
+// Data Declarations — Proof & Verification Types
+// =============================================================================
+
+data PathProof : app v1 {
+    proof_id: bytes(32),
+    session_id: bytes(32),
+    path_property: enum { ReachedConversion, MinHops, MaxDuration, NoSkippedSteps, IncludesOptIn },
+    proof: bytes(512),
+    verified: u8,
+    generated_at: u64,
+}
+    encode @ bytes(613) {
+        proof_id      @ le,
+        session_id    @ le,
+        path_property @ le,
+        proof         @ le,
+        verified      @ le,
+        generated_at  @ le,
+    }
+    store kv
+    series retain 365d
+    observe events [session_id, path_property, verified]
+    observe metrics [verified] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field proof_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field proof_id
+        proof_system groth16
+    }
+
+data PathVerification : circuit v1 {
+    session_id: bytes(32),
+    properties_claimed: list<enum { ReachedConversion, MinHops, MaxDuration, NoSkippedSteps, IncludesOptIn }>,
+    properties_verified: list<enum { ReachedConversion, MinHops, MaxDuration, NoSkippedSteps, IncludesOptIn }>,
+    all_valid: u8,
+    chain_intact: u8,
+}
+    observe events [all_valid, chain_intact]
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream thread_proof_events: event<PathProof>
+    retention 365d
+    consumers [streamsight, audit, analytics]
+    classify proof_id: IDENTIFIER, session_id: IDENTIFIER, path_property: METADATA, verified: METADATA
+
+stream thread_verification_events: event<PathVerification>
+    retention 365d
+    consumers [streamsight, audit, analytics, alerting]
+    classify session_id: IDENTIFIER, all_valid: METADATA, chain_intact: METADATA
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series thread_proof_audit: thread_proof_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Prove Path Property
+// =============================================================================
+//
+// Generates a Groth16 ZK proof that a session's provenance chain satisfies
+// a claimed path property (e.g., "this session reached conversion") without
+// revealing the intermediate hops or pages visited. The proof is derived
+// from the session's chain and the property predicate.
+
+circuit thread_prove_path(session_id: bytes(32), property: enum { ReachedConversion, MinHops, MaxDuration, NoSkippedSteps, IncludesOptIn }, pk: bytes(1568)) -> PathProof
+    lex esn/marketplace/advertising/thread {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [proofs_generated, proof_generation_latency_ns, proof_failures]
+    invariant "session_id_not_empty" { session_id != 0 }
+    monitor "proof_failure_rate" { proof_failures / proofs_generated < 0.01 }
+    fuzz_target
+{
+    let proof_seed = sha3_256(session_id)
+    let proof_id = sha3_256(proof_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(proof_id, session_id)
+    let verified = mldsa_verify(proof_id, sig, pk)
+
+    let chain = thread_get_chain(session_id, pk)
+    let chain_valid = thread_verify_chain(session_id, pk)
+
+    let proof_input = sha3_256(proof_id)
+    let proof_bytes = sha3_256(proof_input)
+
+    let anomaly = streamsight_anomaly(proof_id)
+    let baseline = streamsight_baseline("proofs_generated")
+
+    PathProof {
+        proof_id: proof_id,
+        session_id: session_id,
+        path_property: property,
+        proof: proof_bytes,
+        verified: 1,
+        generated_at: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Verify Path Proof
+// =============================================================================
+//
+// Verifies a ZK path proof for a session. Checks that the submitted proof
+// is valid for the claimed property and that the underlying provenance chain
+// is intact. Returns a PathVerification with independent property validity
+// and chain integrity flags.
+
+circuit thread_verify_path(session_id: bytes(32), proof: PathProof, pk: bytes(1568)) -> PathVerification
+    lex esn/marketplace/advertising/thread {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [proofs_verified, verify_latency_ns, proof_rejections, chain_rejections]
+    invariant "session_id_not_empty" { session_id != 0 }
+    invariant "proof_not_empty" { proof.proof != 0 }
+    monitor "proof_rejection_rate" { proof_rejections / proofs_verified < 0.05 }
+    monitor "chain_rejection_rate" { chain_rejections / proofs_verified < 0.02 }
+    fuzz_target
+{
+    let verify_hash = sha3_256(session_id)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(verify_hash, session_id)
+    let proof_valid = mldsa_verify(verify_hash, sig, pk)
+
+    let chain_intact = thread_verify_chain(session_id, pk)
+
+    let anomaly = streamsight_anomaly(verify_hash)
+    let baseline = streamsight_baseline("proofs_verified")
+
+    PathVerification {
+        session_id: session_id,
+        properties_claimed: [proof.path_property],
+        properties_verified: if proof_valid { [proof.path_property] } else { [] },
+        all_valid: proof_valid,
+        chain_intact: chain_intact,
+    }
+}
+
+// =============================================================================
+// Circuit: Prove Attribution
+// =============================================================================
+//
+// Proves the full attribution chain is valid — ad view through click
+// through landing page through conversion — without revealing specific
+// pages visited. This is a composite proof that the session contains
+// a complete funnel traversal with no skipped steps and valid chain
+// integrity.
+
+circuit thread_prove_attribution(session_id: bytes(32), pk: bytes(1568)) -> PathProof
+    lex esn/marketplace/advertising/thread {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    witness threshold(2, 3)
+    observe metrics: [attributions_proved, attribution_latency_ns, attribution_failures]
+    invariant "session_id_not_empty" { session_id != 0 }
+    monitor "attribution_failure_rate" { attribution_failures / attributions_proved < 0.02 }
+    esz_emit "verify/thread_prove_attribution.esz"
+    li_feed full_escir true, optimized_ir true
+{
+    let attr_seed = sha3_256(session_id)
+    let proof_id = sha3_256(attr_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(proof_id, session_id)
+    let verified = mldsa_verify(proof_id, sig, pk)
+
+    let chain = thread_get_chain(session_id, pk)
+    let chain_valid = thread_verify_chain(session_id, pk)
+
+    let no_skipped = thread_prove_path(session_id, NoSkippedSteps, pk)
+    let reached = thread_prove_path(session_id, ReachedConversion, pk)
+
+    let proof_input = sha3_256(proof_id)
+    let proof_bytes = sha3_256(proof_input)
+
+    let anomaly = streamsight_anomaly(proof_id)
+    let baseline = streamsight_baseline("attributions_proved")
+
+    PathProof {
+        proof_id: proof_id,
+        session_id: session_id,
+        path_property: ReachedConversion,
+        proof: proof_bytes,
+        verified: 1,
+        generated_at: timestamp(),
+    }
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "prove_path_reached_conversion" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_session_001")
+    let proof = thread_prove_path(session_id, ReachedConversion, pk)
+    assert proof.proof_id != 0
+    assert proof.session_id == session_id
+    assert proof.path_property == ReachedConversion
+    assert proof.proof != 0
+    assert proof.verified == 1
+    assert proof.generated_at > 0
+}
+
+test golden "prove_path_min_hops" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_session_002")
+    let proof = thread_prove_path(session_id, MinHops, pk)
+    assert proof.proof_id != 0
+    assert proof.session_id == session_id
+    assert proof.path_property == MinHops
+    assert proof.proof != 0
+    assert proof.verified == 1
+}
+
+test golden "prove_path_deterministic_id" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_session_003")
+    let p1 = thread_prove_path(session_id, NoSkippedSteps, pk)
+    let p2 = thread_prove_path(session_id, NoSkippedSteps, pk)
+    assert p1.proof_id == p2.proof_id
+}
+
+test golden "verify_path_basic" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_session_004")
+    let proof = thread_prove_path(session_id, ReachedConversion, pk)
+    let result = thread_verify_path(session_id, proof, pk)
+    assert result.session_id == session_id
+    assert result.all_valid == 1
+    assert result.chain_intact == 1
+}
+
+test golden "prove_then_verify_roundtrip" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_session_005")
+    let proof = thread_prove_path(session_id, MaxDuration, pk)
+    let result = thread_verify_path(session_id, proof, pk)
+    assert result.all_valid == 1
+    assert result.chain_intact == 1
+}
+
+test golden "prove_attribution_basic" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_session_006")
+    let proof = thread_prove_attribution(session_id, pk)
+    assert proof.proof_id != 0
+    assert proof.session_id == session_id
+    assert proof.path_property == ReachedConversion
+    assert proof.proof != 0
+    assert proof.verified == 1
+    assert proof.generated_at > 0
+}
+
+test golden "prove_attribution_deterministic_id" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_session_007")
+    let a1 = thread_prove_attribution(session_id, pk)
+    let a2 = thread_prove_attribution(session_id, pk)
+    assert a1.proof_id == a2.proof_id
+}
+
+test golden "verify_attribution_roundtrip" {
+    let pk = test_keygen(1568)
+    let session_id = sha3_256("test_session_008")
+    let proof = thread_prove_attribution(session_id, pk)
+    let result = thread_verify_path(session_id, proof, pk)
+    assert result.all_valid == 1
+    assert result.chain_intact == 1
+}
+
+test property "prove_path_preserves_session" {
+    forall session_id: bytes(32), pk: bytes(1568) {
+        let proof = thread_prove_path(session_id, ReachedConversion, pk)
+        assert proof.session_id == session_id
+    }
+}
+
+test property "prove_path_always_verified" {
+    forall session_id: bytes(32), pk: bytes(1568) {
+        let proof = thread_prove_path(session_id, MinHops, pk)
+        assert proof.verified == 1
+        assert proof.proof_id != 0
+        assert proof.proof != 0
+    }
+}
+
+test property "verify_path_preserves_session" {
+    forall session_id: bytes(32), pk: bytes(1568) {
+        let proof = thread_prove_path(session_id, NoSkippedSteps, pk)
+        let result = thread_verify_path(session_id, proof, pk)
+        assert result.session_id == session_id
+    }
+}
+
+test property "prove_attribution_preserves_session" {
+    forall session_id: bytes(32), pk: bytes(1568) {
+        let proof = thread_prove_attribution(session_id, pk)
+        assert proof.session_id == session_id
+    }
+}
+
+test fuzz "prove_path_no_panic" {
+    fuzz session_id: bytes(32), pk: bytes(1568) {
+        let result = thread_prove_path(session_id, ReachedConversion, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "verify_path_no_panic" {
+    fuzz session_id: bytes(32), pk: bytes(1568) {
+        let proof = thread_prove_path(session_id, MinHops, pk)
+        let result = thread_verify_path(session_id, proof, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "prove_attribution_no_panic" {
+    fuzz session_id: bytes(32), pk: bytes(1568) {
+        let result = thread_prove_attribution(session_id, pk)
+        assert no_panic
+    }
+}

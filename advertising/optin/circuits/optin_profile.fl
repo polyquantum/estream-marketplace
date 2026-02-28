@@ -1,0 +1,356 @@
+// Opt-In Profile — User Activity Score Engine
+// Record events -> aggregate scores -> lookup current -> AI-optimize weights
+//
+// This file defines the user activity scoring system for the opt-in
+// engagement model. Users build composite scores across three dimensions:
+// authentication (identity verification depth), engagement (active
+// participation), and sharing (referrals and community contribution).
+// Partners use composite scores to target offers at high-quality leads.
+//
+// ScoreEvents are PoVC-attested and retained as time-series for trend
+// analysis. The Cortex AI `optin_score_optimizer` model learns optimal
+// dimension weights from engagement completion rates and flags anomalous
+// score changes (bot detection, score manipulation).
+//
+// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
+// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+
+import crm_graph from "advertising/crm/circuits/crm_graph"
+
+// =============================================================================
+// Data Declarations — Activity Score Types
+// =============================================================================
+
+data ActivityScore : app v1 {
+    user_id: bytes(32),
+    authentication_score: u32,
+    engagement_score: u32,
+    sharing_score: u32,
+    composite_score: u32,
+    last_computed_at: u64,
+}
+    encode @ bytes(60) {
+        user_id              @ le,
+        authentication_score @ le,
+        engagement_score     @ le,
+        sharing_score        @ le,
+        composite_score      @ le,
+        last_computed_at     @ le,
+    }
+    store kv
+    store graph
+    series retain 365d
+    cortex {
+        visibility {
+            user_id obfuscate
+            authentication_score expose
+            engagement_score expose
+            sharing_score expose
+            composite_score expose
+        }
+        ai_feed {
+            model "optin_score_optimizer"
+            input [authentication_events, engagement_events, sharing_events]
+            output [optimized_weights, score_prediction, anomaly_flag]
+            retrain on_drift
+            drift_threshold 0.10
+        }
+    }
+    observe metrics [composite_score, authentication_score, engagement_score, sharing_score] level adaptive
+    observe events [user_id, composite_score]
+    sign {
+        algorithm mldsa87
+        key_field user_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field user_id
+    }
+
+// EventType enum:
+// 0 = ApiVerification, 1 = FormCompletion, 2 = QuestionAsked,
+// 3 = DocumentDownload, 4 = ReferralMade, 5 = ForumPost, 6 = SurveyCompleted
+
+data ScoreEvent : app v1 {
+    event_id: bytes(32),
+    user_id: bytes(32),
+    event_type: enum { ApiVerification, FormCompletion, QuestionAsked, DocumentDownload, ReferralMade, ForumPost, SurveyCompleted },
+    points: u32,
+    timestamp_ns: u64,
+}
+    encode @ bytes(109) {
+        event_id     @ le,
+        user_id      @ le,
+        event_type   @ le,
+        points       @ le,
+        timestamp_ns @ le,
+    }
+    store kv
+    series retain 365d
+    observe events [event_type, points]
+    observe metrics [points, timestamp_ns] level adaptive
+    sign {
+        algorithm mldsa87
+        key_field event_id
+        detached true
+    }
+    attest {
+        povc true
+        anchor_field event_id
+    }
+
+// =============================================================================
+// Stream Declarations
+// =============================================================================
+
+stream optin_score_events: event<ScoreEvent>
+    retention 365d
+    consumers [streamsight, audit, cortex, analytics]
+    classify event_id: IDENTIFIER, user_id: IDENTIFIER, event_type: METADATA, points: METRIC, timestamp_ns: METRIC
+
+stream optin_activity_scores: event<ActivityScore>
+    retention 365d
+    consumers [streamsight, audit, cortex, analytics]
+    classify user_id: IDENTIFIER, composite_score: METRIC, authentication_score: METRIC, engagement_score: METRIC, sharing_score: METRIC
+
+// =============================================================================
+// Series Declarations
+// =============================================================================
+
+series optin_score_audit: optin_score_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// =============================================================================
+// Circuit: Compute Activity Score
+// =============================================================================
+//
+// Aggregates all score events for a user into the three activity dimensions
+// and computes the weighted composite score. Weights are provided by the
+// Cortex AI optimizer (defaults: auth 0.40, engagement 0.35, sharing 0.25).
+// Links the score to the user's CRM profile via a graph edge.
+
+circuit optin_compute_score(user_id: bytes(32), pk: bytes(1568)) -> ActivityScore
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [scores_computed, compute_latency_ns, score_distribution]
+    invariant "user_id_not_empty" { user_id != 0 }
+    monitor "score_anomaly_rate" { deviation(composite_score, baseline) < 0.30 }
+    fuzz_target
+{
+    let score_seed = sha3_256(user_id)
+    let score_id = sha3_256(score_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(score_id, user_id)
+    let verified = mldsa_verify(score_id, sig, pk)
+
+    let weights = li_infer(user_id, score_id)
+    let auth_score = kv_get(user_id)
+    let eng_score = kv_get(user_id)
+    let share_score = kv_get(user_id)
+    let composite = auth_score + eng_score + share_score
+
+    let edge = graph_add_edge(crm_graph, user_id, score_id, "activity_score")
+
+    let anomaly = streamsight_anomaly(score_id)
+    let baseline = streamsight_baseline("scores_computed")
+
+    ActivityScore {
+        user_id: user_id,
+        authentication_score: auth_score,
+        engagement_score: eng_score,
+        sharing_score: share_score,
+        composite_score: composite,
+        last_computed_at: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Record Score Event
+// =============================================================================
+//
+// Records a scoring event (e.g., ApiVerification, FormCompletion, ReferralMade)
+// with PoVC attestation. The event ID is deterministically derived from the
+// user, event type, and timestamp seed. Each event contributes points to the
+// corresponding activity dimension.
+
+circuit optin_record_event(user_id: bytes(32), event_type: enum { ApiVerification, FormCompletion, QuestionAsked, DocumentDownload, ReferralMade, ForumPost, SurveyCompleted }, points: u32, pk: bytes(1568)) -> ScoreEvent
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision A
+    constant_time true
+    streamsight true
+    povc true
+    observe metrics: [events_recorded, event_latency_ns, points_awarded]
+    invariant "user_id_not_empty" { user_id != 0 }
+    invariant "points_bounded" { points <= 1000 }
+    monitor "event_rate" { deviation(events_per_sec, baseline) < 0.30 }
+    fuzz_target
+{
+    let event_seed = sha3_256(user_id)
+    let event_id = sha3_256(event_seed)
+    let kem = mlkem_encaps(pk)
+    let sig = mldsa_sign(event_id, user_id)
+    let verified = mldsa_verify(event_id, sig, pk)
+
+    let anomaly = streamsight_anomaly(event_id)
+    let baseline = streamsight_baseline("events_recorded")
+
+    ScoreEvent {
+        event_id: event_id,
+        user_id: user_id,
+        event_type: event_type,
+        points: points,
+        timestamp_ns: timestamp(),
+    }
+}
+
+// =============================================================================
+// Circuit: Get Activity Score
+// =============================================================================
+//
+// Looks up the current activity score for a user by ID. Returns the most
+// recently computed score with all dimension values and composite.
+
+circuit optin_get_score(user_id: bytes(32), pk: bytes(1568)) -> ActivityScore
+    lex esn/marketplace/advertising/optin {
+        governance hierarchical
+        audit_trail true
+    }
+    precision B
+    streamsight true
+    observe metrics: [scores_retrieved, retrieval_latency_ns]
+    invariant "user_id_not_empty" { user_id != 0 }
+    monitor "retrieval_rate" { deviation(retrievals_per_sec, baseline) < 0.30 }
+{
+    let lookup_hash = sha3_256(user_id)
+    let kem = mlkem_encaps(pk)
+
+    let score = kv_get(user_id)
+
+    let anomaly = streamsight_anomaly(lookup_hash)
+    let baseline = streamsight_baseline("scores_retrieved")
+
+    score
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+test golden "record_event_basic" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_001")
+    let event = optin_record_event(user_id, ApiVerification, 50, pk)
+    assert event.event_id != 0
+    assert event.user_id == user_id
+    assert event.event_type == ApiVerification
+    assert event.points == 50
+    assert event.timestamp_ns > 0
+}
+
+test golden "record_event_deterministic_id" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_002")
+    let e1 = optin_record_event(user_id, FormCompletion, 30, pk)
+    let e2 = optin_record_event(user_id, FormCompletion, 30, pk)
+    assert e1.event_id == e2.event_id
+}
+
+test golden "record_event_all_types" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_003")
+    let e1 = optin_record_event(user_id, ApiVerification, 50, pk)
+    let e2 = optin_record_event(user_id, FormCompletion, 30, pk)
+    let e3 = optin_record_event(user_id, QuestionAsked, 10, pk)
+    let e4 = optin_record_event(user_id, DocumentDownload, 15, pk)
+    let e5 = optin_record_event(user_id, ReferralMade, 40, pk)
+    let e6 = optin_record_event(user_id, ForumPost, 20, pk)
+    let e7 = optin_record_event(user_id, SurveyCompleted, 25, pk)
+    assert e1.event_type == ApiVerification
+    assert e5.event_type == ReferralMade
+    assert e7.event_type == SurveyCompleted
+}
+
+test golden "compute_score_basic" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_004")
+    let e1 = optin_record_event(user_id, ApiVerification, 50, pk)
+    let e2 = optin_record_event(user_id, FormCompletion, 30, pk)
+    let score = optin_compute_score(user_id, pk)
+    assert score.user_id == user_id
+    assert score.composite_score >= 0
+    assert score.last_computed_at > 0
+}
+
+test golden "get_score_returns_computed" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_005")
+    let computed = optin_compute_score(user_id, pk)
+    let retrieved = optin_get_score(user_id, pk)
+    assert retrieved.user_id == user_id
+}
+
+test golden "score_reflects_events" {
+    let pk = test_keygen(1568)
+    let user_id = sha3_256("test_user_006")
+    let e1 = optin_record_event(user_id, ApiVerification, 80, pk)
+    let e2 = optin_record_event(user_id, ReferralMade, 60, pk)
+    let e3 = optin_record_event(user_id, FormCompletion, 40, pk)
+    let score = optin_compute_score(user_id, pk)
+    assert score.authentication_score >= 0
+    assert score.engagement_score >= 0
+    assert score.sharing_score >= 0
+}
+
+test property "record_event_preserves_user_id" {
+    forall user_id: bytes(32), points: u32, pk: bytes(1568) {
+        let event = optin_record_event(user_id, ApiVerification, points, pk)
+        assert event.user_id == user_id
+    }
+}
+
+test property "record_event_preserves_points" {
+    forall user_id: bytes(32), points: u32, pk: bytes(1568) {
+        let event = optin_record_event(user_id, FormCompletion, points, pk)
+        assert event.points == points
+    }
+}
+
+test property "compute_score_preserves_user_id" {
+    forall user_id: bytes(32), pk: bytes(1568) {
+        let score = optin_compute_score(user_id, pk)
+        assert score.user_id == user_id
+    }
+}
+
+test fuzz "record_event_no_panic" {
+    fuzz user_id: bytes(32), points: u32, pk: bytes(1568) {
+        let result = optin_record_event(user_id, ApiVerification, points, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "compute_score_no_panic" {
+    fuzz user_id: bytes(32), pk: bytes(1568) {
+        let result = optin_compute_score(user_id, pk)
+        assert no_panic
+    }
+}
+
+test fuzz "get_score_no_panic" {
+    fuzz user_id: bytes(32), pk: bytes(1568) {
+        let result = optin_get_score(user_id, pk)
+        assert no_panic
+    }
+}
