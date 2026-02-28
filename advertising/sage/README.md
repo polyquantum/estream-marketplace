@@ -4,7 +4,7 @@ AI agent framework for eStream — conversational chatbot/voicebot with ESLM inf
 
 ## Overview
 
-`estream-sage` is a generic AI agent platform built on Stratum and Cortex. It powers conversational AI (text and voice), bridges external APIs via MPC-garbled circuits for privacy-preserving inference, and generates SEO-optimized content from conversation data. Sage is a platform product — domain-agnostic by design, composable with any vertical (e.g. veteran services via `estream-crm`).
+`estream-sage` is a generic AI agent platform built on Stratum and Cortex. It powers conversational AI (text and voice), bridges external APIs via MPC-garbled circuits for privacy-preserving inference, and generates SEO-optimized content from conversation data. Sage is a platform product — domain-agnostic by design, composable with any vertical via `estream-crm`.
 
 ## Circuits
 

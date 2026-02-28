@@ -263,23 +263,23 @@ circuit sage_link_content(content_id: bytes(32), related_ids: bytes(1024), pk: b
 
 test golden "generate_content_basic" {
     let pk = test_keygen(1568)
-    let content = sage_generate_content("disability benefits overview", "va benefits, disability rating, compensation", "", pk)
+    let content = sage_generate_content("product comparison guide", "features, pricing, performance", "", pk)
     assert content.content_id != 0
-    assert content.topic == "disability benefits overview"
+    assert content.topic == "product comparison guide"
     assert content.seo_score > 0
     assert content.published == false
 }
 
 test golden "generate_content_from_conversations" {
     let pk = test_keygen(1568)
-    let content = sage_generate_content("claim filing guide", "va claim, file claim, evidence", "user asked about filing process", pk)
+    let content = sage_generate_content("onboarding walkthrough", "setup, configuration, quickstart", "user asked about getting started", pk)
     assert content.content_id != 0
     assert content.body_hash != 0
 }
 
 test golden "score_content_returns_value" {
     let pk = test_keygen(1568)
-    let content = sage_generate_content("pension eligibility", "pension, eligibility, wartime", "", pk)
+    let content = sage_generate_content("subscription tiers", "pricing, tiers, premium, enterprise", "", pk)
     let score = sage_score_content(content.content_id, pk)
     assert score > 0
 }
