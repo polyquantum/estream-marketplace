@@ -1,0 +1,28 @@
+Å§Blobë≈tree 79400c22020ced386f1a88a22a2d8fda751fd8f0
+parent 3387751c3bc23bf8404bc82a1fb0eac92916b41e
+author toddrooke <toddrooke@TRMBA3.local> 1771593873 -0700
+committer toddrooke <toddrooke@TRMBA3.local> 1771593873 -0700
+
+refactor: model marketplace as graph + DAG constructs
+
+Replace flat data/stream declarations in marketplace_streams.fl with:
+- graph marketplace_registry: typed nodes (ComponentNode, PublisherNode,
+  ReviewNode, LicenseNode), CSR storage, real-time overlays
+  (download_count, rating, security), ai_feed for recommendations,
+  StreamSight observe for anomaly detection
+- dag component_dependencies: enforce acyclic for cycle detection,
+  topo_sort for installation ordering, version_conflict overlay
+- series on both constructs for tamper-proof audit trail
+  (Merkle-chained, MTP-timestamped, lattice-imprinted, PoVC-attested)
+
+Streams are now lattice topic projections of graph state, not the
+primary data model. Data declarations and circuits retained for
+wire format and operation definitions.
+
+Update canonical spec ¬ß5 to describe graph-based data model and
+refactor ¬ß6.4 version resolution to reference DAG operations.
+
+Follows patterns from existing .fl test corpus:
+device_mesh.fl, wallet_ledger.fl, governance.fl, expert_mesh.fl
+
+Epic: polyquantum/estream#136

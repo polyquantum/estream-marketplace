@@ -1,0 +1,18 @@
+Å§Blobë≈Ltree 73cc7a2ebd07414dd472f31e3eb2511c03a15e6b
+parent 6864a9a4f64c4a56ca72ed04d0ac29d9f849c8fa
+author toddrooke <toddrooke@Mac.lan> 1771965963 -0600
+committer toddrooke <toddrooke@Mac.lan> 1771965963 -0600
+
+feat(industrial): Fleet Aggregation marketplace component (#193)
+
+Publishes the generic fleet aggregation framework as a marketplace
+component under industrial/fleet-aggregation/. Packages the platform
+circuit (estream circuits/services/fleet/fleet_aggregation.fl) with:
+
+- Three preconfigured fleet profiles (small/medium/large)
+- Domain weight presets for energy, manufacturing, and logistics
+- 12 multi-site aggregation test vectors + 4 staleness detection vectors
+- Full ESTREAM-FLEET-001 spec with architecture, types, and cross-refs
+- estream-component.toml manifest with schema/circuit declarations
+
+Closes polyquantum/estream#193

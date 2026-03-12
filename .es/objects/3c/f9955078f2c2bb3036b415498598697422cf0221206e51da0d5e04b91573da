@@ -1,0 +1,21 @@
+Å§Blobë≈ﬁtree e30f99d1caddd6a15e759bb6b15750ed693f2ec0
+parent e9ff183d9945fcf1a36f13e93abaafd548d5aecc
+author toddrooke <toddrooke@TRMBA3.local> 1771590577 -0700
+committer toddrooke <toddrooke@TRMBA3.local> 1771590577 -0700
+
+feat: marketplace Stream API and component manifests (#130, #131)
+
+Phase 1 of the eStream Marketplace epic (#136):
+
+- Add marketplace_streams.fl defining the Stream API data interface:
+  data declarations (ComponentSummary, ComponentDetail, SearchQuery,
+  SearchResult, InstallRequest/Progress, PublishRequest/Progress,
+  Review, License, PublisherProfile), stream declarations for all
+  marketplace topics, circuits for search/verify/register, and
+  audience declarations for field-level visibility.
+
+- Add estream-component.toml manifests for all 4 component domains:
+  fintech/fix-trading (wire-adapter), fintech/pci (smart-circuit),
+  fintech/iso20022 (wire-adapter), industrial (integration/freemium).
+
+- Add scaffold template for estream marketplace scaffold command.

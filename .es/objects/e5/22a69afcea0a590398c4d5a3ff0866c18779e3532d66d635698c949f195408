@@ -1,0 +1,59 @@
+Å§Blobë≈‡tree 6b12d2fd8d1ccb0773f247919c75b0e3ec0fa199
+parent 30e89375f4598e889614c67c64adf9633fc0386e
+author toddrooke <toddrooke@TRMBA3.local> 1772198248 -0700
+committer toddrooke <toddrooke@TRMBA3.local> 1772198248 -0700
+
+feat: marketplace infrastructure ‚Äî registry, ZK licensing, solutions, console, standards (#4-#8)
+
+Implement the full marketplace domain package infrastructure across 5 epics:
+
+Epic 4 ‚Äî Domain Package Registry & Distribution (#4):
+  - registry/package_format.fl: .escx format types, manifest, attestation,
+    signing, versioning (6 circuits, 12 types, 3 streams)
+  - registry/dependency_resolution.fl: DAG topo-sort, conflict detection,
+    platform constraints (5 circuits)
+  - registry/package_mirror.fl: scatter-distributed mirrors, local cache,
+    verification, eviction (5 circuits)
+
+Epic 5 ‚Äî ZK Licensing & Atomic Settlement (#5):
+  - licensing/blinded_tokens.fl: Chaum-style blind signatures, PQ-safe via
+    ML-KEM + PRIME, token issuance/verification/renewal/revocation (5 circuits)
+  - licensing/metering.fl: per-minute tracking, hourly blind aggregation,
+    metering isolation (5 circuits)
+  - licensing/settlement.fl: atomic multi-party split (publisher + platform +
+    referrer), ZK revenue proofs, lex-governed disputes (5 circuits)
+  - licensing/pricing_tiers.fl: share vs. private telemetry tiers, lex
+    preference recording, automatic tier application (5 circuits)
+
+Epic 6 ‚Äî Solution Bundles (#6):
+  - solutions/solution_manifest.fl: multi-package bundles with lex policies,
+    branding, three-tier deployment (6 circuits)
+  - solutions/lex_boundary.fl: Platform‚ÜíSolution‚ÜíCustomer hierarchy, PRIME
+    hardware attestation, visibility enforcement (6 circuits)
+  - solutions/revenue_waterfall.fl: atomic settlement through tier chain,
+    ZK waterfall proofs (5 circuits)
+  - solutions/customer_onboarding.fl: provisioning, activation, upgrades
+    with rollback (6 circuits)
+
+Epic 7 ‚Äî Console & Developer Experience (#7):
+  - console/publisher_console.fl: dashboard, analytics, revenue, telemetry,
+    deprecation workflows (6 circuits)
+  - console/customer_console.fl: installed packages, licenses, billing,
+    telemetry toggle (6 circuits)
+  - console/admin_console.fl: marketplace health, compliance, ESCIR matrix,
+    deprecation tracker (6 circuits)
+  - console/dev_tooling.fl: dev server, testing, linting, docs generation,
+    ESCIR compatibility, scaffolding (6 circuits)
+
+Epic 8 ‚Äî Documentation & Standards (#8):
+  - docs/guides/: publisher getting started, customer guide, pricing strategy,
+    solution builder
+  - specs/standards/ESCX_FORMAT_SPEC.md: .escx binary format specification
+  - specs/standards/MANIFEST_SCHEMA_SPEC.md: full manifest.toml schema
+  - specs/standards/PRIVACY_GUARANTEES_SPEC.md: formal privacy guarantees,
+    threat model, ZK proof specifications
+
+Totals: 15 FL circuit files, 83 circuits, 26 streams, 7 documentation files.
+All circuits have /// test golden annotations and lex governance.
+
+Closes #4, closes #5, closes #6, closes #7, closes #8

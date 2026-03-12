@@ -1,0 +1,11 @@
+Å§Blobë≈Wtree 4b2cc5a6d81396a4ee17dfae26db736213a2f847
+author toddrooke <toddrooke@TRMBA3.local> 1771582759 -0700
+committer toddrooke <toddrooke@TRMBA3.local> 1771582759 -0700
+
+feat: initial marketplace repo with ISO 20022, industrial gateway, and specs (#40)
+
+Separated from polyquantum/estream (Wave 3, Issue #40):
+- specs/: all marketplace specifications (package format, registry API, widget marketplace, industrial gateway)
+- runtime/iso20022/: ISO 20022 financial messaging adapter
+- runtime/industrial/: industrial protocol gateway (Modbus, OPC-UA, StreamSight)
+- Workspace Cargo.toml for both crates

@@ -1,0 +1,16 @@
+Å§Blobë≈ÿtree 7a206877a8fcbe210b5ea9cbdeed527245f7d09b
+parent 32ffcf1d221ba464d2116bbd8aa7636ce3717a25
+author toddrooke <toddrooke@TRMBA3.local> 1771890743 -0600
+committer toddrooke <toddrooke@TRMBA3.local> 1771890743 -0600
+
+feat: receive ISO 20022 as canonical marketplace component (#3)
+
+Accept FL circuit source and cross-border component from the platform as
+part of the platform-to-marketplace boundary migration (estream#179).
+
+- Add circuits/ directory with 5 FL files (types, pacs008, pacs002, camt053, camt052)
+- Add pacs008_json.json test vector
+- Update estream-component.toml with circuit source references, FPGA target, and boundary metadata
+- Create fintech/cross-border/ marketplace component (mBridge adapter)
+
+Closes #3

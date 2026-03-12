@@ -1,0 +1,22 @@
+Å§Blobë≈¢tree 08f09d5d87bdb4da8652288d4f54c76d4589bd47
+parent 83a274029d6dc746845c15c820b431bf95ad1986
+author toddrooke <toddrooke@TRMBA3.local> 1771885542 -0600
+committer toddrooke <toddrooke@TRMBA3.local> 1771885542 -0600
+
+feat: complete v0.9.1 marketplace epic ‚Äî SDK docs, lifecycle, version alignment
+
+- Version alignment: bump all min_version/escir refs from 0.8.0 to 0.9.1
+  across 4 component manifests, 7 ESCIR yaml files, 2 templates, 2 specs
+- Rename circuit.v080.escir.yaml -> circuit.v091.escir.yaml
+- Spec convention compliance: add implementation_type and status fields
+  to all component manifests and the template
+- Circuit lifecycle integration: add [component.lifecycle] section to all
+  components with status, deprecation protocol, and breaking change notice
+- Add Section 21 (Circuit Lifecycle Management) to marketplace spec with
+  lifecycle states, deprecation protocol, and StreamSight integration
+- Create lifecycle templates: CHANGELOG.md and MIGRATION.md
+- Multi-language SDK documentation: per-language guides for Rust, Python,
+  TypeScript, Go, C++, Swift, and FastLang covering consuming, publishing,
+  and lifecycle management of marketplace circuits
+
+Closes #2

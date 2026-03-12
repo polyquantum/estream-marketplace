@@ -1,0 +1,16 @@
+Å§Blobë≈‰tree e2c37c146a9dfb29d81e0b5fa94a387397439f86
+parent 28179fe410e63877a1e87219934b4b858558d287
+author toddrooke <toddrooke@TRMBA3.local> 1771621756 -0700
+committer toddrooke <toddrooke@TRMBA3.local> 1771621756 -0700
+
+feat(pricing): provider-level custom pricing for tenants (#143)
+
+- Add pricing/provider_pricing.fl with FL circuits for provider tier
+  management, tenant deal proposals (dual-approval), usage metering,
+  and provider payout computation
+- Extend estream-component.template.toml with pricing_tiers section
+  supporting default rates, volume discounts, custom deals, and
+  revenue share configuration
+- Streams: provider_pricing_events, provider_usage (365d retention)
+
+Integrates with platform pricing engine (estream #142).

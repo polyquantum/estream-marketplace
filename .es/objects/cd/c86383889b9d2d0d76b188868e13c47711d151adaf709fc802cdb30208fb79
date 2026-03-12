@@ -1,0 +1,20 @@
+Å§Blobë≈êtree 5dc13f753a507c5154020fc460324b45430a0710
+parent 4d8447ac4584942fab3a8120dcb11b4d34567e3e
+author toddrooke <toddrooke@TRMBA3.local> 1771591070 -0700
+committer toddrooke <toddrooke@TRMBA3.local> 1771591070 -0700
+
+docs: consolidate 6 specs into canonical ESTREAM_MARKETPLACE_SPEC v2.0.0
+
+Merges MARKETPLACE_SPEC, COMPONENT_REGISTRY_API_SPEC,
+SMARTCIRCUIT_PACKAGE_FORMAT_SPEC, CONSOLE_WIDGET_MARKETPLACE_SPEC,
+and FPGA_COMPONENT_EXTENSION into one canonical document covering
+component model, packaging, ML-DSA-87 signing, Stream API,
+pricing, registry protocol, CLI, circuit designer UX, and
+submission process. Superseded specs moved to specs/archive/.
+
+Resolves signing model conflict (adopts Merkle tree from
+SMARTCIRCUIT_PACKAGE_FORMAT_SPEC as canonical). Adds new sections
+for Stream API (¬ß5), Circuit Designer Integration (¬ß13), and
+end-to-end submission process (¬ß18).
+
+Epic: polyquantum/estream#136

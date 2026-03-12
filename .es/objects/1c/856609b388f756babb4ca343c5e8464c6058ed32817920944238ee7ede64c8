@@ -1,0 +1,18 @@
+Å§Blobë≈jtree 566fb073e1218c57b122dd8154ad6fc8ab7006a2
+parent e0b1c52d0645f7bc4e4246c76bd855a6670849a2
+author toddrooke <toddrooke@TRMBA3.local> 1771585047 -0700
+committer toddrooke <toddrooke@TRMBA3.local> 1771585047 -0700
+
+feat: add domain-organized marketplace components (fintech, industrial)
+
+- Add fintech/fix-trading/ with FIX protocol gateway FastLang circuits and spec
+- Add fintech/pci/ with PCI-DSS cardholder data governance circuit
+- Add fintech/iso20022/ with ESCIR circuit, test vectors, and FPGA docs
+- Add industrial/components/ with Modbus TCP sub-circuits (ESCIR)
+- Add industrial/gateway/ with Lite/Standard/Premium SKU circuits
+- Move industrial specs from specs/ to industrial/specs/
+- Add templates/ with marketplace transaction template
+- Add CLAUDE.md with repo conventions
+- Update README.md with domain-organized structure
+
+Resolves polyquantum/estream#40

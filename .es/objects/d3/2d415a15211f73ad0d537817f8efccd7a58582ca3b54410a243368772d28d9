@@ -1,0 +1,23 @@
+��Blob��ytree 82eecfef82f63cbf2b64e7996e96c58ef4bc1e54
+parent 3ea4db9dc1cf5571a7995e598c7469beec7a8fc6
+author toddrooke <toddrooke@TRMBA3.local> 1772237904 -0700
+committer toddrooke <toddrooke@TRMBA3.local> 1772237904 -0700
+
+feat(advertising): add 10 marketplace items for advertising domain (#9-#18)
+
+New advertising/ domain with 10 marketplace components:
+
+- CRM (estream-crm) — graph-native lifecycle management (#9)
+- Sage (estream-sage) — AI agent framework (#10)
+- Catalyst (estream-catalyst) — AI-driven outcome optimizer (#11)
+- Tide (estream-tide) — organic growth engine (#12)
+- Scope (estream-scope) — lead partner console (#13)
+- Relay (estream-relay) — affiliate and referral platform (#14)
+- Etch (estream-etch) — lattice-verified ad engine (#15)
+- Thread (estream-thread) — provenance chain (#16)
+- Opt-in (estream-optin) — patent-backed engagement model (#17)
+- Portal (estream-portal) — embeddable widget framework (#18)
+
+Each component includes estream-component.toml manifest, FastLang
+circuits with full Stratum/Cortex/StreamSight/AI integration, and
+inline tests (golden, property, fuzz). 30 circuit files total.

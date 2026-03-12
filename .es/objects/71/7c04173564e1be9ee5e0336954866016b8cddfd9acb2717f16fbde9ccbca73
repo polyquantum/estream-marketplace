@@ -1,0 +1,10 @@
+Å§Blobë≈„tree e7e4159bacb994c07fadb8c50cfff9ce0ffbff9b
+parent f5b3ceffd000411f9d211b86487f1bf319199f6b
+author toddrooke <toddrooke@TRMBA3.local> 1772198855 -0700
+committer toddrooke <toddrooke@TRMBA3.local> 1772198855 -0700
+
+docs: update README with marketplace infrastructure overview (Epics 4-8)
+
+Add directory structure and section summaries for the five marketplace
+infrastructure epics: registry & distribution, ZK licensing, solution
+bundles, console & DX, and documentation/standards.

@@ -1,0 +1,15 @@
+Å§Blobë≈Étree 39d81394242a3e5b168eb470125697dafd3c2f77
+parent d9a3a031f909b7ffb7d333196105f0f19474bfdb
+author toddrooke <toddrooke@TRMBA3.local> 1771882139 -0600
+committer toddrooke <toddrooke@TRMBA3.local> 1771882139 -0600
+
+chore: ESCIR cleanup, SmartCircuit terminology, and V2 rename to v0.9.1
+
+- Remove ESCIR from external-facing industrial gateway spec and FIX
+  trading adapter
+- Rename INDUSTRIAL_PROTOCOL_GATEWAY_V2.md to _v0.9.1.md
+- Replace ESCIR references with SmartCircuit terminology throughout
+- Update component.toml and cross-references
+- Add Developer Language Story to CLAUDE.md
+
+Part of polyquantum/estream#178 (v0.9.1 master epic)
