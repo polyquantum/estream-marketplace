@@ -2,7 +2,7 @@
 name = "polyquantum.secure_video"
 version = "0.12.0"
 publisher = "polyquantum"
-description = "SVD content security and secure video distribution pipelines"
+description = "Secure video delivery, watermarking, content security across cinema, production, post-production, mastering, archival, and airline distribution"
 category = "smart-circuit"
 license = "commercial"
 

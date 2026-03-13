@@ -1,0 +1,74 @@
+¤Blob‘Å¹[component]
+name = "estream-design-explorer"
+version = "0.9.2"
+category = "smart-circuit"
+implementation_type = "FastLang"
+status = "Active"
+description = "Multi-physics parametric design space explorer â€” NSGA-II multi-objective optimization with pluggable domain parameter groups, objectives, constraints, and physics evaluation pipelines for industrial system design"
+license = "Apache-2.0"
+repository = "https://github.com/polyquantum/estream-marketplace"
+homepage = "https://estream.io/marketplace/estream-design-explorer"
+readme = "README.md"
+keywords = ["design-explorer", "nsga-ii", "multi-physics", "optimization", "pareto", "industrial", "parametric", "cad"]
+
+[component.author]
+name = "eStream Contributors"
+email = "components@estream.io"
+url = "https://github.com/polyquantum"
+
+[component.marketplace]
+pricing = "metered"
+visibility = "open"
+
+[component.estream]
+platform = ">= 0.12.0"
+
+[component.dependencies]
+estream-industrial-gateway = "^0.9.0"
+
+[component.schemas]
+provides = [
+    "DseParamGroup",
+    "DseParam",
+    "DseObjective",
+    "DseConstraint",
+    "DseCandidate",
+    "DseParetoFrontier",
+    "DsePhysicsStage",
+    "DseEvalResult",
+    "DseCampaignConfig",
+    "DseCampaignResult",
+    "DseOutputArtifact",
+]
+requires = []
+
+[component.circuits]
+provides = [
+    "dse_create_campaign",
+    "dse_define_param_group",
+    "dse_define_objective",
+    "dse_define_constraint",
+    "dse_register_physics_stage",
+    "dse_run_generation",
+    "dse_evaluate_candidate",
+    "dse_pareto_sort",
+    "dse_crowding_distance",
+    "dse_tournament_select",
+    "dse_sbx_crossover",
+    "dse_polynomial_mutation",
+    "dse_check_convergence",
+    "dse_export_pareto",
+    "dse_export_bom",
+    "dse_export_report",
+]
+target = ["cpu", "fpga"]
+
+[component.lifecycle]
+status = "active"
+breaking_change_notice_days = 90
+changelog = "CHANGELOG.md"
+
+[component.include]
+circuits = ["circuits/*.fl"]
+tests = ["test_vectors/*.esz"]
+docs = ["specs/*.md", "README.md"]

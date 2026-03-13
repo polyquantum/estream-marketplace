@@ -1,0 +1,97 @@
+/// Spec: specs/verticals/PAYMENTS_SPEC.md
+/// FX Rate Aggregation Circuit (Track H — Cross-Border Port)
+/// Multi-source rate aggregation with outlier filtering and rate locking
+
+type FxRateEntry = struct {
+    pair_base: bytes(4),
+    pair_quote: bytes(4),
+    rate_fp18: u64,
+    source_type: u8,
+    timestamp_ms: u64,
+    bid_fp18: u64,
+    ask_fp18: u64,
+}
+
+type FxQuoteResult = struct {
+    pair_base: bytes(4),
+    pair_quote: bytes(4),
+    mid_rate_fp18: u64,
+    bid_fp18: u64,
+    ask_fp18: u64,
+    source_count: u8,
+    confidence_pct: u8,
+    expiry_ms: u64,
+}
+
+type FxRateLock = struct {
+    lock_id: bytes(32),
+    mid_rate_fp18: u64,
+    source_amount: u64,
+    dest_amount: u64,
+    created_at: u64,
+    expires_at: u64,
+    used: bool,
+}
+
+// Check if a rate is within the freshness window
+circuit check_rate_freshness(rate: FxRateEntry, max_age_secs: u64, current_time: u64) -> bool
+    @status production
+    lex crossborder/fx/freshness
+    @precision C
+    observe metrics: [pair_base, pair_quote, source_type]
+{
+    current_time - rate.timestamp_ms <= max_age_secs * 1000
+}
+
+// Aggregate rates from multiple sources (median with outlier filter)
+circuit aggregate_fx_rates(rates: list<FxRateEntry>, min_sources: u8, max_spread_bps: u32) -> FxQuoteResult
+    @status production
+    lex crossborder/fx/aggregate
+    @precision C
+    observe metrics: [pair_base, pair_quote, source_count, confidence_pct]
+{
+    let mid_rate = byzantine_median_aggregate(rates, 33)
+    FxQuoteResult {
+        pair_base: rates,
+        pair_quote: rates,
+        mid_rate_fp18: mid_rate,
+        bid_fp18: mid_rate,
+        ask_fp18: mid_rate,
+        source_count: list_len(rates),
+        confidence_pct: if list_len(rates) >= min_sources { 90 } else { 50 },
+        expiry_ms: 0,
+    }
+}
+
+// Lock a rate for guaranteed execution
+circuit lock_fx_rate(pair_base: bytes(4), pair_quote: bytes(4), source_amount: u64, current_time: u64, lock_duration_secs: u64) -> FxRateLock
+    @status production
+    lex crossborder/fx/lock
+    @precision C
+    @attested true
+    observe metrics: [pair_base, pair_quote, source_amount]
+{
+    FxRateLock {
+        lock_id: pair_base,
+        mid_rate_fp18: 0,
+        source_amount: source_amount,
+        dest_amount: 0,
+        created_at: current_time,
+        expires_at: current_time + lock_duration_secs * 1000,
+        used: false,
+    }
+}
+
+// Convert amount using rate (source * rate / 10^18)
+circuit fx_convert(source_amount: u64, rate_fp18: u64) -> u64
+    @status production
+    lex crossborder/fx/convert
+    @precision C
+{
+    let scale = 1000000000000000000
+    fixed_point_mul_div(source_amount, rate_fp18, scale)
+}
+
+stream fx_rate_events: event<FxQuoteResult>
+    @retention 90d
+    @consumers [audit, analytics, streamsight]

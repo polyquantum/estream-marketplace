@@ -1,0 +1,65 @@
+/// Spec: specs/verticals/INDUSTRIAL_SPEC.md
+/// Telemetry Emission Circuit (Track H — Industrial Port)
+/// Stream telemetry data to StreamSight topics
+/// @rust_only — circuit logic lives in Rust; .fl defines the contract only
+
+type TelemetryPoint = struct {
+    device_id: bytes(16),
+    register_addr: u32,
+    value_decoded: u64,
+    unit_code: u8,
+    quality_flag: u8,
+    timestamp_ms: u64,
+}
+
+type TelemetryBatch = struct {
+    gateway_id: bytes(32),
+    points: list<TelemetryPoint>,
+    point_count: u32,
+    batch_timestamp_ms: u64,
+}
+
+type EmitResult = struct {
+    gateway_id: bytes(32),
+    emitted_count: u32,
+    dropped_count: u32,
+    batch_timestamp_ms: u64,
+}
+
+// Emit a single telemetry point to StreamSight
+circuit emit_telemetry_point(gateway_id: bytes(32), point: TelemetryPoint) -> bool
+    @status production
+    lex industrial/telemetry/emit_point
+    @precision A
+    observe metrics: [gateway_id, device_id, register_addr, value_decoded]
+{
+    true
+}
+
+// Emit a batch of telemetry points
+circuit emit_telemetry_batch(batch: TelemetryBatch) -> EmitResult
+    @status production
+    lex industrial/telemetry/emit_batch
+    @precision A
+    observe metrics: [gateway_id, point_count, batch_timestamp_ms]
+{
+    EmitResult {
+        gateway_id: batch.gateway_id,
+        emitted_count: batch.point_count,
+        dropped_count: 0,
+        batch_timestamp_ms: batch.batch_timestamp_ms,
+    }
+}
+
+// Format a lex topic path for device telemetry
+circuit format_telemetry_topic(gateway_id: bytes(32), device_id: bytes(16), register_addr: u32) -> bytes(32)
+    @status production
+    lex industrial/telemetry/topic
+    @precision A
+{
+    gateway_id
+}
+
+stream telemetry_events: event<TelemetryBatch>
+    @retention 90d
+    @consumers [streamsight, analytics, dashboard]

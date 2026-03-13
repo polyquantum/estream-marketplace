@@ -1,0 +1,94 @@
+/// Spec: specs/verticals/CONTENT_SECURITY_SPEC.md
+/// eStream Content Security — Airline / Hospitality phase
+/// Offline PQ-KDM for disconnected environments (aircraft, cruise ships, trains, hotels).
+/// Per-seat watermark. Verified play attestation synced on reconnect.
+
+type OfflineKdm = struct {
+    kdm_id: bytes(32),
+    content_id: bytes(32),
+    vehicle_id: bytes(32),
+    seat_range_start: u16,
+    seat_range_end: u16,
+    valid_from: u64,
+    valid_until: u64,
+    content_key_encapsulation: bytes,
+    issuer_signature: bytes,
+    max_offline_hours: u32,
+}
+
+type SeatPlayback = struct {
+    seat_id: u16,
+    content_id: bytes(32),
+    vehicle_id: bytes(32),
+    session_id: bytes(32),
+    trace_seed: bytes(32),
+    started_at: u64,
+    ended_at: u64,
+}
+
+type OfflineSyncBatch = struct {
+    vehicle_id: bytes(32),
+    flight_number: bytes,
+    event_count: u32,
+    batch_hash: bytes(32),
+    synced_at: u64,
+}
+
+// Vehicle types encoded in vehicle_id prefix:
+//   0x01=Aircraft, 0x02=CruiseShip, 0x03=Train, 0x04=Hotel, 0x05=MilitaryTransport
+
+circuit validate_offline_kdm(
+    status production
+    content_id: bytes(32),
+    vehicle_id: bytes(32),
+    valid_from: u64,
+    valid_until: u64,
+    current_time: u64,
+    max_offline_hours: u32
+) -> bool
+    lex platform/cs/airline
+    @precision C
+    @attested true
+{
+    let content_ok = content_id != bytes(32){0}
+    let vehicle_ok = vehicle_id != bytes(32){0}
+    let window_ok = current_time >= valid_from && current_time <= valid_until
+    let offline_ok = (valid_until - valid_from) <= (max_offline_hours * 3600000)
+    content_ok && vehicle_ok && window_ok && offline_ok
+}
+
+circuit validate_seat_range(
+    status production
+    seat_id: u16,
+    range_start: u16,
+    range_end: u16
+) -> bool
+    lex platform/cs/airline
+    @precision C
+    @attested true
+{
+    seat_id >= range_start && seat_id <= range_end
+}
+
+circuit validate_sync_batch(
+    status production
+    event_count: u32,
+    batch_hash: bytes(32),
+    max_events: u32
+) -> bool
+    lex platform/cs/airline
+    @precision C
+    @attested true
+{
+    let count_ok = event_count > 0 && event_count <= max_events
+    let hash_ok = batch_hash != bytes(32){0}
+    count_ok && hash_ok
+}
+
+stream airline_play_events: event<SeatPlayback>
+    @retention 7y
+    @consumers [governance, audit, streamsight, compliance]
+
+stream airline_sync_events: event<OfflineSyncBatch>
+    @retention 7y
+    @consumers [governance, audit, compliance]

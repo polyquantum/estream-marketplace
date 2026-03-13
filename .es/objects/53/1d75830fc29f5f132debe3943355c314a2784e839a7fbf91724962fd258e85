@@ -1,0 +1,18 @@
+¤Blob‘ÅÛ# polyquantum.secure_video
+
+Secure video distribution and content security circuits for eStream.
+
+## Modules
+
+- **svd** â€” Singular Value Decomposition for perceptual video fingerprinting
+- **drm** â€” DRM-free content protection via lattice-based watermarking
+- **streaming** â€” Secure streaming pipeline with proof-of-circuit attestation
+
+## Platform Requirements
+
+- eStream platform >= 0.12.0
+- ESCIR API 1.0.0
+
+## License
+
+Commercial â€” see marketplace pricing tiers.

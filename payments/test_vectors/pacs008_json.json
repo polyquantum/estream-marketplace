@@ -1,0 +1,61 @@
+{
+  "Document": {
+    "FIToFICstmrCdtTrf": {
+      "GrpHdr": {
+        "MsgId": "MSG-20240115-003",
+        "CreDtTm": "2024-01-15T16:00:00Z",
+        "NbOfTxs": 1,
+        "SttlmInf": {
+          "SttlmMtd": "CLRG"
+        }
+      },
+      "CdtTrfTxInf": {
+        "PmtId": {
+          "InstrId": "INSTR-JSON-001",
+          "EndToEndId": "E2E-JSON-001",
+          "TxId": "TXN-JSON-001"
+        },
+        "IntrBkSttlmAmt": {
+          "value": 25000.00,
+          "Ccy": "USD"
+        },
+        "ChrgBr": "SHAR",
+        "Dbtr": {
+          "Nm": "JSON Test Corporation",
+          "PstlAdr": {
+            "Ctry": "US"
+          }
+        },
+        "DbtrAcct": {
+          "Id": {
+            "IBAN": "US12345678901234567890"
+          }
+        },
+        "DbtrAgt": {
+          "FinInstnId": {
+            "BICFI": "CHASUS33"
+          }
+        },
+        "Cdtr": {
+          "Nm": "Recipient Corp Ltd",
+          "PstlAdr": {
+            "Ctry": "GB"
+          }
+        },
+        "CdtrAcct": {
+          "Id": {
+            "IBAN": "GB82WEST12345698765432"
+          }
+        },
+        "CdtrAgt": {
+          "FinInstnId": {
+            "BICFI": "WESTGB2L"
+          }
+        },
+        "RmtInf": {
+          "Ustrd": "JSON format test payment"
+        }
+      }
+    }
+  }
+}

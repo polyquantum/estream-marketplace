@@ -1,55 +1,29 @@
-[component]
-name = "estream-wire-iso20022"
-version = "0.9.1"
+[package]
+name = "polyquantum.fintech-iso20022"
+version = "0.12.0"
+publisher = "polyquantum"
+description = "ISO 20022 FPGA-accelerated parser and ESCIR codegen reference implementation"
 category = "wire-adapter"
-implementation_type = "Hybrid"
-status = "Active"
-description = "ISO 20022 (SWIFT MX) parser and mapper for eStream — transforms pacs.008/pacs.002 XML messages into native data schemas"
-license = "Apache-2.0"
-repository = "https://github.com/polyquantum/estream-marketplace"
-homepage = "https://estream.io/marketplace/estream-wire-iso20022"
-readme = "README.md"
-keywords = ["iso20022", "swift", "pacs008", "pacs002", "payments", "fintech", "wire-adapter"]
+license = "commercial"
 
-[component.author]
-name = "eStream Contributors"
-email = "components@estream.io"
-url = "https://github.com/polyquantum"
+[platform]
+minimum = "0.12.0"
+escir_api = "1.0.0"
 
-[component.marketplace]
-pricing = "free"
-visibility = "open"
+[dependencies]
+polyquantum_payments = { package = "polyquantum.payments", version = ">= 0.12.0" }
 
-[component.estream]
-platform = ">= 0.12.0"
-
-[component.schemas]
-provides = ["Iso20022Pacs008", "Iso20022Pacs002", "PaymentStatus"]
-requires = []
-
-[component.circuits]
-provides = ["iso20022_parser", "pacs008_hash", "pacs002_hash", "camt053_hash", "camt052_hash"]
-source = ["circuits/types.fl", "circuits/pacs008.fl", "circuits/pacs002.fl", "circuits/camt053.fl", "circuits/camt052.fl"]
-target = ["cpu", "fpga"]
-
-[component.wire_adapter]
+[wire_adapter]
 protocol_family = "financial"
 transports = ["tcp", "tls"]
-bidirectional = false
-request_response = false
 
-[component.lifecycle]
-status = "active"
-breaking_change_notice_days = 90
-changelog = "CHANGELOG.md"
-
-[component.include]
-circuits = ["circuit.v091.escir.yaml", "circuits/*.fl"]
+[include]
+circuits = ["circuit.v091.escir.yaml"]
 tests = ["test_vectors/**"]
 docs = ["README.md", "COMPONENT_MARKETPLACE.md"]
 
-[component.boundary]
+[boundary]
 tier = "application"
-rationale = "ISO 20022 is a domain-specific financial messaging standard; no horizontal platform circuit depends on it"
+rationale = "ISO 20022 FPGA/codegen reference; core message circuits live in polyquantum.payments"
 migrated_from = "estream/runtime/iso20022"
 migration_issue = "polyquantum/estream#179"

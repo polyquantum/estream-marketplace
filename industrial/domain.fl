@@ -1,0 +1,16 @@
+domain polyquantum.industrial {
+  /// Industrial IoT: Modbus/IEC 62053 protocol adapters, telemetry DAG, alarm management, fleet aggregation, data residency
+
+  types iec62053_types from "circuits/iec62053_types.fld"
+
+  module telemetry_dag        from "circuits/telemetry_dag.fl"
+  module telemetry_emit       from "circuits/telemetry_emit.fl"
+  module modbus_decode        from "circuits/modbus_decode.fl"
+  module modbus_graph         from "circuits/modbus_graph.fl"
+  module iec62053_metering    from "circuits/iec62053_metering.fl"
+  module iec62053_povc        from "circuits/iec62053_povc.fl"
+  module alarm_graph          from "circuits/alarm_graph.fl"
+  module alarm_threshold      from "circuits/alarm_threshold.fl"
+  module residency_industrial from "circuits/residency_industrial.fl"
+  module fleet_aggregation    from "fleet-aggregation/circuits/fleet_aggregation.fl"
+}

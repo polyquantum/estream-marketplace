@@ -1,0 +1,89 @@
+/// Spec: specs/verticals/RADIO_SPEC.md
+/// eStream Radio Scatter — Core types
+/// Shared types for VRF frequency scatter, O-RAN mapping, tactical mesh.
+/// govern lex verticals/radio
+
+type FrequencyBand = struct {
+    center_hz: u64,
+    bandwidth_hz: u32,
+    band_id: u8,
+    power_dbm: i16,
+    modulation: u8,
+}
+
+type SpectrumAllocation = struct {
+    allocation_id: bytes(32),
+    band_count: u8,
+    min_freq_hz: u64,
+    max_freq_hz: u64,
+    total_bandwidth_hz: u64,
+    regulatory_region: u8,
+}
+
+type RadioScatterConfig = struct {
+    n_bands: u8,
+    k_threshold: u8,
+    vrf_seed: bytes(32),
+    sleeve_algo: u8,
+    max_power_dbm: i16,
+    aperture_hz: u64,
+}
+
+type RadioShard = struct {
+    shard_index: u8,
+    band: FrequencyBand,
+    encrypted_payload: bytes,
+    sleeve_tag: bytes(16),
+    vrf_proof: bytes,
+    timestamp_ns: u64,
+}
+
+type TacticalMeshNode = struct {
+    node_id: bytes(32),
+    prime_identity: bytes(32),
+    node_type: u8,
+    classification_level: u8,
+    position_lat_micro: i64,
+    position_lon_micro: i64,
+    battery_pct: u8,
+    mesh_neighbors: u8,
+    last_seen: u64,
+}
+
+type RanNodeIdentity = struct {
+    node_id: bytes(32),
+    ran_type: u8,
+    prime_cert: bytes,
+    cell_id: u32,
+    gnb_id: u32,
+    plmn: u32,
+}
+
+type SignalSample = struct {
+    freq_hz: u64,
+    power_dbm: i16,
+    noise_floor_dbm: i16,
+    timestamp_ns: u64,
+    sample_source: u8,
+}
+
+type AnomalyReport = struct {
+    report_id: bytes(32),
+    anomaly_type: u8,
+    severity: u8,
+    freq_hz: u64,
+    power_delta_db: i16,
+    confidence_pct: u8,
+    node_id: bytes(32),
+    timestamp: u64,
+}
+
+// Node types: 0=Handset, 1=ManPack, 2=Vehicle, 3=TOC, 4=Fixed_Base, 5=Airborne, 6=Maritime
+// Classification: 0=UNCLASSIFIED, 1=CUI, 2=SECRET, 3=TOP_SECRET, 4=SCI
+// RAN types: 0=O_RU, 1=O_DU, 2=O_CU_CP, 3=O_CU_UP, 4=Near_RT_RIC, 5=Non_RT_RIC, 6=SMO, 7=UPF
+// Modulation: 0=QPSK, 1=16QAM, 2=64QAM, 3=256QAM, 4=BPSK, 5=OFDM, 6=SC_FDMA
+// Sleeve algo: 0=ML_KEM_1024, 1=AES_256_GCM, 2=ChaCha20_Poly1305
+// Anomaly types: 0=Jamming, 1=Spoofing, 2=UnauthorizedEmitter, 3=SigintCollection,
+//   4=PropagationAnomaly, 5=TimingAnomaly, 6=PowerAnomaly, 7=ModulationAnomaly
+// Regulatory region: 0=FCC_US, 1=ETSI_EU, 2=MIC_JP, 3=OFCOM_UK, 4=MIL_UNRESTRICTED
+// Sample source: 0=Antenna, 1=SDR, 2=Spectrum_Analyzer, 3=RU_Report

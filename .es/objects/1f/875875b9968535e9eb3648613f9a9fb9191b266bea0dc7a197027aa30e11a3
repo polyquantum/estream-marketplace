@@ -1,0 +1,18 @@
+¤Blob‘Åú# polyquantum.radio
+
+Radio spectrum management and tactical mesh networking circuits for eStream.
+
+## Modules
+
+- **spectrum** â€” 5G/6G dynamic spectrum allocation and sharing with ZK-verified entitlements
+- **mesh** â€” Tactical mesh networking with post-quantum key exchange and routing
+- **beamforming** â€” Adaptive beamforming control circuits for MIMO antenna arrays
+
+## Platform Requirements
+
+- eStream platform >= 0.12.0
+- ESCIR API 1.0.0
+
+## License
+
+Commercial â€” see marketplace pricing tiers.

@@ -1,0 +1,90 @@
+/// Spec: specs/verticals/CONTENT_SECURITY_SPEC.md
+/// eStream Content Security — Production phase
+/// Camera-to-cloud dailies, on-set playback, script/storyboard security.
+/// PRIME-attested from the moment footage exists.
+
+type DailiesTransfer = struct {
+    camera_id: bytes(32),
+    dit_station_id: bytes(32),
+    cloud_ingest_id: bytes(32),
+    frame_count: u32,
+    content_hash: bytes(32),
+    capture_timestamp: u64,
+    attestation: bytes,
+}
+
+type OnSetScreening = struct {
+    screening_id: bytes(32),
+    content_hash: bytes(32),
+    viewer_trace: bytes(32),
+    location_id: bytes(32),
+    started_at: u64,
+    ended_at: u64,
+}
+
+type ProductionAsset = struct {
+    asset_id: bytes(32),
+    asset_type: u8,
+    project_id: bytes(32),
+    content_hash: bytes(32),
+    created_at: u64,
+    created_by: bytes(32),
+    access_level: u8,
+}
+
+// Asset types: 0=RawFootage, 1=Dailies, 2=Script, 3=Storyboard,
+//   4=ConceptArt, 5=Animatic, 6=Reference, 7=Audio
+
+// Access levels: 0=Director, 1=Producer, 2=Department, 3=Crew, 4=External
+
+circuit validate_dailies_transfer(
+    status production
+    camera_id: bytes(32),
+    dit_station_id: bytes(32),
+    frame_count: u32,
+    content_hash: bytes(32)
+) -> bool
+    lex platform/cs/production
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    let camera_ok = camera_id != bytes(32){0}
+    let dit_ok = dit_station_id != bytes(32){0}
+    let frames_ok = frame_count > 0
+    let hash_ok = content_hash != bytes(32){0}
+    camera_ok && dit_ok && frames_ok && hash_ok
+}
+
+circuit validate_onset_screening(
+    status production
+    viewer_trace: bytes(32),
+    content_hash: bytes(32),
+    started_at: u64,
+    ended_at: u64
+) -> bool
+    lex platform/cs/production
+    @precision C
+    @attested true
+{
+    let trace_ok = viewer_trace != bytes(32){0}
+    let hash_ok = content_hash != bytes(32){0}
+    let time_ok = ended_at > started_at
+    trace_ok && hash_ok && time_ok
+}
+
+circuit validate_asset_access(
+    status production
+    requester_level: u8,
+    asset_level: u8
+) -> bool
+    lex platform/cs/production
+    @precision C
+    @attested true
+{
+    requester_level <= asset_level
+}
+
+stream production_events: event<DailiesTransfer>
+    @retention 7y
+    @consumers [governance, audit, streamsight, forensics]

@@ -1,0 +1,15 @@
+Å§Blobë≈tree e0eebe20d6898bd5104e4f530bf9c0ec81354867
+parent 29d36912379f5207c060be80992616da9c2e96ff
+author toddrooke <todd@toddrooke.com> 1773395429 -0600
+committer toddrooke <todd@toddrooke.com> 1773395429 -0600
+
+v0.12.0: FastLang keyword renames, @ annotations, marketplace manifests, journey tests
+
+Applied v0.12.0 keyword renames across 51 .fl files (povc‚Üíattested, esz_emit‚Üíserialize,
+kat_vector‚Üígolden_test, streamsight‚Üíobserve). Added @ prefix to all annotations.
+Removed esn/ from lex paths. Updated 17 estream-component.toml manifests to
+platform >= 0.12.0. Created 5 stub marketplace packages (payments, radio,
+secure-video, bridge, widgets). Added 5 journey tests (.flj) for existing
+verticals (fintech, industrial, advertising). Updated CLAUDE.md.
+
+Made-with: Cursor

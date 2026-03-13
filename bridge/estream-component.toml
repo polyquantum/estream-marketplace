@@ -2,7 +2,7 @@
 name = "polyquantum.bridge"
 version = "0.12.0"
 publisher = "polyquantum"
-description = "Cross-chain and cross-lex bridge circuits for interoperability"
+description = "Cross-chain bridge: deposit, withdraw, mint/burn, fraud proofs, emergency pause, multi-sig withdrawal, rate limiting"
 category = "smart-circuit"
 license = "commercial"
 

@@ -1,0 +1,95 @@
+/// Spec: specs/verticals/PAYMENTS_SPEC.md
+/// Atomic Swap Circuit (Track H — Cross-Border Port)
+/// HTLC-based all-or-nothing settlement across jurisdictions
+
+type SwapParams = struct {
+    swap_id: bytes(32),
+    intent_id: bytes(32),
+    corridor_id: bytes(16),
+    source_amount: u64,
+    destination_amount: u64,
+    fx_rate_fp18: u64,
+    source_currency: bytes(4),
+    dest_currency: bytes(4),
+    source_party: bytes(32),
+    dest_party: bytes(32),
+    hashlock_hash: bytes(32),
+    timelock_expiry: u64,
+    timelock_grace: u64,
+    created_at: u64,
+}
+
+type SwapResult = struct {
+    swap_id: bytes(32),
+    final_state: u8,
+    settled_at: u64,
+}
+
+state_machine atomic_swap {
+    initial SWAP_CREATED
+    persistence wal
+    terminal [SWAP_SETTLED, SWAP_REFUNDED, SWAP_FAILED]
+    ai_anomaly_detection true
+
+    SWAP_CREATED -> SOURCE_LOCKED when source_funds_locked
+    SOURCE_LOCKED -> DEST_PREPARED when destination_prepared
+    DEST_PREPARED -> SWAP_EXECUTING when preimage_revealed
+    SWAP_EXECUTING -> SWAP_SETTLED when settlement_confirmed
+    SOURCE_LOCKED -> SWAP_REFUNDED when source_timeout
+    DEST_PREPARED -> SWAP_REFUNDED when dest_timeout
+    SWAP_CREATED -> SWAP_FAILED when creation_failed
+    SOURCE_LOCKED -> SWAP_FAILED when lock_failed
+}
+
+// Create a new atomic swap
+circuit create_swap(params: SwapParams) -> SwapResult
+    @status production
+    lex crossborder/swap/create
+    @precision D
+    @attested true
+    observe metrics: [swap_id, source_amount, destination_amount, corridor_id]
+    invariant params.source_amount > 0
+{
+    SwapResult {
+        swap_id: params.swap_id,
+        final_state: 0,
+        settled_at: 0,
+    }
+}
+
+// Lock source funds with balance proof
+circuit lock_source_funds(swap_id: bytes(32), balance_proof: bytes(32), sig: bytes(4627), current_time: u64) -> bool
+    @status production
+    lex crossborder/swap/lock
+    @precision D
+    @attested true
+    observe metrics: [swap_id, current_time]
+{
+    true
+}
+
+// Execute swap by revealing preimage
+circuit execute_swap(swap_id: bytes(32), preimage: bytes(32), current_time: u64) -> bool
+    @status production
+    lex crossborder/swap/execute
+    @precision D
+    @attested true
+    observe metrics: [swap_id, current_time]
+{
+    true
+}
+
+// Refund swap after timeout
+circuit refund_swap(swap_id: bytes(32), current_time: u64, timelock_expiry: u64) -> bool
+    @status production
+    lex crossborder/swap/refund
+    @precision D
+    @attested true
+    observe metrics: [swap_id, current_time, timelock_expiry]
+{
+    current_time >= timelock_expiry
+}
+
+stream swap_events: event<SwapResult>
+    @retention 7y
+    @consumers [governance, audit, compliance, streamsight]

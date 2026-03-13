@@ -1,0 +1,123 @@
+/// Spec: specs/verticals/RADIO_SPEC.md
+/// eStream Radio Scatter — PQ-AKA (Post-Quantum Authentication and Key Agreement)
+/// Replaces 5G-AKA (3GPP TS 33.501) with ML-KEM-1024 + ML-DSA-87.
+/// Drop-in replacement for AUSF/SEAF/UDM authentication.
+
+type PqAkaChallenge = struct {
+    challenge_id: bytes(32),
+    serving_network_id: bytes(32),
+    ue_supi_hash: bytes(32),
+    kem_encapsulation: bytes,
+    rand: bytes(32),
+    autn: bytes(16),
+    timestamp: u64,
+}
+
+type PqAkaResponse = struct {
+    challenge_id: bytes(32),
+    ue_id: bytes(32),
+    res_star: bytes(32),
+    kem_ciphertext: bytes,
+    signature: bytes,
+}
+
+type PqAkaSession = struct {
+    session_id: bytes(32),
+    ue_id: bytes(32),
+    serving_network_id: bytes(32),
+    kseaf: bytes(32),
+    kamf: bytes(32),
+    established_at: u64,
+    rekey_at: u64,
+}
+
+type SubscriberProfile = struct {
+    supi_hash: bytes(32),
+    home_network_id: bytes(32),
+    kem_public_key: bytes,
+    dsa_public_key: bytes,
+    subscription_type: u8,
+    active: bool,
+}
+
+// Subscription types: 0=Consumer, 1=Enterprise, 2=IoT, 3=Military, 4=Emergency
+
+circuit validate_challenge(
+    status production
+    serving_network_id: bytes(32),
+    ue_supi_hash: bytes(32),
+    rand: bytes(32),
+    timestamp: u64,
+    max_age_ms: u64,
+    current_time: u64
+) -> bool
+    lex platform/radio/pq_aka
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    let network_ok = serving_network_id != bytes(32){0}
+    let supi_ok = ue_supi_hash != bytes(32){0}
+    let rand_ok = rand != bytes(32){0}
+    let fresh = (current_time - timestamp) <= max_age_ms
+    network_ok && supi_ok && rand_ok && fresh
+}
+
+circuit validate_response(
+    status production
+    challenge_id: bytes(32),
+    ue_id: bytes(32),
+    res_star: bytes(32),
+    signature: bytes(4627),
+    public_key: bytes(2592)
+) -> bool
+    lex platform/radio/pq_aka
+    @precision C
+    @attested true
+{
+    let challenge_ok = challenge_id != bytes(32){0}
+    let ue_ok = ue_id != bytes(32){0}
+    let res_ok = res_star != bytes(32){0}
+    let msg = concat(challenge_id, concat(ue_id, res_star))
+    let sig_ok = ml_dsa_verify(msg, signature, public_key)
+    challenge_ok && ue_ok && res_ok && sig_ok
+}
+
+circuit session_valid(
+    status production
+    established_at: u64,
+    rekey_at: u64,
+    current_time: u64
+) -> bool
+    lex platform/radio/pq_aka
+    @precision C
+    @attested true
+{
+    current_time >= established_at && current_time < rekey_at
+}
+
+circuit rekey_interval_ms(subscription_type: u8) -> u64
+    @status production
+    lex platform/radio/pq_aka
+    @precision C
+    @attested true
+{
+    if subscription_type == 3 { return 300000 }
+    if subscription_type == 4 { return 600000 }
+    3600000
+}
+
+circuit max_challenge_age_ms(subscription_type: u8) -> u64
+    @status production
+    lex platform/radio/pq_aka
+    @precision C
+    @attested true
+{
+    if subscription_type == 3 { return 5000 }
+    if subscription_type == 4 { return 10000 }
+    30000
+}
+
+stream pq_aka_events: event<PqAkaSession>
+    @retention 90d
+    @consumers [streamsight, governance, audit]

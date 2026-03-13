@@ -1,15 +1,20 @@
-// polyquantum.payments — Payment Domain Circuits
-// ISO 20022, HTLC, offline payments, settlement DAG
+domain polyquantum.payments {
+  /// ISO 20022 messaging, HTLC cross-border payments, FX rates, atomic swaps, offline payments, settlement DAG
 
-domain polyquantum.payments v0.12.0 {
-    description "Payment protocol circuits for eStream marketplace"
-    publisher "polyquantum"
-    license "commercial"
+  types iso20022_types from "circuits/iso20022_types.fld"
+  types offline_types  from "circuits/offline_types.fld"
 
-    modules {
-        iso20022    "ISO 20022 message parsing and validation"
-        htlc        "Hash Time-Locked Contract circuits"
-        offline     "Offline payment verification and sync"
-        settlement  "Settlement DAG for multi-party clearing"
-    }
+  module pacs008             from "circuits/pacs008.fl"
+  module pacs002             from "circuits/pacs002.fl"
+  module camt052             from "circuits/camt052.fl"
+  module camt053             from "circuits/camt053.fl"
+  module htlc_verify         from "circuits/htlc_verify.fl"
+  module fx_rate             from "circuits/fx_rate.fl"
+  module atomic_swap         from "circuits/atomic_swap.fl"
+  module offline_verify      from "circuits/offline_verify.fl"
+  module offline_signing     from "circuits/offline_signing.fl"
+  module offline_settlement  from "circuits/offline_settlement.fl"
+  module offline_protocol    from "circuits/offline_protocol.fl"
+  module corridor_health     from "circuits/corridor_health.fl"
+  module settlement_dag      from "circuits/settlement_dag.fl"
 }

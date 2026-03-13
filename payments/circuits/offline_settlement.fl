@@ -1,0 +1,36 @@
+/// Spec: specs/verticals/PAYMENTS_SPEC.md
+/// Spark Offline Payment settlement (#23)
+
+stream pending_receipts: state<PaymentId, OfflinePaymentReceipt>
+    machine [PENDING_SYNC -> SETTLED]
+    machine [PENDING_SYNC -> DISPUTED -> SETTLED]
+    machine [PENDING_SYNC -> DISPUTED -> CANCELLED]
+    machine [PENDING_SYNC -> EXPIRED]
+
+stream settlement_events: event<SettlementResult>
+    @retention 7y
+    @consumers [governance, audit, analytics]
+
+stream payment_telemetry: event<PaymentTelemetrySpan>
+    @retention 30d
+    @consumers [streamsight]
+
+type PaymentTelemetrySpan = struct {
+    trace_id: bytes(16),
+    span_id: bytes(8),
+    role: string,
+    phase: string,
+    duration_ms: u64,
+    success: bool,
+    amount: u64,
+}
+
+// Settlement batch transaction — atomic settlement of multiple receipts
+transaction settle_batch(batch: SettlementBatch)
+    lex payment/offline/settle
+    timeout 30s
+    // For each receipt in the batch:
+    // - verify Merkle inclusion proof
+    // - check nonce uniqueness (double-spend)
+    // - debit sender balance, credit recipient balance
+    emit settlement_events SettlementResult { batch_id: batch.batch_id, settled_count: batch.receipt_count, failed_count: 0, total_settled: batch.total_amount, timestamp: batch.timestamp }

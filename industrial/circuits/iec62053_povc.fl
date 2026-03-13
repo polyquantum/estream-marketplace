@@ -1,0 +1,59 @@
+/// Spec: specs/verticals/INDUSTRIAL_SPEC.md
+/// IEC 62053 PoVC Carbon Attestation Integration (#145)
+/// Links IEC 62053-compliant energy metering to PoVC carbon attestation
+/// for ThermogenZero and SynergyCarbon carbon credit workflows
+
+import "iec62053_types.fl" { EnergyReading, MeterConfig, CalibrationRecord, MeteringEvent }
+
+// Generate a PoVC attestation for measured energy production over a period.
+// Validates the meter_id is non-zero and period/energy values are sane.
+circuit attest_energy_production(meter_id: bytes(16), period_start: u64, period_end: u64, total_wh: u64) -> bool
+    @status production
+    lex industrial/energy/povc
+    @precision B
+    @attested true
+    observe metrics: [meter_id, period_start, period_end, total_wh]
+{
+    let period_valid = period_end > period_start
+    let energy_valid = total_wh > 0
+    let duration_s = period_end - period_start
+    let max_power_w = total_wh * 3600 / duration_s
+    let power_reasonable = max_power_w < 1000000000
+
+    period_valid && energy_valid && power_reasonable
+}
+
+// Compute carbon offset in grams CO2 from energy and grid carbon intensity.
+// grid_carbon_factor is in grams CO2 per kWh.
+circuit verify_carbon_offset(energy_wh: u64, grid_carbon_factor: u32) -> u64
+    @status production
+    lex industrial/energy/povc
+    @precision B
+    @attested true
+    observe metrics: [energy_wh, grid_carbon_factor]
+{
+    let energy_kwh = energy_wh / 1000
+    let offset_grams = energy_kwh * grid_carbon_factor
+
+    offset_grams
+}
+
+// Mint a carbon credit from a verified attestation and offset.
+// Validates the attestation hash is non-zero and offset is positive.
+circuit create_carbon_credit(attestation_hash: bytes(32), offset_grams: u64) -> bool
+    @status production
+    lex industrial/energy/povc
+    @precision B
+    @attested true
+    observe metrics: [attestation_hash, offset_grams]
+{
+    let verified_hash = sha3_256(attestation_hash)
+    let hash_valid = verified_hash != 0x0000000000000000
+    let offset_valid = offset_grams > 0
+
+    hash_valid && offset_valid
+}
+
+stream povc_carbon_events: event<MeteringEvent>
+    @retention 7y
+    @consumers [streamsight, compliance, carbon_registry, audit]

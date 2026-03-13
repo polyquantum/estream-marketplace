@@ -2,7 +2,7 @@
 name = "polyquantum.widgets"
 version = "0.12.0"
 publisher = "polyquantum"
-description = "UI interaction components and console widgets for eStream applications"
+description = "UI interaction components: impact stream analytics"
 category = "smart-circuit"
 license = "commercial"
 

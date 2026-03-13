@@ -1,14 +1,12 @@
-// polyquantum.bridge — Cross-Chain & Cross-Lex Bridge Circuits
-// Interoperability bridges between lex domains and external chains
+domain polyquantum.bridge {
+  /// Cross-chain bridge: deposit, withdraw, mint/burn, fraud proofs, emergency pause, multi-sig withdrawal, rate limiting
 
-domain polyquantum.bridge v0.12.0 {
-    description "Cross-chain and cross-lex bridge circuits"
-    publisher "polyquantum"
-    license "commercial"
-
-    modules {
-        cross_chain "Bridge circuits to external blockchains (Ethereum, Solana, etc.)"
-        cross_lex   "Inter-lex bridges for sovereign lex domain interoperability"
-        relay       "Light-client relay proofs for trustless verification"
-    }
+  module deposit          from "circuits/deposit.fl"
+  module withdraw         from "circuits/withdraw.fl"
+  module mint_burn        from "circuits/mint_burn.fl"
+  module fraud_proof      from "circuits/fraud_proof.fl"
+  module emergency_pause  from "circuits/emergency_pause.fl"
+  module batch_verify     from "circuits/batch_verify.fl"
+  module rate_limiter     from "circuits/rate_limiter.fl"
+  module multisig_withdraw from "circuits/multisig_withdraw.fl"
 }

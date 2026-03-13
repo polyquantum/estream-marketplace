@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>MSG-20240115-001</MsgId>
+      <CreDtTm>2024-01-15T10:30:00Z</CreDtTm>
+      <NbOfTxs>1</NbOfTxs>
+      <SttlmInf>
+        <SttlmMtd>CLRG</SttlmMtd>
+      </SttlmInf>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <InstrId>INSTR001</InstrId>
+        <EndToEndId>E2E001</EndToEndId>
+        <TxId>TX001</TxId>
+      </PmtId>
+      <IntrBkSttlmAmt Ccy="USD">1000.00</IntrBkSttlmAmt>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+</Document>

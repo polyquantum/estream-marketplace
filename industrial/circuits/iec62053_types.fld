@@ -1,0 +1,52 @@
+/// Spec: specs/verticals/INDUSTRIAL_SPEC.md
+/// IEC 62053 Energy Metering Standard Types (#145)
+/// Shared types for IEC 62053-21 compliant energy metering circuits
+/// Used by ThermogenZero and SynergyCarbon for PoVC carbon attestation
+/// govern lex verticals/industrial
+
+type EnergyReading = struct {
+    meter_id: bytes(16),
+    timestamp: u64,
+    active_energy_wh: u64,
+    reactive_energy_varh: u64,
+    apparent_energy_vah: u64,
+    power_factor_x1000: u32,
+    voltage_mv: u32,
+    current_ma: u32,
+    frequency_mhz: u32,
+    accuracy_class: u8,
+    quality_flag: u8,
+}
+
+type MeterConfig = struct {
+    meter_id: bytes(16),
+    ct_ratio_primary: u32,
+    ct_ratio_secondary: u32,
+    vt_ratio_primary: u32,
+    vt_ratio_secondary: u32,
+    class_code: u8,
+    integration_period_ms: u32,
+}
+
+type CalibrationRecord = struct {
+    meter_id: bytes(16),
+    cal_timestamp: u64,
+    ref_energy_wh: u64,
+    measured_energy_wh: u64,
+    error_ppm: u32,
+    pass: bool,
+    calibrator_id: bytes(32),
+}
+
+type MeteringEvent = struct {
+    event_id: bytes(16),
+    meter_id: bytes(16),
+    event_type: u8,
+    timestamp: u64,
+    value: u64,
+}
+
+type MeterEdge = struct {
+    link_type: u8,
+    latency_ms: u32,
+}

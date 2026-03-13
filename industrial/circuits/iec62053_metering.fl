@@ -1,0 +1,104 @@
+/// Spec: specs/verticals/INDUSTRIAL_SPEC.md
+/// IEC 62053 Energy Metering Circuits (#145)
+/// Core metering circuits for IEC 62053-21 Class 0.2S active energy measurement
+/// Supports ThermogenZero TEG fleet and SynergyCarbon PoVC attestation
+
+import "iec62053_types.fl" { EnergyReading, MeterConfig, CalibrationRecord, MeteringEvent, MeterEdge }
+
+graph energy_metering_network {
+    node EnergyReading
+    edge MeterEdge
+    overlay cumulative_wh: u64 delta_curate
+    overlay power_factor_avg: u32 curate
+    overlay accuracy_drift: u32 curate
+    observe energy_metering_network: [cumulative_wh, power_factor_avg, accuracy_drift] threshold: {
+        anomaly_score 0.85
+        baseline_window 120
+    }
+}
+
+series energy_metering_series: energy_metering_network
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// Validate and record an energy reading against meter configuration.
+// Checks CT/VT ratios are non-zero, accuracy class matches 0.2S (error < 200ppm at rated).
+circuit record_energy_reading(reading: EnergyReading, config: MeterConfig) -> bool
+    @status production
+    lex industrial/energy
+    @precision A
+    observe metrics: [meter_id, active_energy_wh, voltage_mv, current_ma, accuracy_class]
+{
+    let ct_valid = config.ct_ratio_primary > 0 && config.ct_ratio_secondary > 0
+    let vt_valid = config.vt_ratio_primary > 0 && config.vt_ratio_secondary > 0
+    let meter_match = reading.meter_id == config.meter_id
+    let class_valid = reading.accuracy_class == config.class_code
+    let voltage_in_range = reading.voltage_mv > 0 && reading.voltage_mv < 500000
+    let current_in_range = reading.current_ma > 0
+
+    ct_valid && vt_valid && meter_match && class_valid && voltage_in_range && current_in_range
+}
+
+// IEC 62053-21 Table 1 accuracy verification.
+// class_code 2 = Class 0.2S: error must be < 200ppm at rated current.
+// class_code 5 = Class 0.5S: error must be < 500ppm.
+// class_code 10 = Class 1: error must be < 1000ppm.
+circuit validate_accuracy_class(measured_wh: u64, reference_wh: u64, class_code: u8) -> bool
+    @status production
+    lex industrial/energy
+    @precision A
+    observe metrics: [measured_wh, reference_wh, class_code]
+{
+    let diff = if measured_wh > reference_wh { measured_wh - reference_wh } else { reference_wh - measured_wh }
+    let error_ppm = diff * 1000000 / reference_wh
+    let max_error = if class_code == 2 { 200 } else { if class_code == 5 { 500 } else { 1000 } }
+
+    error_ppm < max_error
+}
+
+// Compute power factor as cos(phi) x 1000 from active and reactive energy.
+// PF = active / sqrt(active^2 + reactive^2), approximated as integer ratio.
+circuit compute_power_factor(active_wh: u64, reactive_varh: u64) -> u32
+    @status production
+    lex industrial/energy
+    @precision A
+    observe metrics: [active_wh, reactive_varh]
+{
+    let pf = power_factor_compute(active_wh, reactive_varh)
+    pf
+}
+
+// Calibration verification with traceability.
+// Validates the calibration record error is within class tolerance.
+circuit calibrate_meter(record: CalibrationRecord) -> bool
+    @status production
+    lex industrial/energy
+    @precision A
+    observe metrics: [meter_id, error_ppm, pass, calibrator_id]
+{
+    let within_tolerance = record.error_ppm < 200
+    let timestamps_valid = record.cal_timestamp > 0
+    let ref_valid = record.ref_energy_wh > 0
+
+    within_tolerance && timestamps_valid && ref_valid && record.pass
+}
+
+// Tamper detection: CT bypass (current present, no voltage) or
+// voltage absence (voltage zero, current non-zero).
+circuit detect_tamper(meter_id: bytes(16), voltage_mv: u32, current_ma: u32) -> bool
+    @status production
+    lex industrial/energy
+    @precision A
+    observe metrics: [meter_id, voltage_mv, current_ma]
+{
+    let ct_bypass = current_ma > 100 && voltage_mv == 0
+    let voltage_absence = voltage_mv == 0 && current_ma > 0
+    let current_imbalance = current_ma > 100000
+
+    ct_bypass || voltage_absence || current_imbalance
+}
+
+stream energy_metering_events: event<EnergyReading>
+    @retention 1y
+    @consumers [streamsight, analytics, compliance, povc]

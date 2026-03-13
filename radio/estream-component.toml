@@ -2,7 +2,7 @@
 name = "polyquantum.radio"
 version = "0.12.0"
 publisher = "polyquantum"
-description = "5G/6G spectrum management, tactical mesh networking, and beamforming circuits"
+description = "5G/6G spectrum management, tactical mesh networking, VRF frequency hopping, PQ-AKA authentication"
 category = "smart-circuit"
 license = "commercial"
 

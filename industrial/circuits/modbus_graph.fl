@@ -1,0 +1,69 @@
+/// Spec: specs/verticals/INDUSTRIAL_SPEC.md
+/// Modbus Protocol Register Map Graph (#147)
+/// Live graph of Modbus register topology with poll status and value history overlays
+
+type ModbusRegister = struct {
+    address: u16,
+    value: u16,
+    register_type: u8,
+    last_poll_ms: u64,
+}
+
+type ModbusEdge = struct {
+    poll_interval_ms: u32,
+    timeout_ms: u32,
+    priority: u8,
+}
+
+graph modbus_register_map {
+    node ModbusRegister
+    edge ModbusEdge
+    overlay poll_status: u8 curate
+    overlay error_count: u32 curate
+    overlay value_history: u64 delta_curate
+    observe modbus_register_map: [poll_status, error_count, value_history] threshold: {
+        anomaly_score 0.85
+        baseline_window 120
+    }
+}
+
+series modbus_series: modbus_register_map
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+circuit decode_modbus_response(raw_payload: bytes(32), register_addr: u16, timestamp_ms: u64) -> ModbusRegister
+    @status production
+    lex industrial/region/fleet
+    @precision B
+    observe metrics: [register_addr, timestamp_ms]
+{
+    ModbusRegister {
+        address: register_addr,
+        value: 0,
+        register_type: 0,
+        last_poll_ms: timestamp_ms,
+    }
+}
+
+circuit build_read_request(address: u16, register_count: u16, unit_id: u8) -> bytes(32)
+    @status production
+    lex industrial/region/fleet
+    @precision A
+    observe metrics: [address, register_count, unit_id]
+{
+    address
+}
+
+circuit poll_register_group(map_id: bytes(32), group_start: u16, group_size: u16, timestamp_ms: u64) -> bool
+    @status production
+    lex industrial/region/fleet
+    @precision B
+    observe metrics: [map_id, group_start, group_size, timestamp_ms]
+{
+    true
+}
+
+stream modbus_register_events: event<ModbusRegister>
+    @retention 90d
+    @consumers [streamsight, analytics, alerting]

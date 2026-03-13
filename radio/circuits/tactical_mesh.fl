@@ -1,0 +1,139 @@
+/// Spec: specs/verticals/RADIO_SPEC.md
+/// eStream Radio Scatter — Tactical Mesh Formation
+/// Military mesh comms with PRIME-attested nodes, classification-gated channels,
+/// GPS-denied operation, self-healing topology.
+
+type MeshTopology = struct {
+    mesh_id: bytes(32),
+    node_count: u16,
+    active_links: u16,
+    classification_level: u8,
+    formed_at: u64,
+    last_heal: u64,
+}
+
+type MeshLink = struct {
+    link_id: bytes(32),
+    node_a: bytes(32),
+    node_b: bytes(32),
+    signal_strength_dbm: i16,
+    latency_us: u32,
+    bandwidth_kbps: u32,
+    classification_level: u8,
+    established_at: u64,
+}
+
+type MeshRoute = struct {
+    route_id: bytes(32),
+    source: bytes(32),
+    destination: bytes(32),
+    hop_count: u8,
+    total_latency_us: u32,
+    min_bandwidth_kbps: u32,
+    classification_level: u8,
+}
+
+type GpsDeniedState = struct {
+    node_id: bytes(32),
+    holdover_started: u64,
+    drift_estimate_ns: u64,
+    peer_sync_count: u8,
+    confidence_pct: u8,
+}
+
+circuit validate_mesh_node(
+    status production
+    node_id: bytes(32),
+    prime_identity: bytes(32),
+    classification_level: u8
+) -> bool
+    lex platform/radio/tactical
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    let node_ok = node_id != bytes(32){0}
+    let prime_ok = prime_identity != bytes(32){0}
+    let class_ok = classification_level <= 4
+    node_ok && prime_ok && class_ok
+}
+
+circuit can_communicate(
+    status production
+    sender_level: u8,
+    receiver_level: u8,
+    channel_level: u8
+) -> bool
+    lex platform/radio/tactical
+    @precision C
+    @attested true
+{
+    sender_level >= channel_level && receiver_level >= channel_level
+}
+
+circuit validate_mesh_link(
+    status production
+    signal_strength_dbm: i16,
+    min_signal_dbm: i16,
+    latency_us: u32,
+    max_latency_us: u32
+) -> bool
+    lex platform/radio/tactical
+    @precision C
+    @attested true
+{
+    signal_strength_dbm >= min_signal_dbm && latency_us <= max_latency_us
+}
+
+circuit mesh_health(
+    status production
+    node_count: u16,
+    active_links: u16,
+    min_connectivity: u8
+) -> bool
+    lex platform/radio/tactical
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    if node_count <= 1 { return true }
+    let min_links = (node_count * min_connectivity) / 100
+    active_links >= min_links
+}
+
+circuit gps_denied_confidence(
+    status production
+    holdover_ms: u64,
+    peer_sync_count: u8,
+    drift_ns: u64
+) -> u8
+    lex platform/radio/tactical
+    @precision C
+    @attested true
+{
+    let values = [holdover_ms / 60000, peer_sync_count, drift_ns / 1000]
+    let weights = [-1, 10, -1]
+    let raw = 100 + weighted_score(values, weights)
+    if raw > 100 { return 100 }
+    if raw < 0 { return 0 }
+    raw
+}
+
+circuit max_hop_count(classification_level: u8) -> u8
+    @status production
+    lex platform/radio/tactical
+    @precision C
+    @attested true
+{
+    if classification_level >= 3 { return 3 }
+    if classification_level >= 2 { return 5 }
+    7
+}
+
+stream mesh_events: event<MeshLink>
+    @retention 7d
+    @consumers [streamsight, forensics]
+
+stream mesh_topology_events: event<MeshTopology>
+    @retention 30d
+    @consumers [streamsight, governance]

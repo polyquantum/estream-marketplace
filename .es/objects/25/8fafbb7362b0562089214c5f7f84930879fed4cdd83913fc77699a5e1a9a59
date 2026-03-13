@@ -1,0 +1,18 @@
+¤Blob‘Åè# polyquantum.bridge
+
+Cross-chain and cross-lex bridge circuits for eStream interoperability.
+
+## Modules
+
+- **cross_chain** â€” Bridge circuits to external blockchains (Ethereum, Solana, etc.)
+- **cross_lex** â€” Inter-lex bridges for sovereign lex domain interoperability
+- **relay** â€” Light-client relay proofs for trustless cross-chain verification
+
+## Platform Requirements
+
+- eStream platform >= 0.12.0
+- ESCIR API 1.0.0
+
+## License
+
+Commercial â€” see marketplace pricing tiers.

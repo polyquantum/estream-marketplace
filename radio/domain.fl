@@ -1,14 +1,13 @@
-// polyquantum.radio — Radio & Spectrum Domain Circuits
-// 5G/6G spectrum, tactical mesh, beamforming
+domain polyquantum.radio {
+  /// 5G/6G spectrum management, tactical mesh networking, VRF frequency hopping, PQ-AKA authentication
 
-domain polyquantum.radio v0.12.0 {
-    description "Radio spectrum management and tactical mesh circuits"
-    publisher "polyquantum"
-    license "commercial"
+  types types from "circuits/types.fld"
 
-    modules {
-        spectrum    "5G/6G dynamic spectrum allocation and sharing"
-        mesh        "Tactical mesh networking with post-quantum security"
-        beamforming "Adaptive beamforming control circuits"
-    }
+  module vrf_freq       from "circuits/vrf_freq.fl"
+  module tactical_mesh  from "circuits/tactical_mesh.fl"
+  module spectrum_mgmt  from "circuits/spectrum_mgmt.fl"
+  module signal_anomaly from "circuits/signal_anomaly.fl"
+  module ran_protocol   from "circuits/ran_protocol.fl"
+  module radio_scatter  from "circuits/radio_scatter.fl"
+  module pq_aka         from "circuits/pq_aka.fl"
 }

@@ -1,0 +1,108 @@
+/// Spec: specs/verticals/SVD_SPEC.md
+/// eStream SVD — FPGA verification pipeline circuits
+/// Client-side FPGA enforces attestation verification before video decode.
+/// Compiled from this FL source to both Rust (software fallback) and Verilog (hardware).
+/// Same circuit, two targets — the eStream guarantee.
+
+circuit fpga_verify_segment_attestation(
+    status production
+    content_hash: bytes(32),
+    attestation_sig_len: u32,
+    signer_id: bytes(32),
+    timestamp: u64,
+    current_time: u64
+) -> bool
+    lex platform/svd/fpga
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    let hash_ok = content_hash != bytes(32){0}
+    let sig_ok = attestation_sig_len > 0 && attestation_sig_len <= 4627
+    let signer_ok = signer_id != bytes(32){0}
+    let time_ok = timestamp > 0 && timestamp <= current_time
+    hash_ok && sig_ok && signer_ok && time_ok
+}
+
+circuit fpga_verify_chain_continuity(
+    status production
+    prev_segment_hash: bytes(32),
+    curr_segment_prev_ref: bytes(32),
+    chain_depth: u8,
+    max_depth: u8
+) -> bool
+    lex platform/svd/fpga
+    @precision C
+    @attested true
+{
+    let hash_match = prev_segment_hash == curr_segment_prev_ref
+    let depth_ok = chain_depth <= max_depth
+    hash_match && depth_ok
+}
+
+circuit fpga_decode_gate(
+    status production
+    attestation_valid: bool,
+    chain_valid: bool,
+    key_exchange_valid: bool,
+    session_active: bool
+) -> bool
+    lex platform/svd/fpga
+    @precision C
+    @attested true
+{
+    attestation_valid && chain_valid && key_exchange_valid && session_active
+}
+
+circuit fpga_timing_budget_ns(
+    status production
+    segment_duration_ms: u32,
+    verification_ns: u64,
+    decode_ns: u64,
+    display_ns: u64
+) -> bool
+    lex platform/svd/fpga
+    @precision C
+    @attested true
+{
+    let budget_ns = segment_duration_ms * 1000000
+    let total_ns = verification_ns + decode_ns + display_ns
+    total_ns < budget_ns
+}
+
+circuit fpga_nonce_fresh(
+    status production
+    hardware_nonce: bytes(32),
+    last_nonce: bytes(32)
+) -> bool
+    lex platform/svd/fpga
+    @precision C
+    @attested true
+{
+    hardware_nonce != last_nonce && hardware_nonce != bytes(32){0}
+}
+
+circuit fpga_clock_mhz_required(
+    status production
+    segment_duration_ms: u32,
+    operations_per_segment: u32
+) -> u32
+    lex platform/svd/fpga
+    @precision C
+    @attested true
+{
+    let cycles_needed = operations_per_segment * 100
+    let time_budget_us = segment_duration_ms * 1000
+    let mhz = cycles_needed / time_budget_us
+    if mhz < 100 { mhz = 100 }
+    mhz
+}
+
+// RTL compilation target: these circuits compile to Verilog via verilog_emit
+// The FPGA implementation includes:
+//   - ML-DSA-87 signature verification core (polynomial arithmetic over NTT domain)
+//   - SHA3-256 hash engine (Keccak sponge)
+//   - ML-KEM-1024 decapsulation core
+//   - Segment attestation chain register file
+//   - Decode gate (combinational: attestation AND chain AND key_exchange AND session)
+//   - Hardware nonce generator (TRNG from ETFA or ring oscillator)

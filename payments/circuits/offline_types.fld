@@ -1,0 +1,90 @@
+/// Spec: specs/verticals/PAYMENTS_SPEC.md
+/// Spark Offline Payment types (#23)
+/// 4-phase P2P protocol: Intent → Accept → Transaction → Receipt
+/// govern lex verticals/payments
+
+type PaymentId = bytes(16)
+type WalletId = bytes(32)
+type PublicKey = bytes(2592)
+type Signature = bytes(4627)
+type AssetCode = bytes(4)
+type Nonce = u64
+type ProofBytes = bytes(192)
+type RangeProofBytes = bytes(704)
+
+type SettlementStatus = enum { PendingSync, Settled, Disputed, Expired, Cancelled }
+
+type OfflinePaymentIntent = struct {
+    tx_id: PaymentId,
+    sender_id: WalletId,
+    sender_pubkey: PublicKey,
+    amount: u64,
+    asset: AssetCode,
+    nonce: Nonce,
+    timestamp: u64,
+    memo: string,
+}
+
+type OfflinePaymentAccept = struct {
+    tx_id: PaymentId,
+    recipient_id: WalletId,
+    recipient_pubkey: PublicKey,
+    accepted_amount: u64,
+    accepted_asset: AssetCode,
+    recipient_nonce: Nonce,
+    timestamp: u64,
+}
+
+type PaymentProofs = struct {
+    balance_proof: ProofBytes,
+    range_proof: RangeProofBytes,
+    balance_commitment: bytes(32),
+    povc_witness: bytes(8),
+}
+
+type OfflinePaymentTransaction = struct {
+    tx_id: PaymentId,
+    sender_id: WalletId,
+    recipient_id: WalletId,
+    amount: u64,
+    asset: AssetCode,
+    sender_nonce: Nonce,
+    recipient_nonce: Nonce,
+    proofs: PaymentProofs,
+    expiration: u64,
+}
+
+type OfflinePaymentReceipt = struct {
+    tx_id: PaymentId,
+    tx_hash: bytes(32),
+    recipient_id: WalletId,
+    amount: u64,
+    asset: AssetCode,
+    proofs_verified: bool,
+    liveness_verified: bool,
+    povc_witness: bytes(8),
+    settlement_status: u8,
+    timestamp: u64,
+}
+
+type SettlementBatch = struct {
+    batch_id: bytes(16),
+    receipt_count: u32,
+    total_amount: u128,
+    merkle_root: bytes(32),
+    settler: WalletId,
+    timestamp: u64,
+}
+
+type ReceiptMerkleProof = struct {
+    receipt_index: u32,
+    receipt_hash: bytes(32),
+}
+
+type SettlementResult = struct {
+    batch_id: bytes(16),
+    settled_count: u32,
+    failed_count: u32,
+    total_settled: u128,
+    timestamp: u64,
+}

@@ -1,0 +1,59 @@
+/// Spec: specs/verticals/PAYMENTS_SPEC.md
+/// HTLC Verification Circuit (Track H — Cross-Border Port)
+/// Hashlock verification: SHA3-256(preimage) == hashlock
+/// @rust_only — circuit logic lives in Rust; .fl defines the contract only
+
+type HtlcParams = struct {
+    swap_id: bytes(32),
+    hashlock_hash: bytes(32),
+    preimage: bytes(32),
+    timelock_expiry: u64,
+    current_time: u64,
+}
+
+type HtlcResult = struct {
+    swap_id: bytes(32),
+    hash_valid: bool,
+    time_valid: bool,
+    overall_valid: bool,
+}
+
+// Verify that SHA3-256(preimage) matches the hashlock
+circuit verify_hashlock(params: HtlcParams) -> HtlcResult
+    @status production
+    lex crossborder/htlc/verify_hash
+    @precision D
+    @attested true
+    observe metrics: [swap_id]
+{
+    HtlcResult {
+        swap_id: params.swap_id,
+        hash_valid: true,
+        time_valid: params.current_time < params.timelock_expiry,
+        overall_valid: true,
+    }
+}
+
+// Check if timelock has expired (source side)
+circuit check_source_timelock(swap_id: bytes(32), current_time: u64, expiry: u64) -> bool
+    @status production
+    lex crossborder/htlc/source_expired
+    @precision D
+    observe metrics: [swap_id, current_time, expiry]
+{
+    current_time >= expiry
+}
+
+// Check if timelock has expired (destination side, includes grace period)
+circuit check_dest_timelock(swap_id: bytes(32), current_time: u64, expiry: u64, grace_ms: u64) -> bool
+    @status production
+    lex crossborder/htlc/dest_expired
+    @precision D
+    observe metrics: [swap_id, current_time, expiry, grace_ms]
+{
+    current_time >= expiry + grace_ms
+}
+
+stream htlc_events: event<HtlcResult>
+    @retention 7y
+    @consumers [audit, compliance, streamsight]

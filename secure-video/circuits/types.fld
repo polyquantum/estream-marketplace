@@ -1,0 +1,92 @@
+/// Spec: specs/verticals/SVD_SPEC.md
+/// eStream Secure Video Delivery (SVD) — Core types
+/// Post-quantum lex-embedded forensic watermarking and attested video delivery.
+/// The watermark lives in codec encoding decisions, not pixel overlays.
+/// eStream's lex event tracing IS the forensic watermark.
+/// govern lex verticals/svd
+
+type ViewerTrace = struct {
+    viewer_id: bytes(32),
+    session_id: bytes(32),
+    trace_seed: bytes(32),
+    created_at: u64,
+    prime_attestation: bytes,
+}
+
+type EmbeddingPoint = struct {
+    point_type: u8,
+    frame_index: u32,
+    block_index: u32,
+    original_value: u32,
+    embedded_value: u32,
+    trace_bit_index: u16,
+}
+
+type SegmentAttestation = struct {
+    segment_index: u32,
+    content_hash: bytes(32),
+    viewer_trace_hash: bytes(32),
+    signer_id: bytes(32),
+    signature: bytes,
+    timestamp: u64,
+    embedding_count: u32,
+}
+
+type DeliveryHop = struct {
+    hop_index: u8,
+    node_id: bytes(32),
+    node_type: u8,
+    received_at: u64,
+    forwarded_at: u64,
+    attestation: bytes,
+}
+
+type DeliveryChain = struct {
+    stream_id: bytes(32),
+    viewer_id: bytes(32),
+    hop_count: u8,
+    origin_hash: bytes(32),
+    final_hash: bytes(32),
+}
+
+type ExtractionResult = struct {
+    confidence_pct: u8,
+    extracted_viewer_id: bytes(32),
+    embedding_points_found: u32,
+    total_points_expected: u32,
+    verification_signature: bytes,
+}
+
+type SvdSession = struct {
+    stream_id: bytes(32),
+    viewer_id: bytes(32),
+    session_id: bytes(32),
+    codec: u8,
+    started_at: u64,
+    key_exchange_complete: bool,
+    segments_delivered: u32,
+    embedding_density: u8,
+}
+
+type FpgaVerifyResult = struct {
+    segment_index: u32,
+    attestation_valid: bool,
+    chain_depth: u8,
+    verification_ns: u64,
+    hardware_nonce: bytes(32),
+}
+
+// Embedding point types (u8):
+//   H.264: 0=QP_macroblock, 1=MV_precision, 2=deblock_strength, 3=CABAC_bin, 4=ref_frame_select
+//   H.265: 5=QP_CTU, 6=TU_partition, 7=SAO_param, 8=MV_fractional, 9=merge_candidate_order
+//   VP9: 10=QP_segment, 11=loop_filter, 12=ref_frame_prob
+//   AV1: 13=film_grain_param, 14=CDEF_strength, 15=wiener_coeff, 16=SB_partition
+
+// Node types (u8):
+//   0=Encoder, 1=CDN_Origin, 2=CDN_Edge, 3=Gateway, 4=Client_Software, 5=Client_FPGA
+
+// Embedding density (u8):
+//   0=Sparse (1 per 100 frames — minimal quality impact, lower extraction confidence)
+//   1=Standard (1 per 10 frames — default balance)
+//   2=Dense (1 per frame — highest confidence, measurable quality impact)
+//   3=Ultra (multiple per frame — forensic priority over quality)

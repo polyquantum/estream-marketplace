@@ -1,0 +1,49 @@
+// Journey: Dynamic Spectrum Allocation
+// Tests the spectrum management flow: validate block → check utilization → interference check → aperture sizing
+
+journey "spectrum_allocation" {
+    description "Validate spectrum block, check utilization, assess interference, compute aperture"
+    package "polyquantum.radio"
+    platform ">= 0.12.0"
+
+    import radio.circuits.spectrum_mgmt {
+        validate_spectrum_block, spectrum_utilization_pct,
+        interference_margin_db, should_exclude_band,
+        optimal_aperture_width_mhz
+    }
+
+    step "validate_5g_n78_band" {
+        let valid = validate_spectrum_block(3300000000, 3800000000, 30)
+        assert valid == true
+    }
+
+    step "reject_invalid_band" {
+        let invalid = validate_spectrum_block(5000000000, 3000000000, 30)
+        assert invalid == false
+    }
+
+    step "check_utilization" {
+        let util = spectrum_utilization_pct(500000000, 350000000)
+        assert util == 70
+    }
+
+    step "check_interference_margin" {
+        let margin = interference_margin_db(20, -10, 15)
+        assert margin == 15
+    }
+
+    step "exclude_noisy_band" {
+        let exclude = should_exclude_band(-5, 95, 0)
+        assert exclude == true
+    }
+
+    step "keep_clean_band" {
+        let keep = should_exclude_band(20, 40, 0)
+        assert keep == false
+    }
+
+    step "compute_aperture" {
+        let width = optimal_aperture_width_mhz(10, 20000, 5000)
+        assert width == 750
+    }
+}

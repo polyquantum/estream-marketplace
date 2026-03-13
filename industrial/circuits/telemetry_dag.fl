@@ -1,0 +1,75 @@
+/// Spec: specs/verticals/INDUSTRIAL_SPEC.md
+/// Telemetry Processing Pipeline DAG (#147)
+/// Directed acyclic graph for sensor data ingestion, scaling, and event emission
+
+type TelemetryNode = struct {
+    sensor_id: bytes(16),
+    reading_type: u8,
+    value: u64,
+    timestamp_ns: u64,
+    quality: u8,
+}
+
+type TelemetryEdge = struct {
+    transform_fn: u8,
+    latency_budget_ms: u32,
+}
+
+dag telemetry_pipeline {
+    node TelemetryNode
+    edge TelemetryEdge
+    overlay data_quality: u8 curate
+    overlay processing_latency: u32 curate
+    observe telemetry_pipeline: [data_quality, processing_latency] threshold: {
+        anomaly_score 0.85
+        baseline_window 120
+    }
+}
+
+series telemetry_series: telemetry_pipeline
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+circuit ingest_reading(dag_id: bytes(32), sensor_id: bytes(16), reading_type: u8, raw_value: u64, timestamp_ns: u64) -> TelemetryNode
+    @status production
+    lex industrial/region/fleet
+    @precision B
+    observe metrics: [sensor_id, reading_type, raw_value, timestamp_ns]
+{
+    TelemetryNode {
+        sensor_id: sensor_id,
+        reading_type: reading_type,
+        value: raw_value,
+        timestamp_ns: timestamp_ns,
+        quality: 0,
+    }
+}
+
+circuit apply_scaling(node: TelemetryNode, scale_factor: u64, offset: u64) -> TelemetryNode
+    @status production
+    lex industrial/region/fleet
+    @precision B
+    observe metrics: [sensor_id, scale_factor, offset]
+{
+    TelemetryNode {
+        sensor_id: node.sensor_id,
+        reading_type: node.reading_type,
+        value: node.value * scale_factor + offset,
+        timestamp_ns: node.timestamp_ns,
+        quality: node.quality,
+    }
+}
+
+circuit emit_telemetry_event(dag_id: bytes(32), node: TelemetryNode) -> bool
+    @status production
+    lex industrial/region/fleet
+    @precision A
+    observe metrics: [dag_id, sensor_id, reading_type, value, quality]
+{
+    true
+}
+
+stream telemetry_pipeline_events: event<TelemetryNode>
+    @retention 90d
+    @consumers [streamsight, analytics, dashboard]

@@ -2,7 +2,7 @@
 name = "polyquantum.payments"
 version = "0.12.0"
 publisher = "polyquantum"
-description = "ISO 20022, HTLC, offline payments, and settlement DAG circuits for eStream"
+description = "ISO 20022 messaging, HTLC cross-border payments, FX rates, atomic swaps, offline payments, settlement DAG"
 category = "smart-circuit"
 license = "commercial"
 

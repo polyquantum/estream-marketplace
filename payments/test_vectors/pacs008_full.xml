@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>MSG-20240115-002</MsgId>
+      <CreDtTm>2024-01-15T14:30:00Z</CreDtTm>
+      <NbOfTxs>1</NbOfTxs>
+      <SttlmInf>
+        <SttlmMtd>CLRG</SttlmMtd>
+      </SttlmInf>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <InstrId>INSTR-2024-0115-001</InstrId>
+        <EndToEndId>E2E-REF-001</EndToEndId>
+        <TxId>TXN-2024-0115-001</TxId>
+      </PmtId>
+      <IntrBkSttlmAmt Ccy="EUR">50000.00</IntrBkSttlmAmt>
+      <ChrgBr>SLEV</ChrgBr>
+      <Dbtr>
+        <Nm>ACME Corporation Ltd</Nm>
+        <PstlAdr>
+          <Ctry>GB</Ctry>
+        </PstlAdr>
+      </Dbtr>
+      <DbtrAcct>
+        <Id>
+          <IBAN>GB82WEST12345698765432</IBAN>
+        </Id>
+      </DbtrAcct>
+      <DbtrAgt>
+        <FinInstnId>
+          <BICFI>WESTGB2L</BICFI>
+        </FinInstnId>
+      </DbtrAgt>
+      <Cdtr>
+        <Nm>Global Trading Partners GmbH</Nm>
+        <PstlAdr>
+          <Ctry>DE</Ctry>
+        </PstlAdr>
+      </Cdtr>
+      <CdtrAcct>
+        <Id>
+          <IBAN>DE89370400440532013000</IBAN>
+        </Id>
+      </CdtrAcct>
+      <CdtrAgt>
+        <FinInstnId>
+          <BICFI>COBADEFF</BICFI>
+        </FinInstnId>
+      </CdtrAgt>
+      <RmtInf>
+        <Ustrd>Invoice INV-2024-001 for Q1 services</Ustrd>
+        <Strd>
+          <CdtrRefInf>
+            <Ref>RF18539007547034</Ref>
+          </CdtrRefInf>
+        </Strd>
+      </RmtInf>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+</Document>

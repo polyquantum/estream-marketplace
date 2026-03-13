@@ -1,0 +1,14 @@
+Å§Blobë≈È// polyquantum.radio ‚Äî Radio & Spectrum Domain Circuits
+// 5G/6G spectrum, tactical mesh, beamforming
+
+domain polyquantum.radio v0.12.0 {
+    description "Radio spectrum management and tactical mesh circuits"
+    publisher "polyquantum"
+    license "commercial"
+
+    modules {
+        spectrum    "5G/6G dynamic spectrum allocation and sharing"
+        mesh        "Tactical mesh networking with post-quantum security"
+        beamforming "Adaptive beamforming control circuits"
+    }
+}

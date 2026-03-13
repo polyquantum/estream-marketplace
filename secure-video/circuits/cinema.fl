@@ -1,0 +1,143 @@
+/// Spec: specs/verticals/CONTENT_SECURITY_SPEC.md
+/// eStream Content Security — Cinema / Theatrical Exhibition
+/// PQ-KDM, exhibition rules, verified plays, revenue attestation, screen trace.
+
+type PqKdm = struct {
+    kdm_id: bytes(32),
+    content_id: bytes(32),
+    screen_id: bytes(32),
+    projector_cert_hash: bytes(32),
+    content_key_encapsulation: bytes,
+    valid_from: u64,
+    valid_until: u64,
+    play_limit: u32,
+    exhibition_rules_hash: bytes(32),
+    issuer_signature: bytes,
+}
+
+type ExhibitionRule = struct {
+    rule_type: u8,
+    param_a: u64,
+    param_b: u64,
+    param_c: u64,
+}
+
+type PlayAttestation = struct {
+    attestation_type: u8,
+    content_id: bytes(32),
+    screen_id: bytes(32),
+    timestamp: u64,
+    frame_count: u32,
+    kdm_hash: bytes(32),
+    signature: bytes,
+}
+
+type RevenueRecord = struct {
+    screen_id: bytes(32),
+    showtime: u64,
+    content_id: bytes(32),
+    tickets_sold: u32,
+    revenue_cents: u64,
+    play_attestation_hash: bytes(32),
+    pos_signature: bytes,
+}
+
+type ScreenTrace = struct {
+    screen_id: bytes(32),
+    session_id: bytes(32),
+    trace_seed: bytes(32),
+    content_id: bytes(32),
+    showtime: u64,
+}
+
+// Rule types: 0=DateWindow, 1=FormatExclusive, 2=PlayLimit, 3=BlackoutWindow,
+//   4=RevenueThreshold, 5=GeographicRestriction, 6=DaypartRestriction, 7=PremiereHold
+
+// Play attestation types: 0=PlayStart, 1=Heartbeat, 2=PlayComplete, 3=PlayAborted
+
+circuit validate_pq_kdm(
+    status production
+    content_id: bytes(32),
+    screen_id: bytes(32),
+    valid_from: u64,
+    valid_until: u64,
+    current_time: u64
+) -> bool
+    lex platform/cs/cinema
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    let content_ok = content_id != bytes(32){0}
+    let screen_ok = screen_id != bytes(32){0}
+    let window_ok = valid_from < valid_until
+    let active = current_time >= valid_from && current_time <= valid_until
+    content_ok && screen_ok && window_ok && active
+}
+
+circuit evaluate_exhibition_rule(
+    status production
+    rule_type: u8,
+    current_time: u64,
+    param_a: u64,
+    param_b: u64,
+    play_count: u32
+) -> bool
+    lex platform/cs/cinema
+    @precision C
+    @attested true
+{
+    if rule_type == 0 { return current_time >= param_a && current_time <= param_b }
+    if rule_type == 2 { return play_count < param_a }
+    if rule_type == 3 { return current_time < param_a || current_time > param_b }
+    true
+}
+
+circuit validate_play_attestation(
+    status production
+    attestation_type: u8,
+    content_id: bytes(32),
+    screen_id: bytes(32),
+    timestamp: u64,
+    current_time: u64
+) -> bool
+    lex platform/cs/cinema
+    @precision C
+    @attested true
+{
+    let type_ok = attestation_type <= 3
+    let content_ok = content_id != bytes(32){0}
+    let screen_ok = screen_id != bytes(32){0}
+    let time_ok = timestamp <= current_time
+    type_ok && content_ok && screen_ok && time_ok
+}
+
+circuit reconcile_revenue(
+    status production
+    play_attestation_count: u32,
+    ticket_count: u32,
+    max_discrepancy_pct: u8
+) -> bool
+    lex platform/cs/cinema
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    if play_attestation_count == 0 { return false }
+    let diff = 0
+    if ticket_count > play_attestation_count {
+        diff = ticket_count - play_attestation_count
+    } else {
+        diff = play_attestation_count - ticket_count
+    }
+    let disc_pct = (diff * 100) / play_attestation_count
+    disc_pct <= max_discrepancy_pct
+}
+
+stream cinema_play_events: event<PlayAttestation>
+    @retention 7y
+    @consumers [governance, audit, streamsight, compliance, forensics]
+
+stream cinema_revenue_events: event<RevenueRecord>
+    @retention 7y
+    @consumers [governance, audit, compliance]
