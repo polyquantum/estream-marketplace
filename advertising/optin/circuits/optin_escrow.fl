@@ -36,7 +36,7 @@ data ReservationAccount : app v1 {
     created_at: u64,
     last_activity_ns: u64,
 }
-    encode @ bytes(128) {
+    @encode @ bytes(128) {
         account_id      @ le,
         partner_id      @ le,
         deposited_amount @ le,
@@ -47,9 +47,9 @@ data ReservationAccount : app v1 {
         created_at       @ le,
         last_activity_ns @ le,
     }
-    store kv
-    series retain 7y
-    cortex {
+    @store kv
+    @series retain 7y
+    @cortex {
         visibility {
             partner_id expose
             deposited_amount redact
@@ -59,15 +59,15 @@ data ReservationAccount : app v1 {
             currency expose
         }
     }
-    observe metrics [deposited_amount, reserved_amount, released_amount, expired_amount] level adaptive
-    observe events [partner_id, currency]
-    sign {
+    @observe metrics [deposited_amount, reserved_amount, released_amount, expired_amount] level adaptive
+    @observe events [partner_id, currency]
+    @sign {
         algorithm mldsa87
         key_field account_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field account_id
     }
 
@@ -76,12 +76,12 @@ data Reservation : app v1 {
     account_id: bytes(32),
     code_id: bytes(32),
     amount: u64,
-    status: enum { Reserved, Released, Expired, Cancelled },
+    @status: enum { Reserved, Released, Expired, Cancelled },
     reserved_at: u64,
     released_at: u64,
     expires_at: u64,
 }
-    encode @ bytes(136) {
+    @encode @ bytes(136) {
         reservation_id @ le,
         account_id     @ le,
         code_id        @ le,
@@ -91,17 +91,17 @@ data Reservation : app v1 {
         released_at    @ le,
         expires_at     @ le,
     }
-    store kv
-    series retain 7y
-    observe events [status, amount]
-    observe metrics [amount, status] level adaptive
-    sign {
+    @store kv
+    @series retain 7y
+    @observe events [status, amount]
+    @observe metrics [amount, status] level adaptive
+    @sign {
         algorithm mldsa87
         key_field reservation_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field reservation_id
     }
 
@@ -110,23 +110,23 @@ data Reservation : app v1 {
 // =============================================================================
 
 stream optin_escrow_events: event<ReservationAccount>
-    retention 7y
-    consumers [streamsight, audit, cortex, analytics, alerting]
-    classify account_id: IDENTIFIER, partner_id: IDENTIFIER, deposited_amount: METRIC, reserved_amount: METRIC
+    @retention 7y
+    @consumers [streamsight, audit, cortex, analytics, alerting]
+    @classify account_id: IDENTIFIER, partner_id: IDENTIFIER, deposited_amount: METRIC, reserved_amount: METRIC
 
 stream optin_reservation_events: event<Reservation>
-    retention 7y
-    consumers [streamsight, audit, cortex, analytics]
-    classify reservation_id: IDENTIFIER, account_id: IDENTIFIER, code_id: IDENTIFIER, amount: METRIC, status: METADATA
+    @retention 7y
+    @consumers [streamsight, audit, cortex, analytics]
+    @classify reservation_id: IDENTIFIER, account_id: IDENTIFIER, code_id: IDENTIFIER, amount: METRIC, status: METADATA
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series optin_escrow_audit: optin_escrow_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Deposit Escrow
@@ -137,19 +137,19 @@ series optin_escrow_audit: optin_escrow_events
 // derived from partner_id and currency.
 
 circuit optin_deposit_escrow(partner_id: bytes(32), amount: u64, currency: bytes(8), pk: bytes(1568)) -> ReservationAccount
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [deposits_made, deposit_amount_total, deposit_latency_ns]
-    invariant "partner_id_not_empty" { partner_id != 0 }
-    invariant "amount_positive" { amount > 0 }
-    monitor "deposit_rate" { deviation(deposits_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [deposits_made, deposit_amount_total, deposit_latency_ns]
+    @invariant "partner_id_not_empty" { partner_id != 0 }
+    @invariant "amount_positive" { amount > 0 }
+    @monitor "deposit_rate" { deviation(deposits_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let account_seed = sha3_256(partner_id)
     let account_id = sha3_256(account_seed)
@@ -182,20 +182,20 @@ circuit optin_deposit_escrow(partner_id: bytes(32), amount: u64, currency: bytes
 // minus reserved) must be >= the requested amount.
 
 circuit optin_reserve_against(account_id: bytes(32), code_id: bytes(32), amount: u64, pk: bytes(1568)) -> Reservation
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [reservations_created, reservation_amount_total, reservation_latency_ns]
-    invariant "sufficient_escrow" { deposited - reserved >= amount }
-    invariant "account_id_not_empty" { account_id != 0 }
-    invariant "amount_positive" { amount > 0 }
-    monitor "reservation_rate" { deviation(reservations_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [reservations_created, reservation_amount_total, reservation_latency_ns]
+    @invariant "sufficient_escrow" { deposited - reserved >= amount }
+    @invariant "account_id_not_empty" { account_id != 0 }
+    @invariant "amount_positive" { amount > 0 }
+    @monitor "reservation_rate" { deviation(reservations_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let reservation_seed = sha3_256(account_id)
     let reservation_id = sha3_256(reservation_seed)
@@ -230,19 +230,19 @@ circuit optin_reserve_against(account_id: bytes(32), code_id: bytes(32), amount:
 // chain) must validate before funds are released for settlement.
 
 circuit optin_release_on_completion(reservation_id: bytes(32), completion_proof: bytes(512), pk: bytes(1568)) -> Reservation
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [reservations_released, release_amount_total, release_latency_ns]
-    invariant "reservation_id_not_empty" { reservation_id != 0 }
-    invariant "proof_not_empty" { completion_proof != 0 }
-    monitor "release_rate" { deviation(releases_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [reservations_released, release_amount_total, release_latency_ns]
+    @invariant "reservation_id_not_empty" { reservation_id != 0 }
+    @invariant "proof_not_empty" { completion_proof != 0 }
+    @monitor "release_rate" { deviation(releases_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let release_hash = sha3_256(reservation_id)
     let kem = mlkem_encaps(pk)
@@ -276,16 +276,16 @@ circuit optin_release_on_completion(reservation_id: bytes(32), completion_proof:
 // past their expires_at timestamp can be expired.
 
 circuit optin_expire_reservation(reservation_id: bytes(32), pk: bytes(1568)) -> Reservation
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    streamsight true
-    povc true
-    observe metrics: [reservations_expired, expired_amount_total]
-    invariant "reservation_id_not_empty" { reservation_id != 0 }
-    monitor "expiration_rate" { deviation(expirations_per_sec, baseline) < 0.30 }
+    @precision A
+    @observe true
+    @attested true
+    @observe metrics: [reservations_expired, expired_amount_total]
+    @invariant "reservation_id_not_empty" { reservation_id != 0 }
+    @monitor "expiration_rate" { deviation(expirations_per_sec, baseline) < 0.30 }
 {
     let expire_hash = sha3_256(reservation_id)
     let kem = mlkem_encaps(pk)

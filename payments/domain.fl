@@ -1,0 +1,15 @@
+// polyquantum.payments — Payment Domain Circuits
+// ISO 20022, HTLC, offline payments, settlement DAG
+
+domain polyquantum.payments v0.12.0 {
+    description "Payment protocol circuits for eStream marketplace"
+    publisher "polyquantum"
+    license "commercial"
+
+    modules {
+        iso20022    "ISO 20022 message parsing and validation"
+        htlc        "Hash Time-Locked Contract circuits"
+        offline     "Offline payment verification and sync"
+        settlement  "Settlement DAG for multi-party clearing"
+    }
+}

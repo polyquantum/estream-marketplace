@@ -1,0 +1,13 @@
+Å§Blobë≈Jtree fdf5d26ecab088a7d36b28afd09b172455f89b72
+parent 6e477aa5707ca64f56e244f4126671181afa70de
+author toddrooke <toddrooke@TRMBA3.local> 1772502772 -0700
+committer toddrooke <toddrooke@TRMBA3.local> 1772502772 -0700
+
+feat: add design-explorer marketplace component for multi-physics optimization
+
+New industrial marketplace component providing domain-agnostic NSGA-II
+multi-objective design space exploration. Domain-specific publishers
+extend with their own parameter groups, objectives, constraints, and
+physics evaluation pipelines.
+
+Co-authored-by: AI Assistant <noreply@cursor.com>

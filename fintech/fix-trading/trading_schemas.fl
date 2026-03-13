@@ -38,7 +38,7 @@ data EStreamOrder : app v1 {
     submitted_at: u64,
     submitter: bytes(32),
 }
-    encode @ bytes(209) {
+    @encode @ bytes(209) {
         order_id        @ le,
         client_order_id @ le,
         instrument      @ le,
@@ -50,19 +50,19 @@ data EStreamOrder : app v1 {
         submitted_at    @ le,
         submitter       @ le,
     }
-    observe metrics [quantity, price, side, order_type] level adaptive
-    govern {
+    @observe metrics [quantity, price, side, order_type] level adaptive
+    @govern {
         PII -> encrypted(auditor)
         IDENTIFIER -> public
         MARKET_DATA -> public
     }
-    sign {
+    @sign {
         algorithm mldsa87
         key_field submitter
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field order_id
         proof_system groth16
     }
@@ -78,7 +78,7 @@ data EStreamFill : app v1 {
     executed_at: u64,
     venue: bytes(32),
 }
-    encode @ bytes(201) {
+    @encode @ bytes(201) {
         fill_id    @ le,
         order_id   @ le,
         instrument @ le,
@@ -89,10 +89,10 @@ data EStreamFill : app v1 {
         executed_at @ le,
         venue      @ le,
     }
-    observe metrics [quantity, price, fee] level adaptive
-    observe events [fill_id, order_id, instrument]
-    attest {
-        povc true
+    @observe metrics [quantity, price, fee] level adaptive
+    @observe events [fill_id, order_id, instrument]
+    @attest {
+        attested true
         anchor_field fill_id
         proof_system groth16
     }
@@ -106,7 +106,7 @@ data EStreamQuote : app v1 {
     timestamp: u64,
     source: bytes(32),
 }
-    observe metrics [bid_price, ask_price, bid_quantity, ask_quantity] level adaptive
+    @observe metrics [bid_price, ask_price, bid_quantity, ask_quantity] level adaptive
 
 data EStreamMarketData : app v1 {
     instrument: bytes(32),
@@ -116,14 +116,14 @@ data EStreamMarketData : app v1 {
     ask_quantity: u64,
     timestamp: u64,
 }
-    observe metrics [bid_price, ask_price, bid_quantity, ask_quantity] level adaptive
+    @observe metrics [bid_price, ask_price, bid_quantity, ask_quantity] level adaptive
 
 data ValidationResult : circuit v1 {
     valid: bool,
     risk_score: bytes(32),
     rejection_reason: bytes(128),
 }
-    observe events [valid, rejection_reason]
+    @observe events [valid, rejection_reason]
 
 data RiskLimits : circuit v1 {
     max_order_quantity: u64,
@@ -139,23 +139,23 @@ data RiskLimits : circuit v1 {
 stream trading_orders: event<EStreamOrder>
     | filter record.quantity > 0
     | throttle 50000/s burst 100000
-    retention 1y
-    classify instrument: MARKET_DATA, side: METADATA, order_id: IDENTIFIER
-    consumers [order_router, compliance, analytics]
+    @retention 1y
+    @classify instrument: MARKET_DATA, side: METADATA, order_id: IDENTIFIER
+    @consumers [order_router, compliance, analytics]
 
 stream trading_fills: event<EStreamFill>
-    retention 1y
-    consumers [settlement, reporting, analytics]
+    @retention 1y
+    @consumers [settlement, reporting, analytics]
 
 stream trading_quotes: event<EStreamQuote>
     | throttle 100000/s burst 500000
-    retention 24h
-    consumers [pricing_engine, market_data_feed]
+    @retention 24h
+    @consumers [pricing_engine, market_data_feed]
 
 stream trading_market_data: event<EStreamMarketData>
     | throttle 100000/s burst 500000
-    retention 1y
-    consumers [analytics, reporting]
+    @retention 1y
+    @consumers [analytics, reporting]
 
 // =============================================================================
 // Circuit: Order Validation
@@ -165,23 +165,23 @@ stream trading_market_data: event<EStreamMarketData>
 // This runs on every order before it reaches the lex trading stream.
 
 circuit order_validate(order: EStreamOrder, limits: RiskLimits, pk: bytes(1568)) -> ValidationResult
-    lex esn/fin/pci/org/estream/trading {
+    @lex fin/pci/org/estream/trading {
         governance hierarchical
         audit_trail true
         compliance [pci_dss, mifid2]
     }
-    precision A
-    constant_time true
-    streamsight true
-    sanitize pii_fields [order.client_order_id], retention 7y
-    observe metrics: [orders_validated, orders_rejected, risk_breaches]
-    invariant "quantity_positive" { order.quantity > 0 }
-    invariant "side_valid" { order.side <= 1 }
-    invariant "order_type_valid" { order.order_type <= 3 }
-    invariant "time_in_force_valid" { order.time_in_force <= 3 }
-    invariant "limit_order_has_price" { order.order_type != 1 || order.price > 0 }
-    monitor "rejection_rate" { orders_rejected / orders_validated < 0.20 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @sanitize pii_fields [order.client_order_id], retention 7y
+    @observe metrics: [orders_validated, orders_rejected, risk_breaches]
+    @invariant "quantity_positive" { order.quantity > 0 }
+    @invariant "side_valid" { order.side <= 1 }
+    @invariant "order_type_valid" { order.order_type <= 3 }
+    @invariant "time_in_force_valid" { order.time_in_force <= 3 }
+    @invariant "limit_order_has_price" { order.order_type != 1 || order.price > 0 }
+    @monitor "rejection_rate" { orders_rejected / orders_validated < 0.20 }
+    @fuzz_target
 {
     let order_hash = sha3_256(order.order_id)
     let kem = mlkem_encaps(pk)
@@ -211,14 +211,14 @@ circuit order_validate(order: EStreamOrder, limits: RiskLimits, pk: bytes(1568))
 // =============================================================================
 
 circuit fill_validate(fill: EStreamFill) -> bool
-    lex esn/fin/pci/org/estream/trading
-    precision A
-    streamsight true
-    observe metrics: [fills_validated, fills_rejected]
-    invariant "fill_quantity_positive" { fill.quantity > 0 }
-    invariant "fill_price_positive" { fill.price > 0 }
-    invariant "fill_has_order_ref" { fill.order_id != 0 }
-    kat_vector
+    @lex fin/pci/org/estream/trading
+    @precision A
+    @observe true
+    @observe metrics: [fills_validated, fills_rejected]
+    @invariant "fill_quantity_positive" { fill.quantity > 0 }
+    @invariant "fill_price_positive" { fill.price > 0 }
+    @invariant "fill_has_order_ref" { fill.order_id != 0 }
+    @golden_test
 {
     let qty_ok = fill.quantity > 0
     let price_ok = fill.price > 0
@@ -232,12 +232,12 @@ circuit fill_validate(fill: EStreamFill) -> bool
 // =============================================================================
 
 circuit quote_validate(quote: EStreamQuote) -> bool
-    lex esn/fin/pci/org/estream/trading
-    precision B
-    streamsight true
-    observe metrics: [quotes_validated, crossed_quotes]
-    invariant "bid_below_ask" { quote.bid_price <= quote.ask_price }
-    invariant "quantities_positive" { quote.bid_quantity > 0 && quote.ask_quantity > 0 }
+    @lex fin/pci/org/estream/trading
+    @precision B
+    @observe true
+    @observe metrics: [quotes_validated, crossed_quotes]
+    @invariant "bid_below_ask" { quote.bid_price <= quote.ask_price }
+    @invariant "quantities_positive" { quote.bid_quantity > 0 && quote.ask_quantity > 0 }
 {
     let spread_ok = quote.ask_price >= quote.bid_price
     let bid_qty_ok = quote.bid_quantity > 0
@@ -251,10 +251,10 @@ circuit quote_validate(quote: EStreamQuote) -> bool
 // =============================================================================
 
 circuit order_normalize(order: EStreamOrder) -> EStreamOrder
-    lex esn/fin/pci/org/estream/trading
-    precision C
-    streamsight true
-    observe metrics: [orders_normalized, duplicate_orders_detected]
+    @lex fin/pci/org/estream/trading
+    @precision C
+    @observe true
+    @observe metrics: [orders_normalized, duplicate_orders_detected]
 {
     let canonical_id = sha3_256(order.client_order_id)
     let normalized_instrument = blake3(order.instrument)
@@ -277,20 +277,20 @@ circuit order_normalize(order: EStreamOrder) -> EStreamOrder
 // =============================================================================
 
 circuit position_risk_check(order: EStreamOrder, current_position: u64, daily_order_count: u64, limits: RiskLimits, pk: bytes(1568)) -> ValidationResult
-    lex esn/fin/pci/org/estream/trading {
+    @lex fin/pci/org/estream/trading {
         governance hierarchical
         audit_trail true
         compliance [pci_dss, mifid2]
     }
-    precision A
-    constant_time true
-    streamsight true
-    witness threshold(2, 3)
-    observe metrics: [risk_checks, risk_breaches, position_limit_hits, notional_limit_hits]
-    invariant "risk_always_checked" { risk_checks >= 1 }
-    monitor "breach_rate" { risk_breaches / risk_checks < 0.05 }
-    esz_emit "verify/trading_risk.esz"
-    li_feed full_escir true, optimized_ir true
+    @precision A
+    @constant_time true
+    @observe true
+    @witness threshold(2, 3)
+    @observe metrics: [risk_checks, risk_breaches, position_limit_hits, notional_limit_hits]
+    @invariant "risk_always_checked" { risk_checks >= 1 }
+    @monitor "breach_rate" { risk_breaches / risk_checks < 0.05 }
+    @serialize "verify/trading_risk.esz"
+    @li_feed full_escir true, optimized_ir true
 {
     let order_hash = sha3_256(order.order_id)
     let kem = mlkem_encaps(pk)

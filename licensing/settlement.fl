@@ -6,7 +6,7 @@
 // enforced by lex, auditable by all parties. ZK revenue proofs
 // let publishers prove aggregate revenue without leaking individual txns.
 
-/// govern lex esn/marketplace/licensing
+/// govern lex marketplace/licensing
 
 // --- Types ---
 
@@ -70,7 +70,7 @@ type DisputeRecord = struct {
     initiator_type: u8,
     reason: bytes(512),
     evidence_hash: bytes(32),
-    status: u8,
+    @status: u8,
     resolution: bytes(512),
     created_at: u64,
     resolved_at: u64,
@@ -81,26 +81,26 @@ type DisputeRecord = struct {
 // --- Streams ---
 
 stream settlements: event<SettlementTransaction>
-    retention 365d
-    consumers [billing, audit, console, publisher_dashboard]
+    @retention 365d
+    @consumers [billing, audit, console, publisher_dashboard]
 
 stream revenue_proofs: event<ZkRevenueProof>
-    retention 365d
-    consumers [audit, console, publisher_dashboard]
+    @retention 365d
+    @consumers [audit, console, publisher_dashboard]
 
 stream disputes: event<DisputeRecord>
-    retention 365d
-    consumers [audit, console, marketplace_admin]
+    @retention 365d
+    @consumers [audit, console, marketplace_admin]
 
 // --- Circuits ---
 
 /// test golden
 circuit execute_settlement(package_id: PackageId, publisher_id: PublisherId, referrer_id: ReferrerId, blinded_customer_id: BlindedCustomerId, gross_amount_micros: u64, share: RevenueShare, witness_key: bytes(1952)) -> SettlementTransaction
-    lex esn/marketplace/licensing/settlement
-    precision A
-    observe metrics: [settlements_executed, gross_amount_micros, publisher_id]
-    povc true
-    invariant "shares_sum_10000" { share.publisher_bps + share.platform_bps + share.referrer_bps == 10000 }
+    @lex marketplace/licensing/settlement
+    @precision A
+    @observe metrics: [settlements_executed, gross_amount_micros, publisher_id]
+    @attested true
+    @invariant "shares_sum_10000" { share.publisher_bps + share.platform_bps + share.referrer_bps == 10000 }
 {
     let publisher_payout = gross_amount_micros * share.publisher_bps / 10000
     let platform_payout = gross_amount_micros * share.platform_bps / 10000
@@ -125,10 +125,10 @@ circuit execute_settlement(package_id: PackageId, publisher_id: PublisherId, ref
 
 /// test golden
 circuit generate_revenue_proof(publisher_id: PublisherId, period_start: u64, period_end: u64, aggregate_revenue_micros: u64, transaction_count: u64, witness_key: bytes(1952)) -> ZkRevenueProof
-    lex esn/marketplace/licensing/settlement
-    precision B
-    observe metrics: [revenue_proofs_generated, publisher_id]
-    povc true
+    @lex marketplace/licensing/settlement
+    @precision B
+    @observe metrics: [revenue_proofs_generated, publisher_id]
+    @attested true
 {
     let proof_hash = sha3_256(publisher_id)
     let sig = mldsa_sign(proof_hash, witness_key)
@@ -147,9 +147,9 @@ circuit generate_revenue_proof(publisher_id: PublisherId, period_start: u64, per
 
 /// test golden
 circuit verify_revenue_proof(proof: ZkRevenueProof, publisher_key: bytes(1952)) -> bool
-    lex esn/marketplace/licensing/settlement
-    precision A
-    observe metrics: [revenue_proof_verifications, verification_failures]
+    @lex marketplace/licensing/settlement
+    @precision A
+    @observe metrics: [revenue_proof_verifications, verification_failures]
 {
     let proof_hash = sha3_256(proof.publisher_id)
     let sig_valid = mldsa_verify(proof_hash, proof.witness_signature, publisher_key)
@@ -158,11 +158,11 @@ circuit verify_revenue_proof(proof: ZkRevenueProof, publisher_key: bytes(1952)) 
 
 /// test golden
 circuit initiate_dispute(settlement_id: SettlementId, initiator_id: bytes(32), initiator_type: u8, reason: bytes(512), evidence_hash: bytes(32)) -> DisputeRecord
-    lex esn/marketplace/licensing/settlement
-    precision B
-    rbac [publisher, customer, marketplace_admin]
-    observe metrics: [disputes_initiated, initiator_type]
-    povc true
+    @lex marketplace/licensing/settlement
+    @precision B
+    @rbac [publisher, customer, marketplace_admin]
+    @observe metrics: [disputes_initiated, initiator_type]
+    @attested true
 {
     DisputeRecord {
         dispute_id: sha3_256(settlement_id),
@@ -180,11 +180,11 @@ circuit initiate_dispute(settlement_id: SettlementId, initiator_id: bytes(32), i
 
 /// test golden
 circuit resolve_dispute(dispute_id: DisputeId, resolution: bytes(512), status: u8, witness_key: bytes(1952)) -> DisputeRecord
-    lex esn/marketplace/licensing/settlement
-    precision B
-    rbac [marketplace_admin]
-    observe metrics: [disputes_resolved, status]
-    povc true
+    @lex marketplace/licensing/settlement
+    @precision B
+    @rbac [marketplace_admin]
+    @observe metrics: [disputes_resolved, status]
+    @attested true
 {
     DisputeRecord {
         dispute_id: dispute_id,

@@ -6,7 +6,7 @@
 // cannot correlate customers across packages. Telemetry preference is
 // per-package share/private toggle with PoVC attestation.
 
-/// govern lex esn/marketplace/console
+/// govern lex marketplace/console
 
 // --- Types ---
 
@@ -52,20 +52,20 @@ type BillingRecord = struct {
 // --- Streams ---
 
 stream customer_dashboards: state<BlindedCustomerId, CustomerDashboard>
-    retention 30d
-    consumers [console, billing]
+    @retention 30d
+    @consumers [console, billing]
 
 stream billing_history: event<BillingRecord>
-    retention 365d
-    consumers [console, billing, audit]
+    @retention 365d
+    @consumers [console, billing, audit]
 
 // --- Circuits ---
 
 /// test golden
 circuit get_customer_dashboard(customer_id_blinded: BlindedCustomerId) -> CustomerDashboard
-    lex esn/marketplace/console/customer
-    precision C
-    observe metrics: [customer_dashboard_views]
+    @lex marketplace/console/customer
+    @precision C
+    @observe metrics: [customer_dashboard_views]
 {
     CustomerDashboard {
         customer_id_blinded: customer_id_blinded,
@@ -79,9 +79,9 @@ circuit get_customer_dashboard(customer_id_blinded: BlindedCustomerId) -> Custom
 
 /// test golden
 circuit list_installed_packages(customer_id_blinded: BlindedCustomerId) -> list<InstalledPackageInfo>
-    lex esn/marketplace/console/customer
-    precision C
-    observe metrics: [installed_package_queries]
+    @lex marketplace/console/customer
+    @precision C
+    @observe metrics: [installed_package_queries]
 {
     let empty = list<InstalledPackageInfo>
     empty
@@ -89,9 +89,9 @@ circuit list_installed_packages(customer_id_blinded: BlindedCustomerId) -> list<
 
 /// test golden
 circuit get_license_status(customer_id_blinded: BlindedCustomerId, package_id: PackageId) -> InstalledPackageInfo
-    lex esn/marketplace/console/customer
-    precision C
-    observe metrics: [license_status_queries, package_id]
+    @lex marketplace/console/customer
+    @precision C
+    @observe metrics: [license_status_queries, package_id]
 {
     InstalledPackageInfo {
         package_id: package_id,
@@ -108,9 +108,9 @@ circuit get_license_status(customer_id_blinded: BlindedCustomerId, package_id: P
 
 /// test golden
 circuit get_billing_history(customer_id_blinded: BlindedCustomerId, period_start: u64, period_end: u64) -> list<BillingRecord>
-    lex esn/marketplace/console/customer
-    precision C
-    observe metrics: [billing_history_queries]
+    @lex marketplace/console/customer
+    @precision C
+    @observe metrics: [billing_history_queries]
 {
     let empty = list<BillingRecord>
     empty
@@ -118,10 +118,10 @@ circuit get_billing_history(customer_id_blinded: BlindedCustomerId, period_start
 
 /// test golden
 circuit toggle_telemetry(customer_id_blinded: BlindedCustomerId, package_id: PackageId, new_preference: u8) -> InstalledPackageInfo
-    lex esn/marketplace/console/customer
-    precision B
-    povc true
-    observe metrics: [telemetry_toggles, package_id, new_preference]
+    @lex marketplace/console/customer
+    @precision B
+    @attested true
+    @observe metrics: [telemetry_toggles, package_id, new_preference]
 {
     InstalledPackageInfo {
         package_id: package_id,
@@ -138,9 +138,9 @@ circuit toggle_telemetry(customer_id_blinded: BlindedCustomerId, package_id: Pac
 
 /// test golden
 circuit get_dependency_graph(customer_id_blinded: BlindedCustomerId) -> list<InstalledPackageInfo>
-    lex esn/marketplace/console/customer
-    precision C
-    observe metrics: [dependency_graph_views]
+    @lex marketplace/console/customer
+    @precision C
+    @observe metrics: [dependency_graph_views]
 {
     let empty = list<InstalledPackageInfo>
     empty

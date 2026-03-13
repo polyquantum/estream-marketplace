@@ -1,0 +1,12 @@
+¤Blob‘Äî¤Blob‘Äå[workspace]
+resolver = "2"
+members = [
+    "runtime/iso20022",
+    "runtime/industrial",
+]
+
+[workspace.package]
+version = "0.9.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/polyquantum/estream-marketplace"

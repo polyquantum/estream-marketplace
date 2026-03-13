@@ -40,7 +40,7 @@ data WidgetInstance : app v1 {
     created_at: u64,
     last_interaction_ns: u64,
 }
-    encode @ bytes(232) {
+    @encode @ bytes(232) {
         instance_id        @ le,
         widget_type        @ le,
         container_id       @ le,
@@ -51,9 +51,9 @@ data WidgetInstance : app v1 {
         created_at         @ le,
         last_interaction_ns @ le,
     }
-    store kv
-    series retain 90d
-    cortex {
+    @store kv
+    @series retain 90d
+    @cortex {
         visibility {
             user_id obfuscate
             partner_id expose
@@ -61,9 +61,9 @@ data WidgetInstance : app v1 {
             state expose
         }
     }
-    observe events [widget_type, state]
-    observe metrics [widget_type, state] level adaptive
-    sign {
+    @observe events [widget_type, state]
+    @observe metrics [widget_type, state] level adaptive
+    @sign {
         algorithm mldsa87
         key_field instance_id
         detached true
@@ -83,7 +83,7 @@ data WidgetConfig : app v1 {
     escrow_id: bytes(32),
     engagement_code_id: bytes(32),
 }
-    encode @ bytes(220) {
+    @encode @ bytes(220) {
         config_id          @ le,
         widget_type        @ le,
         partner_id         @ le,
@@ -94,10 +94,10 @@ data WidgetConfig : app v1 {
         escrow_id          @ le,
         engagement_code_id @ le,
     }
-    store kv
-    observe events [widget_type, theme]
-    observe metrics [widget_type, theme] level adaptive
-    sign {
+    @store kv
+    @observe events [widget_type, theme]
+    @observe metrics [widget_type, theme] level adaptive
+    @sign {
         algorithm mldsa87
         key_field config_id
         detached true
@@ -112,7 +112,7 @@ data RbacCheck : app v1 {
     granted: u8,
     checked_at: u64,
 }
-    encode @ bytes(168) {
+    @encode @ bytes(168) {
         check_id       @ le,
         user_id        @ le,
         widget_type    @ le,
@@ -121,11 +121,11 @@ data RbacCheck : app v1 {
         granted        @ le,
         checked_at     @ le,
     }
-    store series retain 365d
-    observe events [granted, widget_type]
-    observe metrics [granted, widget_type] level adaptive
-    attest {
-        povc true
+    @store series retain 365d
+    @observe events [granted, widget_type]
+    @observe metrics [granted, widget_type] level adaptive
+    @attest {
+        attested true
         anchor_field check_id
     }
 
@@ -134,23 +134,23 @@ data RbacCheck : app v1 {
 // =============================================================================
 
 stream portal_widget_events: event<WidgetInstance>
-    retention 90d
-    consumers [streamsight, analytics]
-    classify instance_id: IDENTIFIER, partner_id: IDENTIFIER, user_id: IDENTIFIER, widget_type: METADATA, state: METADATA
+    @retention 90d
+    @consumers [streamsight, analytics]
+    @classify instance_id: IDENTIFIER, partner_id: IDENTIFIER, user_id: IDENTIFIER, widget_type: METADATA, state: METADATA
 
 stream portal_rbac_events: event<RbacCheck>
-    retention 365d
-    consumers [streamsight, audit, security]
-    classify check_id: IDENTIFIER, user_id: IDENTIFIER, widget_type: METADATA, granted: METADATA
+    @retention 365d
+    @consumers [streamsight, audit, security]
+    @classify check_id: IDENTIFIER, user_id: IDENTIFIER, widget_type: METADATA, granted: METADATA
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series portal_widget_series: portal_widget_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Create Widget
@@ -163,22 +163,22 @@ series portal_widget_series: portal_widget_events
 // The widget starts in Loading state.
 
 circuit portal_create_widget(widget_type: enum { PartnerConnect, EngagementDashboard, ActivityScore, CompensationHistory }, container_id: bytes(32), config: WidgetConfig, user_roles: list<string>, pk: bytes(1568)) -> WidgetInstance
-    lex esn/marketplace/advertising/portal {
+    @lex marketplace/advertising/portal {
         governance hierarchical
         audit_trail true
     }
-    rbac [viewer, operator]
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [widgets_created, creation_latency_ns, widgets_by_type, rbac_denials]
-    invariant "rbac_enforced" { rbac_check.granted == true }
-    invariant "container_id_not_empty" { container_id != 0 }
-    invariant "config_valid" { config.config_id != 0 }
-    monitor "creation_rate" { deviation(widgets_per_sec, baseline) < 0.30 }
-    monitor "rbac_denial_rate" { rbac_denials / widgets_created < 0.50 }
-    fuzz_target
+    @rbac [viewer, operator]
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [widgets_created, creation_latency_ns, widgets_by_type, rbac_denials]
+    @invariant "rbac_enforced" { rbac_check.granted == true }
+    @invariant "container_id_not_empty" { container_id != 0 }
+    @invariant "config_valid" { config.config_id != 0 }
+    @monitor "creation_rate" { deviation(widgets_per_sec, baseline) < 0.30 }
+    @monitor "rbac_denial_rate" { rbac_denials / widgets_created < 0.50 }
+    @fuzz_target
 {
     let instance_seed = sha3_256(container_id)
     let instance_id = sha3_256(instance_seed)
@@ -223,16 +223,16 @@ circuit portal_create_widget(widget_type: enum { PartnerConnect, EngagementDashb
 // is updated on every valid transition.
 
 circuit portal_transition_widget(instance_id: bytes(32), new_state: enum { Loading, Ready, Active, Consent, Settled, Error, Destroyed }, pk: bytes(1568)) -> WidgetInstance
-    lex esn/marketplace/advertising/portal {
+    @lex marketplace/advertising/portal {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [transitions_count, transition_latency_ns, invalid_transitions]
-    invariant "valid_transition" {
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [transitions_count, transition_latency_ns, invalid_transitions]
+    @invariant "valid_transition" {
         (current.state == Loading && (new_state == Ready || new_state == Error)) ||
         (current.state == Ready && (new_state == Active || new_state == Error || new_state == Destroyed)) ||
         (current.state == Active && (new_state == Consent || new_state == Settled || new_state == Error || new_state == Destroyed)) ||
@@ -240,9 +240,9 @@ circuit portal_transition_widget(instance_id: bytes(32), new_state: enum { Loadi
         (current.state == Settled && (new_state == Destroyed || new_state == Error)) ||
         (current.state == Error && new_state == Destroyed)
     }
-    invariant "instance_id_not_empty" { instance_id != 0 }
-    monitor "invalid_transition_rate" { invalid_transitions / transitions_count < 0.05 }
-    fuzz_target
+    @invariant "instance_id_not_empty" { instance_id != 0 }
+    @monitor "invalid_transition_rate" { invalid_transitions / transitions_count < 0.05 }
+    @fuzz_target
 {
     let transition_hash = sha3_256(instance_id)
     let kem = mlkem_encaps(pk)
@@ -275,17 +275,17 @@ circuit portal_transition_widget(instance_id: bytes(32), new_state: enum { Loadi
 // purposes but is no longer active.
 
 circuit portal_destroy_widget(instance_id: bytes(32), pk: bytes(1568)) -> bool
-    lex esn/marketplace/advertising/portal {
+    @lex marketplace/advertising/portal {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    streamsight true
-    povc true
-    observe metrics: [widgets_destroyed, destroy_latency_ns]
-    invariant "instance_id_not_empty" { instance_id != 0 }
-    monitor "destroy_rate" { deviation(destroys_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @observe true
+    @attested true
+    @observe metrics: [widgets_destroyed, destroy_latency_ns]
+    @invariant "instance_id_not_empty" { instance_id != 0 }
+    @monitor "destroy_rate" { deviation(destroys_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let destroy_hash = sha3_256(instance_id)
     let kem = mlkem_encaps(pk)

@@ -31,7 +31,7 @@ data ProvenanceHop : app v1 {
     parent_hop_hash: bytes(32),
     signature: bytes(4627),
 }
-    encode @ bytes(4819) {
+    @encode @ bytes(4819) {
         hop_id          @ le,
         session_id      @ le,
         hop_type        @ le,
@@ -41,9 +41,9 @@ data ProvenanceHop : app v1 {
         parent_hop_hash @ le,
         signature       @ le,
     }
-    store dag
-    series retain 365d
-    cortex {
+    @store dag
+    @series retain 365d
+    @cortex {
         visibility {
             session_id hash
             page_url_hash expose
@@ -51,15 +51,15 @@ data ProvenanceHop : app v1 {
             hop_type expose
         }
     }
-    observe events [hop_type, session_id]
-    observe metrics [timestamp_ns] level adaptive
-    sign {
+    @observe events [hop_type, session_id]
+    @observe metrics [timestamp_ns] level adaptive
+    @sign {
         algorithm mldsa87
         key_field signature
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field hop_id
     }
 
@@ -72,7 +72,7 @@ data SessionChain : app v1 {
     last_activity_ns: u64,
     converted: u8,
 }
-    encode @ bytes(209) {
+    @encode @ bytes(209) {
         session_id      @ le,
         first_hop_hash  @ le,
         last_hop_hash   @ le,
@@ -81,10 +81,10 @@ data SessionChain : app v1 {
         last_activity_ns @ le,
         converted       @ le,
     }
-    store kv
-    series retain 365d
-    observe metrics [hop_count, converted] level adaptive
-    observe events [session_id, hop_count, converted]
+    @store kv
+    @series retain 365d
+    @observe metrics [hop_count, converted] level adaptive
+    @observe events [session_id, hop_count, converted]
 
 // =============================================================================
 // DAG Declaration — Provenance Chain
@@ -94,7 +94,7 @@ dag provenance_chain {
     node ProvenanceHop : ProvenanceHop
     edge follows : ProvenanceHop -> ProvenanceHop
     storage csr { tier bram { capacity: 5000000 } }
-    sign ml_dsa_87
+    @sign ml_dsa_87
 }
 
 // =============================================================================
@@ -102,23 +102,23 @@ dag provenance_chain {
 // =============================================================================
 
 stream thread_hop_events: event<ProvenanceHop>
-    retention 365d
-    consumers [streamsight, audit, analytics]
-    classify hop_id: IDENTIFIER, session_id: IDENTIFIER, hop_type: METADATA, timestamp_ns: METRIC, page_url_hash: IDENTIFIER, referrer_hash: IDENTIFIER, parent_hop_hash: IDENTIFIER
+    @retention 365d
+    @consumers [streamsight, audit, analytics]
+    @classify hop_id: IDENTIFIER, session_id: IDENTIFIER, hop_type: METADATA, timestamp_ns: METRIC, page_url_hash: IDENTIFIER, referrer_hash: IDENTIFIER, parent_hop_hash: IDENTIFIER
 
 stream thread_session_events: event<SessionChain>
-    retention 365d
-    consumers [streamsight, audit, analytics]
-    classify session_id: IDENTIFIER, hop_count: METRIC, converted: METRIC, started_at: METRIC, last_activity_ns: METRIC
+    @retention 365d
+    @consumers [streamsight, audit, analytics]
+    @classify session_id: IDENTIFIER, hop_count: METRIC, converted: METRIC, started_at: METRIC, last_activity_ns: METRIC
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series thread_audit_series: thread_hop_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Record Hop
@@ -131,18 +131,18 @@ series thread_audit_series: thread_hop_events
 // appended as a DAG edge.
 
 circuit thread_record_hop(session_id: bytes(32), hop_type: enum { AdView, AdClick, LandingPageView, FormStart, FormField, FormSubmit, PartnerRedirect, Conversion, OptIn }, page_url_hash: bytes(32), referrer_hash: bytes(32), sk: bytes(4896), pk: bytes(1568)) -> ProvenanceHop
-    lex esn/marketplace/advertising/thread {
+    @lex marketplace/advertising/thread {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [hops_recorded, hop_latency_ns]
-    invariant "chain_linked" { parent_hop_hash != 0 || hop_type == AdView }
-    monitor "hop_rate" { deviation(hops_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [hops_recorded, hop_latency_ns]
+    @invariant "chain_linked" { parent_hop_hash != 0 || hop_type == AdView }
+    @monitor "hop_rate" { deviation(hops_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let hop_seed = sha3_256(session_id)
     let hop_id = sha3_256(hop_seed)
@@ -186,15 +186,15 @@ circuit thread_record_hop(session_id: bytes(32), hop_type: enum { AdView, AdClic
 // list of hops from first to last.
 
 circuit thread_get_chain(session_id: bytes(32), pk: bytes(1568)) -> list<ProvenanceHop>
-    lex esn/marketplace/advertising/thread {
+    @lex marketplace/advertising/thread {
         governance hierarchical
         audit_trail true
     }
-    precision B
-    streamsight true
-    observe metrics: [chains_retrieved, retrieval_latency_ns, chain_lengths]
-    invariant "session_id_not_empty" { session_id != 0 }
-    monitor "retrieval_rate" { deviation(retrievals_per_sec, baseline) < 0.30 }
+    @precision B
+    @observe true
+    @observe metrics: [chains_retrieved, retrieval_latency_ns, chain_lengths]
+    @invariant "session_id_not_empty" { session_id != 0 }
+    @monitor "retrieval_rate" { deviation(retrievals_per_sec, baseline) < 0.30 }
 {
     let session = kv_get(session_id)
     let chain_hash = sha3_256(session_id)
@@ -218,17 +218,17 @@ circuit thread_get_chain(session_id: bytes(32), pk: bytes(1568)) -> list<Provena
 // Returns true only if the entire chain is intact.
 
 circuit thread_verify_chain(session_id: bytes(32), pk: bytes(1568)) -> bool
-    lex esn/marketplace/advertising/thread {
+    @lex marketplace/advertising/thread {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [chains_verified, verify_latency_ns, verify_failures, hops_traversed]
-    invariant "session_id_not_empty" { session_id != 0 }
-    monitor "verify_failure_rate" { verify_failures / chains_verified < 0.01 }
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [chains_verified, verify_latency_ns, verify_failures, hops_traversed]
+    @invariant "session_id_not_empty" { session_id != 0 }
+    @monitor "verify_failure_rate" { verify_failures / chains_verified < 0.01 }
 {
     let session = kv_get(session_id)
     let verify_hash = sha3_256(session_id)

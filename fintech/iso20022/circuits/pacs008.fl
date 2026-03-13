@@ -59,7 +59,7 @@ data Pacs008Data : core v1 {
     creditor_agent_bic: bytes(11),
     remittance_info: bytes(140),
 }
-    encode @ bytes(680) {
+    @encode @ bytes(680) {
         msg_type            @ le = 0x0008,
         message_id          @ le,
         creation_timestamp  @ le,
@@ -81,9 +81,9 @@ data Pacs008Data : core v1 {
     }
 
 circuit pacs008_hash(msg: Pacs008Data) -> bytes(32)
-    lex esn/iso20022/pacs008
-    precision C
-    povc true
+    @lex iso20022/pacs008
+    @precision C
+    @attested true
 {
     let combined = concat(msg.message_id, msg.end_to_end_id)
     sha3_256(combined)

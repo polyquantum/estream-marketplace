@@ -29,7 +29,7 @@ data ActivityScore : app v1 {
     composite_score: u32,
     last_computed_at: u64,
 }
-    encode @ bytes(60) {
+    @encode @ bytes(60) {
         user_id              @ le,
         authentication_score @ le,
         engagement_score     @ le,
@@ -37,10 +37,10 @@ data ActivityScore : app v1 {
         composite_score      @ le,
         last_computed_at     @ le,
     }
-    store kv
-    store graph
-    series retain 365d
-    cortex {
+    @store kv
+    @store graph
+    @series retain 365d
+    @cortex {
         visibility {
             user_id obfuscate
             authentication_score expose
@@ -56,15 +56,15 @@ data ActivityScore : app v1 {
             drift_threshold 0.10
         }
     }
-    observe metrics [composite_score, authentication_score, engagement_score, sharing_score] level adaptive
-    observe events [user_id, composite_score]
-    sign {
+    @observe metrics [composite_score, authentication_score, engagement_score, sharing_score] level adaptive
+    @observe events [user_id, composite_score]
+    @sign {
         algorithm mldsa87
         key_field user_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field user_id
     }
 
@@ -79,24 +79,24 @@ data ScoreEvent : app v1 {
     points: u32,
     timestamp_ns: u64,
 }
-    encode @ bytes(109) {
+    @encode @ bytes(109) {
         event_id     @ le,
         user_id      @ le,
         event_type   @ le,
         points       @ le,
         timestamp_ns @ le,
     }
-    store kv
-    series retain 365d
-    observe events [event_type, points]
-    observe metrics [points, timestamp_ns] level adaptive
-    sign {
+    @store kv
+    @series retain 365d
+    @observe events [event_type, points]
+    @observe metrics [points, timestamp_ns] level adaptive
+    @sign {
         algorithm mldsa87
         key_field event_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field event_id
     }
 
@@ -105,23 +105,23 @@ data ScoreEvent : app v1 {
 // =============================================================================
 
 stream optin_score_events: event<ScoreEvent>
-    retention 365d
-    consumers [streamsight, audit, cortex, analytics]
-    classify event_id: IDENTIFIER, user_id: IDENTIFIER, event_type: METADATA, points: METRIC, timestamp_ns: METRIC
+    @retention 365d
+    @consumers [streamsight, audit, cortex, analytics]
+    @classify event_id: IDENTIFIER, user_id: IDENTIFIER, event_type: METADATA, points: METRIC, timestamp_ns: METRIC
 
 stream optin_activity_scores: event<ActivityScore>
-    retention 365d
-    consumers [streamsight, audit, cortex, analytics]
-    classify user_id: IDENTIFIER, composite_score: METRIC, authentication_score: METRIC, engagement_score: METRIC, sharing_score: METRIC
+    @retention 365d
+    @consumers [streamsight, audit, cortex, analytics]
+    @classify user_id: IDENTIFIER, composite_score: METRIC, authentication_score: METRIC, engagement_score: METRIC, sharing_score: METRIC
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series optin_score_audit: optin_score_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Compute Activity Score
@@ -133,18 +133,18 @@ series optin_score_audit: optin_score_events
 // Links the score to the user's CRM profile via a graph edge.
 
 circuit optin_compute_score(user_id: bytes(32), pk: bytes(1568)) -> ActivityScore
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [scores_computed, compute_latency_ns, score_distribution]
-    invariant "user_id_not_empty" { user_id != 0 }
-    monitor "score_anomaly_rate" { deviation(composite_score, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [scores_computed, compute_latency_ns, score_distribution]
+    @invariant "user_id_not_empty" { user_id != 0 }
+    @monitor "score_anomaly_rate" { deviation(composite_score, baseline) < 0.30 }
+    @fuzz_target
 {
     let score_seed = sha3_256(user_id)
     let score_id = sha3_256(score_seed)
@@ -183,19 +183,19 @@ circuit optin_compute_score(user_id: bytes(32), pk: bytes(1568)) -> ActivityScor
 // corresponding activity dimension.
 
 circuit optin_record_event(user_id: bytes(32), event_type: enum { ApiVerification, FormCompletion, QuestionAsked, DocumentDownload, ReferralMade, ForumPost, SurveyCompleted }, points: u32, pk: bytes(1568)) -> ScoreEvent
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [events_recorded, event_latency_ns, points_awarded]
-    invariant "user_id_not_empty" { user_id != 0 }
-    invariant "points_bounded" { points <= 1000 }
-    monitor "event_rate" { deviation(events_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [events_recorded, event_latency_ns, points_awarded]
+    @invariant "user_id_not_empty" { user_id != 0 }
+    @invariant "points_bounded" { points <= 1000 }
+    @monitor "event_rate" { deviation(events_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let event_seed = sha3_256(user_id)
     let event_id = sha3_256(event_seed)
@@ -223,15 +223,15 @@ circuit optin_record_event(user_id: bytes(32), event_type: enum { ApiVerificatio
 // recently computed score with all dimension values and composite.
 
 circuit optin_get_score(user_id: bytes(32), pk: bytes(1568)) -> ActivityScore
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision B
-    streamsight true
-    observe metrics: [scores_retrieved, retrieval_latency_ns]
-    invariant "user_id_not_empty" { user_id != 0 }
-    monitor "retrieval_rate" { deviation(retrievals_per_sec, baseline) < 0.30 }
+    @precision B
+    @observe true
+    @observe metrics: [scores_retrieved, retrieval_latency_ns]
+    @invariant "user_id_not_empty" { user_id != 0 }
+    @monitor "retrieval_rate" { deviation(retrievals_per_sec, baseline) < 0.30 }
 {
     let lookup_hash = sha3_256(user_id)
     let kem = mlkem_encaps(pk)

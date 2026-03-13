@@ -36,7 +36,7 @@ data FixParsedMessage : circuit v1 {
     raw: bytes(8192),
     raw_length: u32,
 }
-    encode @ bytes(8340) {
+    @encode @ bytes(8340) {
         msg_type        @ le,
         sender_comp_id  @ le,
         target_comp_id  @ le,
@@ -48,8 +48,8 @@ data FixParsedMessage : circuit v1 {
         raw             @ le,
         raw_length      @ le,
     }
-    observe metrics [msg_type, msg_seq_num, body_length] level adaptive
-    observe events [sender_comp_id, target_comp_id, msg_type]
+    @observe metrics [msg_type, msg_seq_num, body_length] level adaptive
+    @observe events [sender_comp_id, target_comp_id, msg_type]
 
 data FixSessionState : circuit v1 {
     sender_comp_id: bytes(64),
@@ -62,8 +62,8 @@ data FixSessionState : circuit v1 {
     state: u8,
     test_req_id: bytes(32),
 }
-    observe metrics [next_send_seq, next_recv_seq, state] level adaptive
-    govern {
+    @observe metrics [next_send_seq, next_recv_seq, state] level adaptive
+    @govern {
         SESSION -> encrypted(trading_admin)
         METADATA -> public
     }
@@ -78,7 +78,7 @@ data FixSessionEvent : metrics v1 {
     seq_num: u64,
     timestamp: u64,
 }
-    observe events [event_type, session_id, seq_num]
+    @observe events [event_type, session_id, seq_num]
 
 // =============================================================================
 // Stream Declarations
@@ -86,15 +86,15 @@ data FixSessionEvent : metrics v1 {
 
 stream fix_ingress: event<FixParsedMessage>
     | throttle 100000/s burst 200000
-    classify msg_type: PROTOCOL, sender_comp_id: SESSION
+    @classify msg_type: PROTOCOL, sender_comp_id: SESSION
 
 stream fix_egress: event<FixParsedMessage>
     | throttle 100000/s burst 200000
-    classify msg_type: PROTOCOL, target_comp_id: SESSION
+    @classify msg_type: PROTOCOL, target_comp_id: SESSION
 
 stream fix_session_events: event<FixSessionEvent>
-    retention 30d
-    consumers [ops_dashboard, compliance_audit]
+    @retention 30d
+    @consumers [ops_dashboard, compliance_audit]
 
 // =============================================================================
 // Circuit: FIX Message Parser
@@ -110,17 +110,17 @@ stream fix_session_events: event<FixSessionEvent>
 //   4. Dispatch based on MsgType (tag 35)
 
 circuit fix_parse(raw: bytes(8192), raw_length: u32) -> FixParsedMessage
-    lex esn/fin/pci/org/estream/trading
-    precision C
+    @lex fin/pci/org/estream/trading
+    @precision C
     clock_domain 125mhz
-    constant_time true
+    @constant_time true
     critical_path
-    streamsight true
-    observe metrics: [messages_parsed, parse_errors, checksum_failures]
-    invariant "checksum_valid" { checksum_failures == 0 || checksum_failures < messages_parsed * 0.001 }
-    invariant "body_length_matches" { body_length > 0 }
-    monitor "parse_error_rate" { parse_errors / messages_parsed < 0.001 }
-    fuzz_target
+    @observe true
+    @observe metrics: [messages_parsed, parse_errors, checksum_failures]
+    @invariant "checksum_valid" { checksum_failures == 0 || checksum_failures < messages_parsed * 0.001 }
+    @invariant "body_length_matches" { body_length > 0 }
+    @monitor "parse_error_rate" { parse_errors / messages_parsed < 0.001 }
+    @fuzz_target
 {
     let msg_hash = sha3_256(raw)
     let msg_type = extract_fix_tag(raw, 35, raw_length)
@@ -161,18 +161,18 @@ circuit fix_parse(raw: bytes(8192), raw_length: u32) -> FixParsedMessage
 // generates ResendRequest when gap detected.
 
 circuit fix_session(msg: FixParsedMessage, state: FixSessionState, pk: bytes(1568)) -> FixSessionState
-    lex esn/fin/pci/org/estream/trading {
+    @lex fin/pci/org/estream/trading {
         governance hierarchical
         audit_trail true
     }
-    precision B
-    witness threshold(2, 3)
-    streamsight true
-    observe metrics: [sessions_active, logon_count, logout_count, heartbeats, seq_gaps_detected, resend_requests]
-    invariant "seq_monotonic" { next_recv_seq >= state.next_recv_seq }
-    invariant "session_state_valid" { state.state >= 0 && state.state <= 5 }
-    property safety "no_duplicate_logon" { logon_count <= sessions_active }
-    monitor "gap_rate" { seq_gaps_detected / messages_total < 0.01 }
+    @precision B
+    @witness threshold(2, 3)
+    @observe true
+    @observe metrics: [sessions_active, logon_count, logout_count, heartbeats, seq_gaps_detected, resend_requests]
+    @invariant "seq_monotonic" { next_recv_seq >= state.next_recv_seq }
+    @invariant "session_state_valid" { state.state >= 0 && state.state <= 5 }
+    @property safety "no_duplicate_logon" { logon_count <= sessions_active }
+    @monitor "gap_rate" { seq_gaps_detected / messages_total < 0.01 }
 {
     let msg_type_hash = sha3_256(msg.msg_type)
     let kem = mlkem_encaps(pk)
@@ -212,12 +212,12 @@ circuit fix_session(msg: FixParsedMessage, state: FixSessionState, pk: bytes(156
 //   Tag 59 (TimeInForce) → time_in_force (0=Day→3, 1=GTC→0, 3=IOC→1, 4=FOK→2)
 
 circuit fix_to_data_order(msg: FixParsedMessage) -> EStreamOrder
-    lex esn/fin/pci/org/estream/trading
-    precision C
-    streamsight true
-    observe metrics: [orders_translated, translation_errors]
-    invariant "msg_type_is_D" { msg.msg_type == "D" }
-    monitor "translation_error_rate" { translation_errors / orders_translated < 0.001 }
+    @lex fin/pci/org/estream/trading
+    @precision C
+    @observe true
+    @observe metrics: [orders_translated, translation_errors]
+    @invariant "msg_type_is_D" { msg.msg_type == "D" }
+    @monitor "translation_error_rate" { translation_errors / orders_translated < 0.001 }
 {
     let order_id = sha3_256(msg.raw)
     let cl_ord_id = extract_fix_tag(msg.raw, 11, msg.raw_length)
@@ -251,11 +251,11 @@ circuit fix_to_data_order(msg: FixParsedMessage) -> EStreamOrder
 // =============================================================================
 
 circuit fix_to_data_market_data(msg: FixParsedMessage) -> EStreamMarketData
-    lex esn/fin/pci/org/estream/trading
-    precision C
-    streamsight true
-    observe metrics: [market_data_translated]
-    invariant "msg_type_is_W" { msg.msg_type == "W" }
+    @lex fin/pci/org/estream/trading
+    @precision C
+    @observe true
+    @observe metrics: [market_data_translated]
+    @invariant "msg_type_is_W" { msg.msg_type == "W" }
 {
     let symbol = extract_fix_tag(msg.raw, 55, msg.raw_length)
     let bid_price = extract_fix_u64(msg.raw, 270, msg.raw_length)
@@ -288,12 +288,12 @@ circuit fix_to_data_market_data(msg: FixParsedMessage) -> EStreamMarketData
 //   OrdStatus   → Tag 39 (2=Filled)
 
 circuit data_to_fix_execution(fill: EStreamFill, session: FixSessionState) -> bytes(8192)
-    lex esn/fin/pci/org/estream/trading
-    precision C
-    streamsight true
-    observe metrics: [fills_translated, egress_bytes]
-    invariant "fill_quantity_positive" { fill.quantity > 0 }
-    invariant "fill_price_positive" { fill.price > 0 }
+    @lex fin/pci/org/estream/trading
+    @precision C
+    @observe true
+    @observe metrics: [fills_translated, egress_bytes]
+    @invariant "fill_quantity_positive" { fill.quantity > 0 }
+    @invariant "fill_price_positive" { fill.price > 0 }
 {
     let exec_id = sha3_256(fill.fill_id)
     let side_fix = data_side_to_fix(fill.side)
@@ -318,10 +318,10 @@ circuit data_to_fix_execution(fill: EStreamFill, session: FixSessionState) -> by
 // =============================================================================
 
 circuit data_to_fix_cancel_reject(order_id: bytes(32), reason: bytes(256), session: FixSessionState) -> bytes(8192)
-    lex esn/fin/pci/org/estream/trading
-    precision C
-    streamsight true
-    observe metrics: [cancel_rejects_sent]
+    @lex fin/pci/org/estream/trading
+    @precision C
+    @observe true
+    @observe metrics: [cancel_rejects_sent]
 {
     let reject_id = sha3_256(order_id)
     let fix_msg = build_fix_message(

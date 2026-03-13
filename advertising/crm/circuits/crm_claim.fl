@@ -32,7 +32,7 @@ data ClaimRecord : app v1 {
     evidence_count: u32,
     decision: bytes(256),
 }
-    encode @ bytes(421) {
+    @encode @ bytes(421) {
         claim_id       @ le,
         user_id        @ le,
         claim_type     @ le,
@@ -42,10 +42,10 @@ data ClaimRecord : app v1 {
         evidence_count @ le,
         decision       @ le,
     }
-    store kv
-    store graph
-    series retain 7y
-    cortex {
+    @store kv
+    @store graph
+    @series retain 7y
+    @cortex {
         ai_feed {
             model "claim_outcome_predictor"
             input [claim_type, evidence_count, state]
@@ -54,15 +54,15 @@ data ClaimRecord : app v1 {
             drift_threshold 0.10
         }
     }
-    observe metrics [state, claim_type, evidence_count] level adaptive
-    observe events [state, claim_type, decision]
-    sign {
+    @observe metrics [state, claim_type, evidence_count] level adaptive
+    @observe events [state, claim_type, decision]
+    @sign {
         algorithm mldsa87
         key_field claim_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field claim_id
         proof_system groth16
     }
@@ -73,9 +73,9 @@ data EvidenceRecord : circuit v1 {
     submitted_at: u64,
     submitter_id: bytes(32),
 }
-    observe events [claim_id, evidence_hash]
-    attest {
-        povc true
+    @observe events [claim_id, evidence_hash]
+    @attest {
+        attested true
         anchor_field evidence_hash
         proof_system groth16
     }
@@ -100,28 +100,28 @@ data EvidenceRecord : circuit v1 {
 // =============================================================================
 
 stream crm_claim_events: event<ClaimRecord>
-    retention 7y
-    consumers [streamsight, audit, cortex, alerting, compliance]
-    classify claim_id: IDENTIFIER, user_id: IDENTIFIER, claim_type: METADATA, state: METADATA
+    @retention 7y
+    @consumers [streamsight, audit, cortex, alerting, compliance]
+    @classify claim_id: IDENTIFIER, user_id: IDENTIFIER, claim_type: METADATA, state: METADATA
 
 stream crm_evidence_events: event<EvidenceRecord>
-    retention 7y
-    consumers [streamsight, audit]
-    classify claim_id: IDENTIFIER, evidence_hash: IDENTIFIER
+    @retention 7y
+    @consumers [streamsight, audit]
+    @classify claim_id: IDENTIFIER, evidence_hash: IDENTIFIER
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series crm_claim_audit: crm_claim_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 series crm_evidence_audit: crm_evidence_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: File Claim
@@ -132,20 +132,20 @@ series crm_evidence_audit: crm_evidence_events
 // ID and claim type for deterministic addressing.
 
 circuit crm_file_claim(user_id: bytes(32), claim_type: bytes(64), pk: bytes(1568)) -> ClaimRecord
-    lex esn/marketplace/advertising/crm {
+    @lex marketplace/advertising/crm {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    witness threshold(2, 3)
-    observe metrics: [claims_filed, filing_errors, claims_by_type]
-    invariant "user_id_not_empty" { user_id != 0 }
-    invariant "claim_type_not_empty" { claim_type != 0 }
-    monitor "filing_error_rate" { filing_errors / claims_filed < 0.01 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @witness threshold(2, 3)
+    @observe metrics: [claims_filed, filing_errors, claims_by_type]
+    @invariant "user_id_not_empty" { user_id != 0 }
+    @invariant "claim_type_not_empty" { claim_type != 0 }
+    @monitor "filing_error_rate" { filing_errors / claims_filed < 0.01 }
+    @fuzz_target
 {
     let claim_seed = sha3_256(user_id)
     let claim_id = sha3_256(claim_seed)
@@ -179,22 +179,22 @@ circuit crm_file_claim(user_id: bytes(32), claim_type: bytes(64), pk: bytes(1568
 // outcome prediction. Invalid transitions are rejected.
 
 circuit crm_transition_claim(claim_id: bytes(32), new_state: u8, pk: bytes(1568)) -> ClaimRecord
-    lex esn/marketplace/advertising/crm {
+    @lex marketplace/advertising/crm {
         governance hierarchical
         audit_trail true
         compliance [hipaa, cfr_38]
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    witness threshold(2, 3)
-    observe metrics: [claim_transitions, invalid_transitions, approvals, denials, appeals]
-    invariant "claim_id_not_empty" { claim_id != 0 }
-    invariant "state_valid" { new_state <= 7 }
-    property safety "no_invalid_claim_transition" { invalid_transitions == 0 || invalid_transitions < claim_transitions * 0.01 }
-    monitor "denial_rate" { denials / claim_transitions < 0.50 }
-    monitor "appeal_rate" { appeals / claim_transitions < 0.30 }
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @witness threshold(2, 3)
+    @observe metrics: [claim_transitions, invalid_transitions, approvals, denials, appeals]
+    @invariant "claim_id_not_empty" { claim_id != 0 }
+    @invariant "state_valid" { new_state <= 7 }
+    @property safety "no_invalid_claim_transition" { invalid_transitions == 0 || invalid_transitions < claim_transitions * 0.01 }
+    @monitor "denial_rate" { denials / claim_transitions < 0.50 }
+    @monitor "appeal_rate" { appeals / claim_transitions < 0.30 }
 {
     let transition_hash = sha3_256(claim_id)
     let kem = mlkem_encaps(pk)
@@ -242,17 +242,17 @@ circuit crm_transition_claim(claim_id: bytes(32), new_state: u8, pk: bytes(1568)
 // to create a tamper-proof chain.
 
 circuit crm_add_evidence(claim_id: bytes(32), evidence_hash: bytes(32), pk: bytes(1568)) -> ClaimRecord
-    lex esn/marketplace/advertising/crm {
+    @lex marketplace/advertising/crm {
         governance hierarchical
         audit_trail true
     }
-    precision B
-    streamsight true
-    povc true
-    observe metrics: [evidence_submitted, evidence_errors, evidence_per_claim]
-    invariant "claim_id_not_empty" { claim_id != 0 }
-    invariant "evidence_hash_not_empty" { evidence_hash != 0 }
-    monitor "evidence_error_rate" { evidence_errors / evidence_submitted < 0.01 }
+    @precision B
+    @observe true
+    @attested true
+    @observe metrics: [evidence_submitted, evidence_errors, evidence_per_claim]
+    @invariant "claim_id_not_empty" { claim_id != 0 }
+    @invariant "evidence_hash_not_empty" { evidence_hash != 0 }
+    @monitor "evidence_error_rate" { evidence_errors / evidence_submitted < 0.01 }
 {
     let evidence_anchor = sha3_256(evidence_hash)
     let kem = mlkem_encaps(pk)

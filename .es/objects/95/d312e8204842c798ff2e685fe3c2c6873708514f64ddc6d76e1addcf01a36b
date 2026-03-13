@@ -1,0 +1,13 @@
+Å§Blobë≈Ntree aef31ecfc79995fa708db3b8f4a669a462554dba
+parent e2c63e90d874b18e21d904e1be726bfa04d172ee
+author toddrooke <todd@toddrooke.com> 1773338586 -0600
+committer toddrooke <todd@toddrooke.com> 1773338593 -0600
+
+Register Poly Labs publisher + 7 PolyKit packages in marketplace
+
+registry/publishers/polylabs.fl registers the polylabs publisher
+and all 7 PolyKit packages (identity, metering, telemetry, rate-limiter,
+sanitize, eslm-classify, console) with the marketplace registry.
+
+First real multi-package publisher in the marketplace. poly-git will
+consume all 7 as marketplace dependencies.

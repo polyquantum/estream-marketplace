@@ -1,10 +1,10 @@
 // Domain Package Registry — Mirror & Cache
 // Epic 4: estream-marketplace#4
 //
-// Local package cache for offline compilation and scatter-distributed
+// Local package cache for offline compilation and distribute-distributed
 // mirrors for resilient package distribution.
 
-/// govern lex esn/marketplace/registry
+/// govern lex marketplace/registry
 
 // --- Types ---
 
@@ -45,35 +45,35 @@ type SyncStatus = struct {
 // --- Streams ---
 
 stream mirror_health: state<bytes(32), MirrorNode>
-    retention 30d
-    consumers [registry, console, admin]
+    @retention 30d
+    @consumers [registry, console, admin]
 
 stream cache_entries: state<bytes(32), CacheEntry>
-    retention 90d
-    consumers [cli, registry]
+    @retention 90d
+    @consumers [cli, registry]
 
 stream sync_events: event<SyncStatus>
-    retention 30d
-    consumers [registry, console, admin]
+    @retention 30d
+    @consumers [registry, console, admin]
 
 // --- Circuits ---
 
 /// test golden
 circuit register_mirror(mirror: MirrorNode) -> bool
-    lex esn/marketplace/registry/admin
-    precision B
-    rbac [marketplace_admin]
-    observe metrics: [mirrors_registered]
-    povc true
+    @lex marketplace/registry/admin
+    @precision B
+    @rbac [marketplace_admin]
+    @observe metrics: [mirrors_registered]
+    @attested true
 {
     mirror.is_healthy
 }
 
 /// test golden
 circuit cache_package(package_id: bytes(32), version: bytes(20), checksum: bytes(32), size_bytes: u64) -> CacheEntry
-    lex esn/marketplace/registry
-    precision C
-    observe metrics: [packages_cached, cache_size_bytes]
+    @lex marketplace/registry
+    @precision C
+    @observe metrics: [packages_cached, cache_size_bytes]
 {
     CacheEntry {
         package_id: package_id,
@@ -90,18 +90,18 @@ circuit cache_package(package_id: bytes(32), version: bytes(20), checksum: bytes
 
 /// test golden
 circuit verify_cached_package(entry: CacheEntry, expected_checksum: bytes(32)) -> bool
-    lex esn/marketplace/registry
-    precision A
-    observe metrics: [cache_verifications, cache_verification_failures]
+    @lex marketplace/registry
+    @precision A
+    @observe metrics: [cache_verifications, cache_verification_failures]
 {
     entry.checksum == expected_checksum
 }
 
 /// test golden
 circuit select_mirror(region: bytes(32), package_id: bytes(32)) -> MirrorNode
-    lex esn/marketplace/registry
-    precision C
-    observe metrics: [mirror_selections]
+    @lex marketplace/registry
+    @precision C
+    @observe metrics: [mirror_selections]
 {
     MirrorNode {
         mirror_id: bytes(32),
@@ -118,9 +118,9 @@ circuit select_mirror(region: bytes(32), package_id: bytes(32)) -> MirrorNode
 
 /// test golden
 circuit evict_stale_cache(max_age_seconds: u64, max_size_bytes: u64) -> u32
-    lex esn/marketplace/registry
-    precision C
-    observe metrics: [cache_evictions, bytes_freed]
+    @lex marketplace/registry
+    @precision C
+    @observe metrics: [cache_evictions, bytes_freed]
 {
     0
 }

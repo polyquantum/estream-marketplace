@@ -16,7 +16,7 @@ type ReportEntry = struct {
     amount_cents: u64,
     currency: bytes(3),
     credit_debit: u8,
-    status: u8,
+    @status: u8,
     booking_date: u64,
     value_date: u64,
 }
@@ -48,7 +48,7 @@ data Camt052Data : core v1 {
     available_currency: bytes(3),
     entry_count: u32,
 }
-    encode @ bytes(200) {
+    @encode @ bytes(200) {
         msg_type                @ le = 0x0052,
         message_id              @ le,
         creation_timestamp      @ le,
@@ -62,9 +62,9 @@ data Camt052Data : core v1 {
     }
 
 circuit camt052_hash(msg: Camt052Data) -> bytes(32)
-    lex esn/iso20022/camt052
-    precision C
-    povc true
+    @lex iso20022/camt052
+    @precision C
+    @attested true
 {
     let combined = concat(msg.message_id, msg.report_id)
     sha3_256(combined)

@@ -43,7 +43,7 @@ data Pacs002Data : core v1 {
     reason_code: bytes(4),
     additional_info: bytes(140),
 }
-    encode @ bytes(328) {
+    @encode @ bytes(328) {
         msg_type                @ le = 0x0002,
         message_id              @ le,
         creation_timestamp      @ le,
@@ -56,9 +56,9 @@ data Pacs002Data : core v1 {
     }
 
 circuit pacs002_hash(msg: Pacs002Data) -> bytes(32)
-    lex esn/iso20022/pacs002
-    precision C
-    povc true
+    @lex iso20022/pacs002
+    @precision C
+    @attested true
 {
     let combined = concat(msg.message_id, msg.original_message_id)
     sha3_256(combined)

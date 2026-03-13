@@ -24,7 +24,7 @@ type StatementEntry = struct {
     amount_cents: u64,
     currency: bytes(3),
     credit_debit: u8,
-    status: u8,
+    @status: u8,
     booking_date: u64,
     value_date: u64,
     account_servicer_ref: bytes(35),
@@ -62,7 +62,7 @@ data Camt053Data : core v1 {
     closing_currency: bytes(3),
     entry_count: u32,
 }
-    encode @ bytes(232) {
+    @encode @ bytes(232) {
         msg_type              @ le = 0x0053,
         message_id            @ le,
         creation_timestamp    @ le,
@@ -79,9 +79,9 @@ data Camt053Data : core v1 {
     }
 
 circuit camt053_hash(msg: Camt053Data) -> bytes(32)
-    lex esn/iso20022/camt053
-    precision C
-    povc true
+    @lex iso20022/camt053
+    @precision C
+    @attested true
 {
     let combined = concat(msg.message_id, msg.statement_id)
     sha3_256(combined)

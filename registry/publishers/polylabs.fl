@@ -2,13 +2,13 @@
 /// Registers all 7 PolyKit packages in the marketplace.
 /// Epic: polylabs-dev/polykit#11, Issue: #19
 
-/// govern lex esn/marketplace/registry
+/// govern lex marketplace/registry
 
 circuit register_polylabs_publisher() -> bool
-    lex esn/marketplace/registry
-    precision A
-    povc true
-    observe metrics: [publisher_registrations]
+    @lex marketplace/registry
+    @precision A
+    @attested true
+    @observe metrics: [publisher_registrations]
 {
     let publisher = register_publisher(
         "polylabs",
@@ -22,10 +22,10 @@ circuit register_polylabs_publisher() -> bool
 }
 
 circuit register_polylabs_packages(publisher_id: bytes(32)) -> bool
-    lex esn/marketplace/registry
-    precision A
-    povc true
-    observe metrics: [packages_registered]
+    @lex marketplace/registry
+    @precision A
+    @attested true
+    @observe metrics: [packages_registered]
 {
     register_package(publisher_id, "polykit-identity", "0.2.0", "smart-circuit",
         "SPARK identity + PQ crypto: HKDF key derivation, ML-DSA-87 signing, ML-KEM-1024 encapsulation, auth handshake FSM",

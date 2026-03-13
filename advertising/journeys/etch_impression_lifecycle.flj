@@ -1,0 +1,51 @@
+// Journey: Etch Impression Lifecycle
+// Tests the full ad impression signing and verification flow:
+//   sign impression → embed stego → extract and verify
+
+journey "etch_impression_lifecycle" {
+    description "Sign an ad impression, embed steganographic proof, extract and verify"
+    package "polyquantum.advertising"
+    platform ">= 0.12.0"
+
+    import advertising.etch.circuits.etch_impression {
+        etch_sign_impression, etch_embed_stego, etch_extract_stego,
+        ImpressionRecord, StegoPayload
+    }
+
+    setup {
+        let pk = test_keygen(1568)
+        let sk = test_keygen(4896)
+        let stego_key = sha3_256("test_stego_key")
+    }
+
+    step "sign_impression" {
+        let creative_id = sha3_256("creative_banner_001")
+        let viewer_hash = sha3_256("viewer_anon_001")
+        let session_hash = sha3_256("session_abc123")
+        let page_context = sha3_256("https://example.com/article")
+        let record = etch_sign_impression(creative_id, viewer_hash, session_hash, page_context, sk, pk)
+        assert record.impression_id != 0
+        assert record.signature != 0
+        assert record.creative_id == creative_id
+        assert record.viewer_hash == viewer_hash
+    }
+
+    step "embed_stego_payload" {
+        let image_hash = sha3_256("ad_image_001.png")
+        let payload = StegoPayload {
+            impression_id: record.impression_id,
+            signature_fragment: record.signature,
+            timestamp_fragment: sha3_256("ts_frag"),
+            campaign_fragment: creative_id,
+            checksum: sha3_256(record.impression_id),
+        }
+        let modified_hash = etch_embed_stego(image_hash, payload, stego_key, pk)
+        assert modified_hash != 0
+        assert modified_hash != image_hash
+    }
+
+    step "extract_and_verify" {
+        let extracted = etch_extract_stego(modified_hash, stego_key, pk)
+        assert extracted != none
+    }
+}

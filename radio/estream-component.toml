@@ -1,0 +1,11 @@
+[package]
+name = "polyquantum.radio"
+version = "0.12.0"
+publisher = "polyquantum"
+description = "5G/6G spectrum management, tactical mesh networking, and beamforming circuits"
+category = "smart-circuit"
+license = "commercial"
+
+[platform]
+minimum = "0.12.0"
+escir_api = "1.0.0"

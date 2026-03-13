@@ -6,7 +6,7 @@
 // in one pass. ZK proofs attest correct split execution without revealing
 // individual customer payment amounts.
 
-/// govern lex esn/marketplace/solutions
+/// govern lex marketplace/solutions
 
 // --- Types ---
 
@@ -45,23 +45,23 @@ type WaterfallProof = struct {
 // --- Streams ---
 
 stream waterfall_settlements: event<WaterfallTransaction>
-    retention 365d
-    consumers [billing, solutions, audit]
+    @retention 365d
+    @consumers [billing, solutions, audit]
 
 stream waterfall_proofs: event<WaterfallProof>
-    retention 365d
-    consumers [billing, solutions, audit]
+    @retention 365d
+    @consumers [billing, solutions, audit]
 
 // --- Circuits ---
 
 /// test golden
 circuit configure_waterfall(config: WaterfallConfig) -> WaterfallConfig
-    lex esn/marketplace/solutions
-    precision B
-    rbac [solution_admin, marketplace_admin]
-    povc true
-    observe metrics: [waterfalls_configured, solution_id]
-    invariant "shares_valid" { platform + solution + publishers == 10000 bps }
+    @lex marketplace/solutions
+    @precision B
+    @rbac [solution_admin, marketplace_admin]
+    @attested true
+    @observe metrics: [waterfalls_configured, solution_id]
+    @invariant "shares_valid" { platform + solution + publishers == 10000 bps }
 {
     WaterfallConfig {
         solution_id: config.solution_id,
@@ -73,10 +73,10 @@ circuit configure_waterfall(config: WaterfallConfig) -> WaterfallConfig
 
 /// test golden
 circuit execute_waterfall(config: WaterfallConfig, total_amount_micros: u64, customer_id_blinded: BlindedCustomerId) -> WaterfallTransaction
-    lex esn/marketplace/solutions
-    precision A
-    povc true
-    observe metrics: [waterfalls_executed, solution_id, total_amount_micros]
+    @lex marketplace/solutions
+    @precision A
+    @attested true
+    @observe metrics: [waterfalls_executed, solution_id, total_amount_micros]
 {
     let platform_payout = total_amount_micros * config.platform_share_bps
     let solution_payout = total_amount_micros * config.solution_share_bps
@@ -95,10 +95,10 @@ circuit execute_waterfall(config: WaterfallConfig, total_amount_micros: u64, cus
 
 /// test golden
 circuit generate_waterfall_proof(solution_id: SolutionId, period_start: u64, period_end: u64, total_revenue: u64) -> WaterfallProof
-    lex esn/marketplace/solutions
-    precision B
-    povc true
-    observe metrics: [waterfall_proofs_generated, solution_id]
+    @lex marketplace/solutions
+    @precision B
+    @attested true
+    @observe metrics: [waterfall_proofs_generated, solution_id]
 {
     let proof_hash = sha3_256(concat(solution_id, period_start))
     WaterfallProof {
@@ -113,9 +113,9 @@ circuit generate_waterfall_proof(solution_id: SolutionId, period_start: u64, per
 
 /// test golden
 circuit verify_waterfall_proof(proof: WaterfallProof) -> bool
-    lex esn/marketplace/solutions
-    precision A
-    observe metrics: [waterfall_proofs_verified, solution_id]
+    @lex marketplace/solutions
+    @precision A
+    @observe metrics: [waterfall_proofs_verified, solution_id]
 {
     let expected = sha3_256(concat(proof.solution_id, proof.period_start))
     let valid = proof.total_revenue >= 0
@@ -124,9 +124,9 @@ circuit verify_waterfall_proof(proof: WaterfallProof) -> bool
 
 /// test golden
 circuit query_waterfall_revenue(solution_id: SolutionId, period_start: u64, period_end: u64) -> u64
-    lex esn/marketplace/solutions
-    precision C
-    observe metrics: [waterfall_queries, solution_id]
+    @lex marketplace/solutions
+    @precision C
+    @observe metrics: [waterfall_queries, solution_id]
 {
     let query_hash = sha3_256(concat(solution_id, period_start))
     0

@@ -2,26 +2,47 @@
 
 This repository contains **marketplace components** for the eStream platform — SmartCircuits, domain packages, and specifications that are distributed separately from the core platform.
 
+**Platform version**: v0.12.0
+
 ## Directory Layout
 
-- **`fintech/`** — Financial technology components organized by sub-domain (FIX trading, PCI, ISO 20022). FastLang `.fl` files are the canonical source; `.escir.yaml` files exist where no `.fl` equivalent has been written yet.
-- **`industrial/`** — Industrial protocol gateway components. `components/` has individual ESCIR sub-circuits; `gateway/` has composite SKU circuits (Lite/Standard/Premium); `specs/` has the gateway specifications.
-- **`registry/`** — Domain package registry circuits: package format, dependency resolution, mirrors/cache (Epic 4, #4).
-- **`licensing/`** — ZK licensing circuits: blinded tokens, metering, atomic settlement, pricing tiers (Epic 5, #5).
-- **`solutions/`** — Solution bundle circuits: manifest, lex boundary nesting, revenue waterfall, customer onboarding (Epic 6, #6).
-- **`console/`** — Console circuits: publisher/customer/admin dashboards, developer tooling (Epic 7, #7).
+- **`fintech/`** — Financial technology components organized by sub-domain (FIX trading, PCI, ISO 20022, cross-border). Published as `polyquantum.fintech`.
+- **`industrial/`** — Industrial protocol gateway components: fleet aggregation, design explorer. Published as `polyquantum.industrial`.
+- **`advertising/`** — Ad tech components: Etch (impressions), Catalyst (optimization), CRM, Optin, Portal, Relay, Sage, Scope, Thread, Tide. Published as `polyquantum.advertising`.
+- **`payments/`** — ISO 20022, HTLC, offline payments, settlement DAG. Published as `polyquantum.payments`.
+- **`radio/`** — 5G/6G spectrum management, tactical mesh, beamforming. Published as `polyquantum.radio`.
+- **`secure-video/`** — SVD + content security pipelines. Published as `polyquantum.secure_video`.
+- **`bridge/`** — Cross-chain, cross-lex bridge circuits. Published as `polyquantum.bridge`.
+- **`widgets/`** — UI interaction components for eStream console. Published as `polyquantum.widgets`.
+- **`registry/`** — Domain package registry circuits: package format, dependency resolution, mirrors/cache.
+- **`licensing/`** — ZK licensing circuits: blinded tokens, metering, atomic settlement, pricing tiers.
+- **`solutions/`** — Solution bundle circuits: manifest, lex boundary nesting, revenue waterfall, customer onboarding.
+- **`console/`** — Console circuits: publisher/customer/admin dashboards, developer tooling.
 - **`pricing/`** — Provider-level custom pricing circuits.
 - **`streams/`** — Graph-based marketplace registry model (marketplace_streams.fl).
-- **`runtime/`** — Rust runtime crates (`estream-iso20022`, `estream-industrial`) that implement the marketplace components as native executables.
+- **`runtime/`** — Rust runtime crates that implement marketplace components as native executables.
 - **`specs/`** — Cross-cutting marketplace specifications and standards.
 - **`docs/guides/`** — Publisher, customer, and developer guides.
-- **`templates/`** — ESCIR circuit templates for marketplace patterns.
+
+## Platform / Marketplace Boundary
+
+See `estream/docs/PLATFORM_MARKETPLACE_BOUNDARY.md` for the canonical boundary definition.
+
+**Platform-native** (ships with eStream): `circuits/core/`, `circuits/services/`, `circuits/hardware/`, `circuits/modules/`, `circuits/sdk/`, plus companion, detection, registry, and marketplace verticals.
+
+**Marketplace packages** (this repo): domain-specific monetizable solutions built on the platform API.
 
 ## Conventions
 
-- `.fl` is the path forward for all new components. New marketplace circuits should be written in FastLang.
-- `.escir.yaml` circuits remain where no `.fl` replacement exists (e.g., ISO 20022 parser, industrial sub-circuits).
-- Specs co-locate with their domain when domain-specific (e.g., `industrial/specs/`), or live in the top-level `specs/` directory when cross-cutting.
+- `.fl` is the canonical format for all circuits. FastLang v0.12.0 syntax:
+  - Annotations use `@` prefix: `@lex`, `@precision`, `@attested`, `@observe`, `@serialize`, etc.
+  - `attested` replaces `povc` for proof-of-circuit attestation
+  - `@observe true` replaces `streamsight true` for observability
+  - `@serialize` replaces `esz_emit` for verification artifact output
+  - `@golden_test` replaces `kat_vector` for known-answer test vectors
+  - Lex paths omit the `esn/` prefix (e.g., `@lex fin/pci/org/estream/trading`)
+- All `estream-component.toml` manifests specify `platform = ">= 0.12.0"`
+- Specs co-locate with their domain when domain-specific, or live in top-level `specs/` when cross-cutting
 
 ## Relationship to estream / estream-io
 
@@ -30,7 +51,7 @@ This repo was carved out per `polyquantum/estream#40`. The main repos retain:
 - Marketplace API types (generated from `.fl`)
 - Platform circuits (consensus, governance, crypto, etc.)
 
-## Developer Language Story (v0.9.1)
+## Developer Language Story (v0.12.0)
 
 eStream supports **7 languages** at full parity: Rust (native), Python (PyO3), TypeScript (WASM), Go (CGo), C++ (FFI), Swift (C bridging), and FastLang (native).
 

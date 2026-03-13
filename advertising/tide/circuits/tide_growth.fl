@@ -32,7 +32,7 @@ data TrafficMetrics : app v1 {
     bounce_rate_pct: u32,
     conversion_rate_pct: u32,
 }
-    encode @ bytes(72) {
+    @encode @ bytes(72) {
         period_id                @ le,
         page_views               @ le,
         unique_visitors          @ le,
@@ -43,8 +43,8 @@ data TrafficMetrics : app v1 {
         bounce_rate_pct          @ le,
         conversion_rate_pct      @ le,
     }
-    store series retain 365d
-    cortex {
+    @store series retain 365d
+    @cortex {
         visibility {
             period_id obfuscate
         }
@@ -53,15 +53,15 @@ data TrafficMetrics : app v1 {
             schedule "0 0 * * *"
         }
     }
-    observe metrics [page_views, unique_visitors, organic_pct, conversion_rate_pct] level adaptive
-    observe events [period_id, page_views, organic_pct, conversion_rate_pct]
-    sign {
+    @observe metrics [page_views, unique_visitors, organic_pct, conversion_rate_pct] level adaptive
+    @observe events [period_id, page_views, organic_pct, conversion_rate_pct]
+    @sign {
         algorithm mldsa87
         key_field period_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field period_id
         proof_system groth16
     }
@@ -74,7 +74,7 @@ data GrowthSignal : circuit v1 {
     detected_at: u64,
     recommended_action: bytes(256),
 }
-    encode @ bytes(332) {
+    @encode @ bytes(332) {
         signal_id            @ le,
         signal_type          @ le,
         magnitude            @ le,
@@ -82,17 +82,17 @@ data GrowthSignal : circuit v1 {
         detected_at          @ le,
         recommended_action   @ le,
     }
-    store kv
-    series retain 90d
-    observe metrics [signal_type, magnitude, confidence] level adaptive
-    observe events [signal_type, magnitude, confidence]
-    sign {
+    @store kv
+    @series retain 90d
+    @observe metrics [signal_type, magnitude, confidence] level adaptive
+    @observe events [signal_type, magnitude, confidence]
+    @sign {
         algorithm mldsa87
         key_field signal_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field signal_id
         proof_system groth16
     }
@@ -106,7 +106,7 @@ data ContentPerformance : circuit v1 {
     keyword: bytes(128),
     last_updated: u64,
 }
-    encode @ bytes(180) {
+    @encode @ bytes(180) {
         content_id    @ le,
         impressions   @ le,
         clicks        @ le,
@@ -115,9 +115,9 @@ data ContentPerformance : circuit v1 {
         keyword       @ le,
         last_updated  @ le,
     }
-    store kv
-    series retain 365d
-    cortex {
+    @store kv
+    @series retain 365d
+    @cortex {
         visibility {
             content_id obfuscate
             keyword redact for analytics
@@ -130,8 +130,8 @@ data ContentPerformance : circuit v1 {
             drift_threshold 0.06
         }
     }
-    observe metrics [impressions, clicks, ctr_pct, avg_position] level adaptive
-    observe events [content_id, impressions, ctr_pct, avg_position]
+    @observe metrics [impressions, clicks, ctr_pct, avg_position] level adaptive
+    @observe events [content_id, impressions, ctr_pct, avg_position]
 
 // =============================================================================
 // Graph Declaration — Content-Keyword Relationships
@@ -144,9 +144,9 @@ graph content_keyword_graph {
     edge competes_with : ContentNode -> ContentNode
     edge derived_from : KeywordNode -> KeywordNode
     storage csr { tier bram { capacity: 100000 } }
-    sign ml_dsa_87
+    @sign ml_dsa_87
     ai_feed content_keyword_analysis
-    observe streamsight: [content_count, keyword_count, avg_ctr] threshold: {
+    @observe streamsight: [content_count, keyword_count, avg_ctr] threshold: {
         avg_ctr 0.9
         baseline_window 86400
     }
@@ -157,33 +157,33 @@ graph content_keyword_graph {
 // =============================================================================
 
 stream tide_traffic_events: event<TrafficMetrics>
-    retention 365d
-    consumers [streamsight, cortex, analytics, alerting]
-    classify period_id: IDENTIFIER, page_views: METRIC, organic_pct: METRIC, conversion_rate_pct: METRIC
+    @retention 365d
+    @consumers [streamsight, cortex, analytics, alerting]
+    @classify period_id: IDENTIFIER, page_views: METRIC, organic_pct: METRIC, conversion_rate_pct: METRIC
 
 stream tide_signal_events: event<GrowthSignal>
-    retention 90d
-    consumers [streamsight, cortex, analytics, alerting]
-    classify signal_id: IDENTIFIER, signal_type: METADATA, magnitude: METRIC, confidence: METRIC
+    @retention 90d
+    @consumers [streamsight, cortex, analytics, alerting]
+    @classify signal_id: IDENTIFIER, signal_type: METADATA, magnitude: METRIC, confidence: METRIC
 
 stream tide_content_events: event<ContentPerformance>
-    retention 365d
-    consumers [streamsight, cortex, analytics]
-    classify content_id: IDENTIFIER, keyword: METADATA, impressions: METRIC, ctr_pct: METRIC
+    @retention 365d
+    @consumers [streamsight, cortex, analytics]
+    @classify content_id: IDENTIFIER, keyword: METADATA, impressions: METRIC, ctr_pct: METRIC
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series tide_traffic_audit: tide_traffic_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 series tide_signal_audit: tide_signal_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Analyze Traffic
@@ -194,19 +194,19 @@ series tide_signal_audit: tide_signal_events
 // trends. Returns a list of detected signals with magnitude and confidence.
 
 circuit tide_analyze_traffic(period_id: bytes(32), metrics: TrafficMetrics, pk: bytes(1568)) -> list<GrowthSignal>
-    lex esn/marketplace/advertising/tide {
+    @lex marketplace/advertising/tide {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [periods_analyzed, signals_detected, avg_signal_confidence, signal_type_distribution]
-    invariant "period_id_not_empty" { period_id != 0 }
-    invariant "page_views_positive" { metrics.page_views > 0 }
-    monitor "signal_confidence_floor" { avg_signal_confidence > 500 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [periods_analyzed, signals_detected, avg_signal_confidence, signal_type_distribution]
+    @invariant "period_id_not_empty" { period_id != 0 }
+    @invariant "page_views_positive" { metrics.page_views > 0 }
+    @monitor "signal_confidence_floor" { avg_signal_confidence > 500 }
+    @fuzz_target
 {
     let period_hash = sha3_256(period_id)
     let metrics_hash = sha3_256(metrics)
@@ -238,18 +238,18 @@ circuit tide_analyze_traffic(period_id: bytes(32), metrics: TrafficMetrics, pk: 
 // improvement suggestions. Updates the content-keyword graph.
 
 circuit tide_rank_content(content_ids: list<bytes(32)>, pk: bytes(1568)) -> list<ContentPerformance>
-    lex esn/marketplace/advertising/tide {
+    @lex marketplace/advertising/tide {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [content_ranked, avg_ctr, avg_position, low_performing_count]
-    invariant "content_ids_not_empty" { len(content_ids) > 0 }
-    monitor "avg_ctr_floor" { avg_ctr > 100 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [content_ranked, avg_ctr, avg_position, low_performing_count]
+    @invariant "content_ids_not_empty" { len(content_ids) > 0 }
+    @monitor "avg_ctr_floor" { avg_ctr > 100 }
+    @fuzz_target
 {
     let batch_hash = sha3_256(content_ids)
     let kem = mlkem_encaps(pk)
@@ -280,17 +280,17 @@ circuit tide_rank_content(content_ids: list<bytes(32)>, pk: bytes(1568)) -> list
 // for continuous calibration against actuals.
 
 circuit tide_forecast_growth(current_metrics: TrafficMetrics, pk: bytes(1568)) -> TrafficMetrics
-    lex esn/marketplace/advertising/tide {
+    @lex marketplace/advertising/tide {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [forecasts_generated, forecast_accuracy, forecast_error_pct]
-    invariant "metrics_has_data" { current_metrics.page_views > 0 }
-    monitor "forecast_error_ceiling" { forecast_error_pct < 0.15 }
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [forecasts_generated, forecast_accuracy, forecast_error_pct]
+    @invariant "metrics_has_data" { current_metrics.page_views > 0 }
+    @monitor "forecast_error_ceiling" { forecast_error_pct < 0.15 }
 {
     let metrics_hash = sha3_256(current_metrics)
     let kem = mlkem_encaps(pk)
@@ -323,16 +323,16 @@ circuit tide_forecast_growth(current_metrics: TrafficMetrics, pk: bytes(1568)) -
 // GrowthSignal if an anomaly is detected, or none if traffic is normal.
 
 circuit tide_detect_anomaly(current_metrics: TrafficMetrics, pk: bytes(1568)) -> option<GrowthSignal>
-    lex esn/marketplace/advertising/tide {
+    @lex marketplace/advertising/tide {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    streamsight true
-    povc true
-    observe metrics: [anomaly_checks, anomalies_detected, false_positive_rate]
-    invariant "metrics_has_data" { current_metrics.page_views > 0 }
-    monitor "false_positive_ceiling" { false_positive_rate < 0.05 }
+    @precision A
+    @observe true
+    @attested true
+    @observe metrics: [anomaly_checks, anomalies_detected, false_positive_rate]
+    @invariant "metrics_has_data" { current_metrics.page_views > 0 }
+    @monitor "false_positive_ceiling" { false_positive_rate < 0.05 }
 {
     let metrics_hash = sha3_256(current_metrics)
     let kem = mlkem_encaps(pk)

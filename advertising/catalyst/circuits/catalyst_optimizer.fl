@@ -33,7 +33,7 @@ data OutcomeRecord : app v1 {
     submitted_at: u64,
     decided_at: u64,
 }
-    encode @ bytes(170) {
+    @encode @ bytes(170) {
         record_id         @ le,
         application_id    @ le,
         outcome           @ le,
@@ -44,9 +44,9 @@ data OutcomeRecord : app v1 {
         submitted_at      @ le,
         decided_at        @ le,
     }
-    store kv
-    series retain 7y
-    cortex {
+    @store kv
+    @series retain 7y
+    @cortex {
         visibility {
             application_id obfuscate
             features_hash redact for analytics
@@ -59,15 +59,15 @@ data OutcomeRecord : app v1 {
             drift_threshold 0.05
         }
     }
-    observe metrics [outcome, confidence, predicted_outcome] level adaptive
-    observe events [outcome, confidence, predicted_outcome]
-    sign {
+    @observe metrics [outcome, confidence, predicted_outcome] level adaptive
+    @observe events [outcome, confidence, predicted_outcome]
+    @sign {
         algorithm mldsa87
         key_field record_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field record_id
         proof_system groth16
     }
@@ -79,23 +79,23 @@ data OptimizationSuggestion : circuit v1 {
     confidence: u32,
     reasoning_hash: bytes(32),
 }
-    encode @ bytes(132) {
+    @encode @ bytes(132) {
         suggestion_id    @ le,
         application_id   @ le,
         action           @ le,
         confidence       @ le,
         reasoning_hash   @ le,
     }
-    store kv
-    series retain 365d
-    observe events [action, confidence]
-    sign {
+    @store kv
+    @series retain 365d
+    @observe events [action, confidence]
+    @sign {
         algorithm mldsa87
         key_field suggestion_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field suggestion_id
         proof_system groth16
     }
@@ -109,7 +109,7 @@ data FeedbackLoop : circuit v1 {
     drift_score: u32,
     last_retrained_at: u64,
 }
-    encode @ bytes(92) {
+    @encode @ bytes(92) {
         loop_id             @ le,
         model_version       @ le,
         total_predictions   @ le,
@@ -118,49 +118,49 @@ data FeedbackLoop : circuit v1 {
         drift_score         @ le,
         last_retrained_at   @ le,
     }
-    store kv
-    series retain forever
-    cortex {
+    @store kv
+    @series retain forever
+    @cortex {
         inference on_threshold {
             consumer "catalyst_drift_detector"
             threshold accuracy < 0.75
         }
     }
-    observe metrics [accuracy, drift_score, total_predictions] level adaptive
-    observe events [accuracy, drift_score, model_version]
+    @observe metrics [accuracy, drift_score, total_predictions] level adaptive
+    @observe events [accuracy, drift_score, model_version]
 
 // =============================================================================
 // Stream Declarations
 // =============================================================================
 
 stream catalyst_outcome_events: event<OutcomeRecord>
-    retention 7y
-    consumers [streamsight, cortex, analytics, alerting]
-    classify record_id: IDENTIFIER, application_id: IDENTIFIER, outcome: METADATA, confidence: METRIC
+    @retention 7y
+    @consumers [streamsight, cortex, analytics, alerting]
+    @classify record_id: IDENTIFIER, application_id: IDENTIFIER, outcome: METADATA, confidence: METRIC
 
 stream catalyst_suggestion_events: event<OptimizationSuggestion>
-    retention 365d
-    consumers [streamsight, cortex, analytics]
-    classify suggestion_id: IDENTIFIER, application_id: IDENTIFIER, action: METADATA, confidence: METRIC
+    @retention 365d
+    @consumers [streamsight, cortex, analytics]
+    @classify suggestion_id: IDENTIFIER, application_id: IDENTIFIER, action: METADATA, confidence: METRIC
 
 stream catalyst_feedback_events: event<FeedbackLoop>
-    retention forever
-    consumers [streamsight, cortex, analytics, alerting]
-    classify loop_id: IDENTIFIER, accuracy: METRIC, drift_score: METRIC
+    @retention forever
+    @consumers [streamsight, cortex, analytics, alerting]
+    @classify loop_id: IDENTIFIER, accuracy: METRIC, drift_score: METRIC
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series catalyst_outcome_audit: catalyst_outcome_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 series catalyst_feedback_audit: catalyst_feedback_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Predict Outcome
@@ -171,20 +171,20 @@ series catalyst_feedback_audit: catalyst_feedback_events
 // Returns an OutcomeRecord with predicted outcome and confidence.
 
 circuit catalyst_predict_outcome(application_id: bytes(32), features: bytes(2048), pk: bytes(1568)) -> OutcomeRecord
-    lex esn/marketplace/advertising/catalyst {
+    @lex marketplace/advertising/catalyst {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [predictions_made, prediction_errors, avg_confidence, outcome_distribution]
-    invariant "application_id_not_empty" { application_id != 0 }
-    invariant "features_not_empty" { features != 0 }
-    monitor "prediction_error_rate" { prediction_errors / predictions_made < 0.02 }
-    monitor "confidence_floor" { avg_confidence > 600 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [predictions_made, prediction_errors, avg_confidence, outcome_distribution]
+    @invariant "application_id_not_empty" { application_id != 0 }
+    @invariant "features_not_empty" { features != 0 }
+    @monitor "prediction_error_rate" { prediction_errors / predictions_made < 0.02 }
+    @monitor "confidence_floor" { avg_confidence > 600 }
+    @fuzz_target
 {
     let features_hash = sha3_256(features)
     let record_id = sha3_256(application_id)
@@ -221,17 +221,17 @@ circuit catalyst_predict_outcome(application_id: bytes(32), features: bytes(2048
 // result back to Cortex for model calibration.
 
 circuit catalyst_record_outcome(application_id: bytes(32), actual_outcome: enum { Approved, Denied, Pending, Withdrawn }, pk: bytes(1568)) -> OutcomeRecord
-    lex esn/marketplace/advertising/catalyst {
+    @lex marketplace/advertising/catalyst {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [outcomes_recorded, approval_rate, denial_rate, feedback_latency_ms]
-    invariant "application_id_not_empty" { application_id != 0 }
-    monitor "feedback_latency_p99" { feedback_latency_ms < 5000 }
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [outcomes_recorded, approval_rate, denial_rate, feedback_latency_ms]
+    @invariant "application_id_not_empty" { application_id != 0 }
+    @monitor "feedback_latency_p99" { feedback_latency_ms < 5000 }
 {
     let record_hash = sha3_256(application_id)
     let kem = mlkem_encaps(pk)
@@ -264,18 +264,18 @@ circuit catalyst_record_outcome(application_id: bytes(32), actual_outcome: enum 
 // action type, confidence score, and hashed reasoning for auditability.
 
 circuit catalyst_generate_suggestions(application_id: bytes(32), pk: bytes(1568)) -> list<OptimizationSuggestion>
-    lex esn/marketplace/advertising/catalyst {
+    @lex marketplace/advertising/catalyst {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [suggestions_generated, avg_suggestion_confidence, action_distribution]
-    invariant "application_id_not_empty" { application_id != 0 }
-    monitor "suggestion_confidence_floor" { avg_suggestion_confidence > 500 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [suggestions_generated, avg_suggestion_confidence, action_distribution]
+    @invariant "application_id_not_empty" { application_id != 0 }
+    @monitor "suggestion_confidence_floor" { avg_suggestion_confidence > 500 }
+    @fuzz_target
 {
     let app_hash = sha3_256(application_id)
     let kem = mlkem_encaps(pk)
@@ -308,17 +308,17 @@ circuit catalyst_generate_suggestions(application_id: bytes(32), pk: bytes(1568)
 // and drift metrics.
 
 circuit catalyst_evaluate_drift(loop_id: bytes(32), pk: bytes(1568)) -> FeedbackLoop
-    lex esn/marketplace/advertising/catalyst {
+    @lex marketplace/advertising/catalyst {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    streamsight true
-    povc true
-    observe metrics: [drift_evaluations, current_accuracy, current_drift_score, retrains_triggered]
-    invariant "loop_id_not_empty" { loop_id != 0 }
-    monitor "accuracy_threshold" { current_accuracy > 0.75 }
-    monitor "drift_ceiling" { current_drift_score < 0.10 }
+    @precision A
+    @observe true
+    @attested true
+    @observe metrics: [drift_evaluations, current_accuracy, current_drift_score, retrains_triggered]
+    @invariant "loop_id_not_empty" { loop_id != 0 }
+    @monitor "accuracy_threshold" { current_accuracy > 0.75 }
+    @monitor "drift_ceiling" { current_drift_score < 0.10 }
 {
     let loop_hash = sha3_256(loop_id)
     let kem = mlkem_encaps(pk)

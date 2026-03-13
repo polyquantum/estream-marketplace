@@ -6,7 +6,7 @@
 // testing, manifest validation, and package scaffolding. All dev events
 // are short-lived (1h TTL) except test results retained for regression.
 
-/// govern lex esn/marketplace/dev
+/// govern lex marketplace/dev
 
 // --- Types ---
 
@@ -50,19 +50,19 @@ type DocGenResult = struct {
 
 stream dev_events: event<DevServerConfig>
     ttl 1h
-    consumers [dev, console]
+    @consumers [dev, console]
 
 stream test_results: event<TestResult>
-    retention 30d
-    consumers [dev, console, audit]
+    @retention 30d
+    @consumers [dev, console, audit]
 
 // --- Circuits ---
 
 /// test golden
 circuit start_dev_server(config: DevServerConfig) -> DevServerConfig
-    lex esn/marketplace/dev
-    precision C
-    observe metrics: [dev_server_starts, port]
+    @lex marketplace/dev
+    @precision C
+    @observe metrics: [dev_server_starts, port]
 {
     DevServerConfig {
         package_path: config.package_path,
@@ -74,9 +74,9 @@ circuit start_dev_server(config: DevServerConfig) -> DevServerConfig
 
 /// test golden
 circuit run_package_tests(package_id: PackageId, escir_version: bytes(32)) -> TestResult
-    lex esn/marketplace/dev
-    precision C
-    observe metrics: [test_runs, package_id, escir_version]
+    @lex marketplace/dev
+    @precision C
+    @observe metrics: [test_runs, package_id, escir_version]
 {
     let test_hash = sha3_256(concat(package_id, escir_version))
     TestResult {
@@ -92,9 +92,9 @@ circuit run_package_tests(package_id: PackageId, escir_version: bytes(32)) -> Te
 
 /// test golden
 circuit lint_package(package_id: PackageId) -> LintResult
-    lex esn/marketplace/dev
-    precision C
-    observe metrics: [lint_runs, package_id]
+    @lex marketplace/dev
+    @precision C
+    @observe metrics: [lint_runs, package_id]
 {
     LintResult {
         package_id: package_id,
@@ -108,9 +108,9 @@ circuit lint_package(package_id: PackageId) -> LintResult
 
 /// test golden
 circuit generate_docs(package_id: PackageId, output_path: bytes(256)) -> DocGenResult
-    lex esn/marketplace/dev
-    precision C
-    observe metrics: [doc_generations, package_id]
+    @lex marketplace/dev
+    @precision C
+    @observe metrics: [doc_generations, package_id]
 {
     DocGenResult {
         package_id: package_id,
@@ -123,9 +123,9 @@ circuit generate_docs(package_id: PackageId, output_path: bytes(256)) -> DocGenR
 
 /// test golden
 circuit check_escir_compatibility(package_id: PackageId, target_escir_version: bytes(32)) -> TestResult
-    lex esn/marketplace/dev
-    precision C
-    observe metrics: [escir_compat_checks, package_id, target_escir_version]
+    @lex marketplace/dev
+    @precision C
+    @observe metrics: [escir_compat_checks, package_id, target_escir_version]
 {
     let test_hash = sha3_256(concat(package_id, target_escir_version))
     TestResult {
@@ -141,9 +141,9 @@ circuit check_escir_compatibility(package_id: PackageId, target_escir_version: b
 
 /// test golden
 circuit scaffold_package(package_path: bytes(256)) -> DocGenResult
-    lex esn/marketplace/dev
-    precision C
-    observe metrics: [packages_scaffolded]
+    @lex marketplace/dev
+    @precision C
+    @observe metrics: [packages_scaffolded]
 {
     let id = sha3_256(package_path)
     DocGenResult {

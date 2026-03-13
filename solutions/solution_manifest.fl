@@ -6,7 +6,7 @@
 // Solutions are first-class marketplace entities that can be published,
 // discovered, and provisioned independently of individual packages.
 
-/// govern lex esn/marketplace/solutions
+/// govern lex marketplace/solutions
 
 // --- Types ---
 
@@ -49,22 +49,22 @@ type SolutionBranding = struct {
 // --- Streams ---
 
 stream solution_registry: state<SolutionId, SolutionManifest>
-    retention 365d
-    consumers [marketplace, solutions, console]
+    @retention 365d
+    @consumers [marketplace, solutions, console]
 
 stream solution_events: event<SolutionManifest>
-    retention 365d
-    consumers [marketplace, solutions, audit]
+    @retention 365d
+    @consumers [marketplace, solutions, audit]
 
 // --- Circuits ---
 
 /// test golden
 circuit create_solution(manifest: SolutionManifest) -> SolutionManifest
-    lex esn/marketplace/solutions
-    precision B
-    rbac [solution_admin, marketplace_admin]
-    povc true
-    observe metrics: [solutions_created, solution_id, tier]
+    @lex marketplace/solutions
+    @precision B
+    @rbac [solution_admin, marketplace_admin]
+    @attested true
+    @observe metrics: [solutions_created, solution_id, tier]
 {
     let id = sha3_256(concat(manifest.name, manifest.version, manifest.publisher))
     SolutionManifest {
@@ -84,11 +84,11 @@ circuit create_solution(manifest: SolutionManifest) -> SolutionManifest
 
 /// test golden
 circuit add_package_to_solution(solution_id: SolutionId, package: BundledPackage) -> bool
-    lex esn/marketplace/solutions
-    precision B
-    rbac [solution_admin]
-    povc true
-    observe metrics: [packages_added, solution_id, package_id]
+    @lex marketplace/solutions
+    @precision B
+    @rbac [solution_admin]
+    @attested true
+    @observe metrics: [packages_added, solution_id, package_id]
 {
     let valid = package.package_id != solution_id
     valid
@@ -96,11 +96,11 @@ circuit add_package_to_solution(solution_id: SolutionId, package: BundledPackage
 
 /// test golden
 circuit remove_package_from_solution(solution_id: SolutionId, package_id: PackageId) -> bool
-    lex esn/marketplace/solutions
-    precision B
-    rbac [solution_admin]
-    povc true
-    observe metrics: [packages_removed, solution_id, package_id]
+    @lex marketplace/solutions
+    @precision B
+    @rbac [solution_admin]
+    @attested true
+    @observe metrics: [packages_removed, solution_id, package_id]
 {
     let removed = package_id != solution_id
     removed
@@ -108,10 +108,10 @@ circuit remove_package_from_solution(solution_id: SolutionId, package_id: Packag
 
 /// test golden
 circuit validate_solution_bundle(manifest: SolutionManifest, packages: list<BundledPackage>) -> bool
-    lex esn/marketplace/solutions
-    precision B
-    observe metrics: [bundles_validated, solution_id, packages_count]
-    invariant "has_packages" { manifest.packages_count > 0 }
+    @lex marketplace/solutions
+    @precision B
+    @observe metrics: [bundles_validated, solution_id, packages_count]
+    @invariant "has_packages" { manifest.packages_count > 0 }
 {
     let hash = sha3_256(manifest.solution_id)
     let valid = manifest.packages_count > 0
@@ -120,11 +120,11 @@ circuit validate_solution_bundle(manifest: SolutionManifest, packages: list<Bund
 
 /// test golden
 circuit publish_solution(manifest: SolutionManifest) -> SolutionManifest
-    lex esn/marketplace/solutions
-    precision B
-    rbac [solution_admin]
-    povc true
-    observe metrics: [solutions_published, solution_id, tier]
+    @lex marketplace/solutions
+    @precision B
+    @rbac [solution_admin]
+    @attested true
+    @observe metrics: [solutions_published, solution_id, tier]
 {
     SolutionManifest {
         solution_id: manifest.solution_id,
@@ -143,9 +143,9 @@ circuit publish_solution(manifest: SolutionManifest) -> SolutionManifest
 
 /// test golden
 circuit get_solution_info(solution_id: SolutionId) -> SolutionManifest
-    lex esn/marketplace/solutions
-    precision C
-    observe metrics: [solution_lookups, solution_id]
+    @lex marketplace/solutions
+    @precision C
+    @observe metrics: [solution_lookups, solution_id]
 {
     SolutionManifest {
         solution_id: solution_id,

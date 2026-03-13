@@ -20,12 +20,12 @@ data UserProfile : app v1 {
     name: bytes(128),
     email: bytes(256),
     phone: bytes(32),
-    status: u8,
+    @status: u8,
     created_at: u64,
     updated_at: u64,
     metadata: bytes(512),
 }
-    encode @ bytes(1000) {
+    @encode @ bytes(1000) {
         id          @ le,
         name        @ le,
         email       @ le,
@@ -35,24 +35,24 @@ data UserProfile : app v1 {
         updated_at  @ le,
         metadata    @ le,
     }
-    store graph
-    store kv
-    series retain 365d
-    cortex {
+    @store graph
+    @store kv
+    @series retain 365d
+    @cortex {
         name obfuscate
         email obfuscate
         phone redact
         status expose
     }
-    observe metrics [status, created_at, updated_at] level adaptive
-    observe events [status, updated_at]
-    sign {
+    @observe metrics [status, created_at, updated_at] level adaptive
+    @observe events [status, updated_at]
+    @sign {
         algorithm mldsa87
         key_field id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field id
         proof_system groth16
     }
@@ -66,16 +66,16 @@ data Relationship : app v1 {
     strength: u32,
     created_at: u64,
 }
-    encode @ bytes(77) {
+    @encode @ bytes(77) {
         from_id           @ le,
         to_id             @ le,
         relationship_type @ le,
         strength          @ le,
         created_at        @ le,
     }
-    store graph
-    observe metrics [relationship_type, strength] level adaptive
-    observe events [relationship_type, strength]
+    @store graph
+    @observe metrics [relationship_type, strength] level adaptive
+    @observe events [relationship_type, strength]
 
 // RelationshipType: 0 = CLAIM, 1 = LEAD, 2 = PARTNER, 3 = REFERRAL
 
@@ -85,7 +85,7 @@ data ClaimInfo : circuit v1 {
     state: u8,
     filed_at: u64,
 }
-    observe events [claim_id, state]
+    @observe events [claim_id, state]
 
 data LeadInfo : circuit v1 {
     lead_id: bytes(32),
@@ -93,7 +93,7 @@ data LeadInfo : circuit v1 {
     state: u8,
     score: u32,
 }
-    observe events [lead_id, state, score]
+    @observe events [lead_id, state, score]
 
 data PartnerInfo : circuit v1 {
     partner_id: bytes(32),
@@ -101,21 +101,21 @@ data PartnerInfo : circuit v1 {
     partner_type: u8,
     active: bool,
 }
-    observe events [partner_id, active]
+    @observe events [partner_id, active]
 
 data UserProfileInfo : circuit v1 {
     id: bytes(32),
     name: bytes(128),
-    status: u8,
+    @status: u8,
 }
-    observe events [id, status]
+    @observe events [id, status]
 
 data TraversalResult : circuit v1 {
     node_ids: list<bytes(32)>,
     depth_reached: u32,
     edge_count: u32,
 }
-    observe metrics [depth_reached, edge_count] level adaptive
+    @observe metrics [depth_reached, edge_count] level adaptive
 
 // =============================================================================
 // Graph Declaration
@@ -131,9 +131,9 @@ graph crm_graph {
     edge referred_to : Lead -> Partner
     edge referred_by : UserProfile -> UserProfile
     storage csr { tier bram { capacity: 100000 } }
-    sign ml_dsa_87
+    @sign ml_dsa_87
     ai_feed relationship_analysis
-    observe streamsight: [node_count, edge_count, traversal_depth] threshold: {
+    @observe streamsight: [node_count, edge_count, traversal_depth] threshold: {
         node_count 0.9
         baseline_window 3600
     }
@@ -144,23 +144,23 @@ graph crm_graph {
 // =============================================================================
 
 stream crm_profile_events: event<UserProfile>
-    retention 7y
-    consumers [streamsight, audit, cortex]
-    classify id: IDENTIFIER, name: PII, email: PII, status: METADATA
+    @retention 7y
+    @consumers [streamsight, audit, cortex]
+    @classify id: IDENTIFIER, name: PII, email: PII, status: METADATA
 
 stream crm_relationship_events: event<Relationship>
-    retention 7y
-    consumers [streamsight, audit]
-    classify from_id: IDENTIFIER, to_id: IDENTIFIER, relationship_type: METADATA
+    @retention 7y
+    @consumers [streamsight, audit]
+    @classify from_id: IDENTIFIER, to_id: IDENTIFIER, relationship_type: METADATA
 
 // =============================================================================
 // Series Declaration
 // =============================================================================
 
 series crm_audit_series: crm_profile_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Create User Profile
@@ -171,19 +171,19 @@ series crm_audit_series: crm_profile_events
 // to the event stream. Cortex PII governance is applied inline.
 
 circuit crm_create_profile(name: bytes(128), email: bytes(256), phone: bytes(32), pk: bytes(1568)) -> UserProfile
-    lex esn/marketplace/advertising/crm {
+    @lex marketplace/advertising/crm {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [profiles_created, create_errors]
-    invariant "name_not_empty" { name != 0 }
-    invariant "email_not_empty" { email != 0 }
-    monitor "create_error_rate" { create_errors / profiles_created < 0.01 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [profiles_created, create_errors]
+    @invariant "name_not_empty" { name != 0 }
+    @invariant "email_not_empty" { email != 0 }
+    @monitor "create_error_rate" { create_errors / profiles_created < 0.01 }
+    @fuzz_target
 {
     let id_seed = sha3_256(name)
     let profile_id = sha3_256(id_seed)
@@ -215,16 +215,16 @@ circuit crm_create_profile(name: bytes(128), email: bytes(256), phone: bytes(32)
 // Every update is signed and produces an audit event.
 
 circuit crm_update_profile(profile_id: bytes(32), updates: bytes(512), pk: bytes(1568)) -> UserProfile
-    lex esn/marketplace/advertising/crm {
+    @lex marketplace/advertising/crm {
         governance hierarchical
         audit_trail true
     }
-    precision B
-    streamsight true
-    povc true
-    observe metrics: [profiles_updated, update_errors]
-    invariant "profile_id_not_empty" { profile_id != 0 }
-    monitor "update_error_rate" { update_errors / profiles_updated < 0.01 }
+    @precision B
+    @observe true
+    @attested true
+    @observe metrics: [profiles_updated, update_errors]
+    @invariant "profile_id_not_empty" { profile_id != 0 }
+    @monitor "update_error_rate" { update_errors / profiles_updated < 0.01 }
 {
     let update_hash = sha3_256(updates)
     let kem = mlkem_encaps(pk)
@@ -255,18 +255,18 @@ circuit crm_update_profile(profile_id: bytes(32), updates: bytes(512), pk: bytes
 // and produces a relationship event for StreamSight tracking.
 
 circuit crm_add_relationship(from_id: bytes(32), to_id: bytes(32), rel_type: u8, pk: bytes(1568)) -> Relationship
-    lex esn/marketplace/advertising/crm {
+    @lex marketplace/advertising/crm {
         governance hierarchical
         audit_trail true
     }
-    precision B
-    streamsight true
-    povc true
-    observe metrics: [relationships_added, relationship_errors, edge_count]
-    invariant "from_id_not_empty" { from_id != 0 }
-    invariant "to_id_not_empty" { to_id != 0 }
-    invariant "rel_type_valid" { rel_type <= 3 }
-    monitor "relationship_error_rate" { relationship_errors / relationships_added < 0.01 }
+    @precision B
+    @observe true
+    @attested true
+    @observe metrics: [relationships_added, relationship_errors, edge_count]
+    @invariant "from_id_not_empty" { from_id != 0 }
+    @invariant "to_id_not_empty" { to_id != 0 }
+    @invariant "rel_type_valid" { rel_type <= 3 }
+    @monitor "relationship_error_rate" { relationship_errors / relationships_added < 0.01 }
 {
     let edge_hash = sha3_256(from_id)
     let kem = mlkem_encaps(pk)
@@ -294,13 +294,13 @@ circuit crm_add_relationship(from_id: bytes(32), to_id: bytes(32), rel_type: u8,
 // Traversal depth is capped to prevent unbounded fan-out.
 
 circuit crm_traverse_relationships(user_id: bytes(32), rel_type: u8, depth: u32, pk: bytes(1568)) -> list<bytes(32)>
-    lex esn/marketplace/advertising/crm
-    precision C
-    streamsight true
-    observe metrics: [traversals_executed, nodes_visited, max_depth_reached]
-    invariant "user_id_not_empty" { user_id != 0 }
-    invariant "depth_bounded" { depth <= 10 }
-    monitor "traversal_fanout" { nodes_visited / traversals_executed < 1000 }
+    @lex marketplace/advertising/crm
+    @precision C
+    @observe true
+    @observe metrics: [traversals_executed, nodes_visited, max_depth_reached]
+    @invariant "user_id_not_empty" { user_id != 0 }
+    @invariant "depth_bounded" { depth <= 10 }
+    @monitor "traversal_fanout" { nodes_visited / traversals_executed < 1000 }
 {
     let traversal_hash = sha3_256(user_id)
     let kem = mlkem_encaps(pk)

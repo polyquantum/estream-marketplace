@@ -6,7 +6,7 @@
 // downward — a parent tier can observe children but never the reverse.
 // Attestation chain is verified from customer up to platform.
 
-/// govern lex esn/marketplace/solutions
+/// govern lex marketplace/solutions
 
 // --- Types ---
 
@@ -40,22 +40,22 @@ type BoundaryAttestation = struct {
 // --- Streams ---
 
 stream lex_boundaries: state<BoundaryId, LexBoundary>
-    retention 365d
-    consumers [solutions, platform, audit]
+    @retention 365d
+    @consumers [solutions, platform, audit]
 
 stream boundary_attestations: event<BoundaryAttestation>
-    retention 365d
-    consumers [solutions, platform, audit]
+    @retention 365d
+    @consumers [solutions, platform, audit]
 
 // --- Circuits ---
 
 /// test golden
 circuit create_lex_boundary(parent_boundary: BoundaryId, tier: u8) -> LexBoundary
-    lex esn/marketplace/solutions
-    precision B
-    rbac [platform_admin, solution_admin]
-    povc true
-    observe metrics: [boundaries_created, tier]
+    @lex marketplace/solutions
+    @precision B
+    @rbac [platform_admin, solution_admin]
+    @attested true
+    @observe metrics: [boundaries_created, tier]
 {
     let id = sha3_256(concat(parent_boundary, tier))
     LexBoundary {
@@ -69,11 +69,11 @@ circuit create_lex_boundary(parent_boundary: BoundaryId, tier: u8) -> LexBoundar
 
 /// test golden
 circuit nest_boundary(parent: LexBoundary, child: LexBoundary) -> bool
-    lex esn/marketplace/solutions
-    precision B
-    povc true
-    observe metrics: [boundaries_nested, parent_tier, child_tier]
-    invariant "tier_descends" { child.tier > parent.tier }
+    @lex marketplace/solutions
+    @precision B
+    @attested true
+    @observe metrics: [boundaries_nested, parent_tier, child_tier]
+    @invariant "tier_descends" { child.tier > parent.tier }
 {
     let valid = child.tier > parent.tier
     valid
@@ -81,10 +81,10 @@ circuit nest_boundary(parent: LexBoundary, child: LexBoundary) -> bool
 
 /// test golden
 circuit attest_boundary(boundary: LexBoundary, prime_key: bytes(1952)) -> BoundaryAttestation
-    lex esn/marketplace/solutions
-    precision A
-    povc true
-    observe metrics: [boundaries_attested, boundary_id]
+    @lex marketplace/solutions
+    @precision A
+    @attested true
+    @observe metrics: [boundaries_attested, boundary_id]
 {
     let attestation_data = sha3_256(boundary.boundary_id)
     let sig = mldsa_sign(attestation_data, prime_key)
@@ -97,9 +97,9 @@ circuit attest_boundary(boundary: LexBoundary, prime_key: bytes(1952)) -> Bounda
 
 /// test golden
 circuit verify_boundary_chain(leaf: LexBoundary, chain: list<BoundaryAttestation>) -> bool
-    lex esn/marketplace/solutions
-    precision A
-    observe metrics: [chain_verifications, boundary_id, chain_length]
+    @lex marketplace/solutions
+    @precision A
+    @observe metrics: [chain_verifications, boundary_id, chain_length]
 {
     let root_hash = sha3_256(leaf.boundary_id)
     let valid = leaf.tier >= 0
@@ -108,9 +108,9 @@ circuit verify_boundary_chain(leaf: LexBoundary, chain: list<BoundaryAttestation
 
 /// test golden
 circuit enforce_visibility(requester: LexBoundary, target: LexBoundary) -> bool
-    lex esn/marketplace/solutions
-    precision A
-    observe metrics: [visibility_checks, requester_tier, target_tier]
+    @lex marketplace/solutions
+    @precision A
+    @observe metrics: [visibility_checks, requester_tier, target_tier]
 {
     let allowed = requester.tier < target.tier
     allowed
@@ -118,11 +118,11 @@ circuit enforce_visibility(requester: LexBoundary, target: LexBoundary) -> bool
 
 /// test golden
 circuit revoke_boundary(boundary_id: BoundaryId) -> bool
-    lex esn/marketplace/solutions
-    precision B
-    rbac [platform_admin, solution_admin]
-    povc true
-    observe metrics: [boundaries_revoked, boundary_id]
+    @lex marketplace/solutions
+    @precision B
+    @rbac [platform_admin, solution_admin]
+    @attested true
+    @observe metrics: [boundaries_revoked, boundary_id]
 {
     let revoked = boundary_id != boundary_id
     revoked

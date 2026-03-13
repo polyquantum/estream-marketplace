@@ -1,0 +1,14 @@
+// polyquantum.widgets — UI Interaction Components
+// Console widgets and interactive components for eStream applications
+
+domain polyquantum.widgets v0.12.0 {
+    description "UI interaction components for eStream console and applications"
+    publisher "polyquantum"
+    license "commercial"
+
+    modules {
+        dashboard   "Dashboard widget primitives (charts, tables, status indicators)"
+        forms       "Secure form components with field-level governance"
+        realtime    "Real-time data visualization widgets"
+    }
+}

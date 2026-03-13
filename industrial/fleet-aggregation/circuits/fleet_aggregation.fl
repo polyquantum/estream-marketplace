@@ -42,9 +42,9 @@ type FleetConfig = struct {
 
 /// Small fleet: 1–50 sites, single region, basic health scoring.
 circuit fleet_profile_small() -> FleetProfile
-    status production
-    spec ESTREAM-FLEET-001
-    lex esn/marketplace/fleet/profile/small
+    @status production
+    @spec ESTREAM-FLEET-001
+    @lex marketplace/fleet/profile/small
 {
     FleetProfile {
         name: 0x736D616C,
@@ -59,9 +59,9 @@ circuit fleet_profile_small() -> FleetProfile
 
 /// Medium fleet: 50–200 sites, regional grouping, full anomaly correlation.
 circuit fleet_profile_medium() -> FleetProfile
-    status production
-    spec ESTREAM-FLEET-001
-    lex esn/marketplace/fleet/profile/medium
+    @status production
+    @spec ESTREAM-FLEET-001
+    @lex marketplace/fleet/profile/medium
 {
     FleetProfile {
         name: 0x6D656469,
@@ -76,9 +76,9 @@ circuit fleet_profile_medium() -> FleetProfile
 
 /// Large fleet: 200–1000 sites, deviation-only ingestion, full AI pipeline.
 circuit fleet_profile_large() -> FleetProfile
-    status production
-    spec ESTREAM-FLEET-001
-    lex esn/marketplace/fleet/profile/large
+    @status production
+    @spec ESTREAM-FLEET-001
+    @lex marketplace/fleet/profile/large
 {
     FleetProfile {
         name: 0x6C617267,
@@ -97,9 +97,9 @@ circuit fleet_profile_large() -> FleetProfile
 
 /// Default weights for thermoelectric / energy generation fleets.
 circuit default_weights_energy() -> HealthWeights
-    status production
-    spec ESTREAM-FLEET-001
-    lex esn/marketplace/fleet/weights/energy
+    @status production
+    @spec ESTREAM-FLEET-001
+    @lex marketplace/fleet/weights/energy
 {
     HealthWeights {
         weights: [0.20, 0.15, 0.15, 0.10, 0.10, 0.10, 0.05, 0.05, 0.03, 0.03, 0.02, 0.01, 0.01, 0.0, 0.0, 0.0],
@@ -111,9 +111,9 @@ circuit default_weights_energy() -> HealthWeights
 
 /// Default weights for manufacturing / SCADA fleets.
 circuit default_weights_manufacturing() -> HealthWeights
-    status production
-    spec ESTREAM-FLEET-001
-    lex esn/marketplace/fleet/weights/manufacturing
+    @status production
+    @spec ESTREAM-FLEET-001
+    @lex marketplace/fleet/weights/manufacturing
 {
     HealthWeights {
         weights: [0.25, 0.20, 0.15, 0.10, 0.10, 0.05, 0.05, 0.05, 0.03, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -125,9 +125,9 @@ circuit default_weights_manufacturing() -> HealthWeights
 
 /// Default weights for logistics / fleet tracking deployments.
 circuit default_weights_logistics() -> HealthWeights
-    status production
-    spec ESTREAM-FLEET-001
-    lex esn/marketplace/fleet/weights/logistics
+    @status production
+    @spec ESTREAM-FLEET-001
+    @lex marketplace/fleet/weights/logistics
 {
     HealthWeights {
         weights: [0.15, 0.15, 0.15, 0.15, 0.10, 0.10, 0.05, 0.05, 0.05, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -145,10 +145,10 @@ circuit default_weights_logistics() -> HealthWeights
 /// Validates configuration, applies defaults for missing weights, and
 /// returns a fully wired FleetAggregation graph reference.
 circuit create_fleet(config: FleetConfig) -> u32
-    status production
-    spec ESTREAM-FLEET-001
-    lex esn/marketplace/fleet/create
-    observe metrics: [profile_name, sites_configured, regions_configured, ai_slots_active]
+    @status production
+    @spec ESTREAM-FLEET-001
+    @lex marketplace/fleet/create
+    @observe metrics: [profile_name, sites_configured, regions_configured, ai_slots_active]
 {
     let _profile = config.profile
     let _weights = config.health_weights

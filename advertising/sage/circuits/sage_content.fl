@@ -33,7 +33,7 @@ data ContentNode : app v1 {
     created_at: u64,
     published: bool,
 }
-    encode @ bytes(1001) {
+    @encode @ bytes(1001) {
         content_id  @ le,
         title       @ le,
         body_hash   @ le,
@@ -43,10 +43,10 @@ data ContentNode : app v1 {
         created_at  @ le,
         published   @ le,
     }
-    store graph
-    store kv
-    series retain 365d
-    cortex {
+    @store graph
+    @store kv
+    @series retain 365d
+    @cortex {
         ai_feed {
             model "sage_seo_optimizer"
             input [title, topic, keywords, engagement_metrics]
@@ -55,15 +55,15 @@ data ContentNode : app v1 {
             drift_threshold 0.10
         }
     }
-    observe metrics [seo_score, topic, published] level adaptive
-    observe events [content_id, seo_score, published]
-    sign {
+    @observe metrics [seo_score, topic, published] level adaptive
+    @observe events [content_id, seo_score, published]
+    @sign {
         algorithm mldsa87
         key_field content_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field content_id
         proof_system groth16
     }
@@ -74,7 +74,7 @@ data TopicInfo : circuit v1 {
     content_count: u32,
     avg_seo_score: u64,
 }
-    observe events [topic_id, content_count, avg_seo_score]
+    @observe events [topic_id, content_count, avg_seo_score]
 
 data ContentInfo : circuit v1 {
     content_id: bytes(32),
@@ -82,7 +82,7 @@ data ContentInfo : circuit v1 {
     seo_score: u64,
     published: bool,
 }
-    observe events [content_id, seo_score, published]
+    @observe events [content_id, seo_score, published]
 
 data ContentScore : circuit v1 {
     content_id: bytes(32),
@@ -91,8 +91,8 @@ data ContentScore : circuit v1 {
     readability_score: u32,
     suggested_keywords: bytes(512),
 }
-    observe metrics [seo_score, keyword_density, readability_score] level adaptive
-    observe events [content_id, seo_score]
+    @observe metrics [seo_score, keyword_density, readability_score] level adaptive
+    @observe events [content_id, seo_score]
 
 // =============================================================================
 // Graph Declaration
@@ -105,9 +105,9 @@ graph content_graph {
     edge related : ContentNode -> ContentNode
     edge generated_from : ContentNode -> ConversationContext
     storage csr { tier bram { capacity: 50000 } }
-    sign ml_dsa_87
+    @sign ml_dsa_87
     ai_feed topic_clustering
-    observe streamsight: [content_count, seo_score_avg] threshold: {
+    @observe streamsight: [content_count, seo_score_avg] threshold: {
         seo_score_avg 0.9
         baseline_window 86400
     }
@@ -118,23 +118,23 @@ graph content_graph {
 // =============================================================================
 
 stream sage_content_events: event<ContentNode>
-    retention 365d
-    consumers [streamsight, cortex, analytics, alerting]
-    classify content_id: IDENTIFIER, topic: METADATA, seo_score: METRIC
+    @retention 365d
+    @consumers [streamsight, cortex, analytics, alerting]
+    @classify content_id: IDENTIFIER, topic: METADATA, seo_score: METRIC
 
 stream sage_content_score_events: event<ContentScore>
-    retention 365d
-    consumers [streamsight, cortex, analytics]
-    classify content_id: IDENTIFIER, seo_score: METRIC
+    @retention 365d
+    @consumers [streamsight, cortex, analytics]
+    @classify content_id: IDENTIFIER, seo_score: METRIC
 
 // =============================================================================
 // Series Declaration
 // =============================================================================
 
 series sage_content_audit: sage_content_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Generate Content
@@ -146,20 +146,20 @@ series sage_content_audit: sage_content_events
 // to the relevant Topic node.
 
 circuit sage_generate_content(topic: bytes(128), keywords: bytes(512), source_conversations: bytes(2048), pk: bytes(1568)) -> ContentNode
-    lex esn/marketplace/advertising/sage {
+    @lex marketplace/advertising/sage {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [content_generated, generation_errors, avg_seo_score]
-    invariant "topic_not_empty" { topic != 0 }
-    invariant "keywords_not_empty" { keywords != 0 }
-    monitor "generation_error_rate" { generation_errors / content_generated < 0.05 }
-    monitor "seo_quality_floor" { avg_seo_score > 700 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [content_generated, generation_errors, avg_seo_score]
+    @invariant "topic_not_empty" { topic != 0 }
+    @invariant "keywords_not_empty" { keywords != 0 }
+    @monitor "generation_error_rate" { generation_errors / content_generated < 0.05 }
+    @monitor "seo_quality_floor" { avg_seo_score > 700 }
+    @fuzz_target
 {
     let topic_hash = sha3_256(topic)
     let content_id = sha3_256(topic_hash)
@@ -198,16 +198,16 @@ circuit sage_generate_content(topic: bytes(128), keywords: bytes(512), source_co
 // suggests improvements.
 
 circuit sage_score_content(content_id: bytes(32), pk: bytes(1568)) -> u64
-    lex esn/marketplace/advertising/sage {
+    @lex marketplace/advertising/sage {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    streamsight true
-    povc true
-    observe metrics: [content_scored, scoring_errors, score_distribution]
-    invariant "content_id_not_empty" { content_id != 0 }
-    monitor "scoring_error_rate" { scoring_errors / content_scored < 0.02 }
+    @precision A
+    @observe true
+    @attested true
+    @observe metrics: [content_scored, scoring_errors, score_distribution]
+    @invariant "content_id_not_empty" { content_id != 0 }
+    @monitor "scoring_error_rate" { scoring_errors / content_scored < 0.02 }
 {
     let score_hash = sha3_256(content_id)
     let kem = mlkem_encaps(pk)
@@ -232,18 +232,18 @@ circuit sage_score_content(content_id: bytes(32), pk: bytes(1568)) -> u64
 // and signals topic authority for SEO.
 
 circuit sage_link_content(content_id: bytes(32), related_ids: bytes(1024), pk: bytes(1568)) -> bool
-    lex esn/marketplace/advertising/sage {
+    @lex marketplace/advertising/sage {
         governance hierarchical
         audit_trail true
     }
-    precision B
-    streamsight true
-    povc true
-    witness threshold(2, 3)
-    observe metrics: [content_linked, link_errors, edges_created]
-    invariant "content_id_not_empty" { content_id != 0 }
-    invariant "related_ids_not_empty" { related_ids != 0 }
-    monitor "link_error_rate" { link_errors / content_linked < 0.05 }
+    @precision B
+    @observe true
+    @attested true
+    @witness threshold(2, 3)
+    @observe metrics: [content_linked, link_errors, edges_created]
+    @invariant "content_id_not_empty" { content_id != 0 }
+    @invariant "related_ids_not_empty" { related_ids != 0 }
+    @monitor "link_error_rate" { link_errors / content_linked < 0.05 }
 {
     let link_hash = sha3_256(content_id)
     let kem = mlkem_encaps(pk)

@@ -38,7 +38,7 @@ data SettlementRecord : app v1 {
     publisher_share: u64,
     settled_at: u64,
 }
-    encode @ bytes(200) {
+    @encode @ bytes(200) {
         settlement_id    @ le,
         code_id          @ le,
         partner_id       @ le,
@@ -50,10 +50,10 @@ data SettlementRecord : app v1 {
         publisher_share  @ le,
         settled_at       @ le,
     }
-    store kv
-    store dag
-    series retain 7y
-    cortex {
+    @store kv
+    @store dag
+    @series retain 7y
+    @cortex {
         visibility {
             user_id obfuscate
             total_amount expose
@@ -63,15 +63,15 @@ data SettlementRecord : app v1 {
             publisher_share expose
         }
     }
-    observe events [total_amount, platform_fee, user_compensation]
-    observe metrics [total_amount, platform_fee, user_compensation, affiliate_share, publisher_share] level adaptive
-    sign {
+    @observe events [total_amount, platform_fee, user_compensation]
+    @observe metrics [total_amount, platform_fee, user_compensation, affiliate_share, publisher_share] level adaptive
+    @sign {
         algorithm mldsa87
         key_field settlement_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field settlement_id
         proof_system groth16
     }
@@ -83,23 +83,23 @@ data SettlementRules : app v1 {
     affiliate_share_bps: u32,
     publisher_share_bps: u32,
 }
-    encode @ bytes(48) {
+    @encode @ bytes(48) {
         rule_id               @ le,
         platform_fee_bps      @ le,
         user_compensation_bps @ le,
         affiliate_share_bps   @ le,
         publisher_share_bps   @ le,
     }
-    store kv
-    invariant "shares_sum_to_total" { platform_fee_bps + user_compensation_bps + affiliate_share_bps + publisher_share_bps == 10000 }
-    observe metrics [platform_fee_bps, user_compensation_bps, affiliate_share_bps, publisher_share_bps] level adaptive
-    sign {
+    @store kv
+    @invariant "shares_sum_to_total" { platform_fee_bps + user_compensation_bps + affiliate_share_bps + publisher_share_bps == 10000 }
+    @observe metrics [platform_fee_bps, user_compensation_bps, affiliate_share_bps, publisher_share_bps] level adaptive
+    @sign {
         algorithm mldsa87
         key_field rule_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field rule_id
     }
 
@@ -108,23 +108,23 @@ data SettlementRules : app v1 {
 // =============================================================================
 
 stream optin_settlement_events: event<SettlementRecord>
-    retention 7y
-    consumers [streamsight, audit, cortex, analytics, alerting]
-    classify settlement_id: IDENTIFIER, code_id: IDENTIFIER, partner_id: IDENTIFIER, total_amount: METRIC
+    @retention 7y
+    @consumers [streamsight, audit, cortex, analytics, alerting]
+    @classify settlement_id: IDENTIFIER, code_id: IDENTIFIER, partner_id: IDENTIFIER, total_amount: METRIC
 
 stream optin_settlement_rules: event<SettlementRules>
-    retention 7y
-    consumers [streamsight, audit, cortex]
-    classify rule_id: IDENTIFIER, platform_fee_bps: METRIC, user_compensation_bps: METRIC
+    @retention 7y
+    @consumers [streamsight, audit, cortex]
+    @classify rule_id: IDENTIFIER, platform_fee_bps: METRIC, user_compensation_bps: METRIC
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series optin_settlement_chain: optin_settlement_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Settle Engagement
@@ -140,23 +140,23 @@ series optin_settlement_chain: optin_settlement_events
 // identical outputs (determinism).
 
 circuit optin_settle_engagement(code_id: bytes(32), reservation_id: bytes(32), rules_id: bytes(32), pk: bytes(1568)) -> SettlementRecord
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    witness threshold(2, 3)
-    observe metrics: [settlements_executed, settlement_amount_total, settlement_latency_ns, distribution_accuracy]
-    invariant "settlement_deterministic" { same_inputs_produce_same_outputs }
-    invariant "no_over_distribution" { platform_fee + user_compensation + affiliate_share + publisher_share <= total_amount }
-    invariant "code_id_not_empty" { code_id != 0 }
-    invariant "reservation_id_not_empty" { reservation_id != 0 }
-    monitor "settlement_rate" { deviation(settlements_per_sec, baseline) < 0.30 }
-    esz_emit "verify/optin_settlement.esz"
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @witness threshold(2, 3)
+    @observe metrics: [settlements_executed, settlement_amount_total, settlement_latency_ns, distribution_accuracy]
+    @invariant "settlement_deterministic" { same_inputs_produce_same_outputs }
+    @invariant "no_over_distribution" { platform_fee + user_compensation + affiliate_share + publisher_share <= total_amount }
+    @invariant "code_id_not_empty" { code_id != 0 }
+    @invariant "reservation_id_not_empty" { reservation_id != 0 }
+    @monitor "settlement_rate" { deviation(settlements_per_sec, baseline) < 0.30 }
+    @serialize "verify/optin_settlement.esz"
+    @fuzz_target
 {
     let settlement_seed = sha3_256(code_id)
     let settlement_id = sha3_256(settlement_seed)
@@ -201,17 +201,17 @@ circuit optin_settle_engagement(code_id: bytes(32), reservation_id: bytes(32), r
 // all amounts match exactly — no rounding tolerance.
 
 circuit optin_verify_settlement(settlement_id: bytes(32), pk: bytes(1568)) -> bool
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    observe metrics: [settlements_verified, verification_failures, verification_latency_ns]
-    invariant "settlement_id_not_empty" { settlement_id != 0 }
-    monitor "verification_rate" { deviation(verifications_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @observe metrics: [settlements_verified, verification_failures, verification_latency_ns]
+    @invariant "settlement_id_not_empty" { settlement_id != 0 }
+    @monitor "verification_rate" { deviation(verifications_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let verify_hash = sha3_256(settlement_id)
     let kem = mlkem_encaps(pk)

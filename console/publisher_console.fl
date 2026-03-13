@@ -6,7 +6,7 @@
 // privacy. Revenue data uses ZK proofs — publishers prove aggregate revenue
 // without leaking individual transactions.
 
-/// govern lex esn/marketplace/console
+/// govern lex marketplace/console
 
 // --- Types ---
 
@@ -48,21 +48,21 @@ type DeprecationWorkflow = struct {
 // --- Streams ---
 
 stream publisher_dashboards: state<PublisherId, PublisherDashboard>
-    retention 30d
-    consumers [console, audit]
+    @retention 30d
+    @consumers [console, audit]
 
 stream package_analytics: event<PackageAnalytics>
-    retention 365d
-    consumers [console, publisher_dashboard, platform]
+    @retention 365d
+    @consumers [console, publisher_dashboard, platform]
 
 // --- Circuits ---
 
 /// test golden
 circuit get_publisher_dashboard(publisher_id: PublisherId, period_start: u64, period_end: u64) -> PublisherDashboard
-    lex esn/marketplace/console/publisher
-    precision C
-    rbac [publisher]
-    observe metrics: [dashboard_views, publisher_id]
+    @lex marketplace/console/publisher
+    @precision C
+    @rbac [publisher]
+    @observe metrics: [dashboard_views, publisher_id]
 {
     PublisherDashboard {
         publisher_id: publisher_id,
@@ -78,10 +78,10 @@ circuit get_publisher_dashboard(publisher_id: PublisherId, period_start: u64, pe
 
 /// test golden
 circuit get_package_analytics(package_id: PackageId, publisher_id: PublisherId) -> PackageAnalytics
-    lex esn/marketplace/console/publisher
-    precision C
-    rbac [publisher]
-    observe metrics: [analytics_queries, package_id]
+    @lex marketplace/console/publisher
+    @precision C
+    @rbac [publisher]
+    @observe metrics: [analytics_queries, package_id]
 {
     PackageAnalytics {
         package_id: package_id,
@@ -97,10 +97,10 @@ circuit get_package_analytics(package_id: PackageId, publisher_id: PublisherId) 
 
 /// test golden
 circuit get_revenue_summary(publisher_id: PublisherId, period_start: u64, period_end: u64) -> PublisherDashboard
-    lex esn/marketplace/console/publisher
-    precision C
-    rbac [publisher]
-    observe metrics: [revenue_summary_views, publisher_id]
+    @lex marketplace/console/publisher
+    @precision C
+    @rbac [publisher]
+    @observe metrics: [revenue_summary_views, publisher_id]
 {
     PublisherDashboard {
         publisher_id: publisher_id,
@@ -116,11 +116,11 @@ circuit get_revenue_summary(publisher_id: PublisherId, period_start: u64, period
 
 /// test golden
 circuit initiate_deprecation(package_id: PackageId, version: bytes(32), reason: bytes(256), migration_guide_hash: bytes(32), sunset_at: u64) -> DeprecationWorkflow
-    lex esn/marketplace/console/publisher
-    precision B
-    rbac [publisher]
-    povc true
-    observe metrics: [deprecations_initiated, package_id]
+    @lex marketplace/console/publisher
+    @precision B
+    @rbac [publisher]
+    @attested true
+    @observe metrics: [deprecations_initiated, package_id]
 {
     DeprecationWorkflow {
         package_id: package_id,
@@ -135,10 +135,10 @@ circuit initiate_deprecation(package_id: PackageId, version: bytes(32), reason: 
 
 /// test golden
 circuit get_telemetry_dashboard(publisher_id: PublisherId, package_id: PackageId) -> PackageAnalytics
-    lex esn/marketplace/console/publisher
-    precision C
-    rbac [publisher]
-    observe metrics: [telemetry_dashboard_views, package_id]
+    @lex marketplace/console/publisher
+    @precision C
+    @rbac [publisher]
+    @observe metrics: [telemetry_dashboard_views, package_id]
 {
     PackageAnalytics {
         package_id: package_id,
@@ -154,10 +154,10 @@ circuit get_telemetry_dashboard(publisher_id: PublisherId, package_id: PackageId
 
 /// test golden
 circuit get_dependency_graph(publisher_id: PublisherId, package_id: PackageId) -> PackageAnalytics
-    lex esn/marketplace/console/publisher
-    precision C
-    rbac [publisher]
-    observe metrics: [dependency_graph_queries, package_id]
+    @lex marketplace/console/publisher
+    @precision C
+    @rbac [publisher]
+    @observe metrics: [dependency_graph_queries, package_id]
 {
     PackageAnalytics {
         package_id: package_id,

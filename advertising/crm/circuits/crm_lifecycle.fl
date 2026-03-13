@@ -30,7 +30,7 @@ data LifecycleTransition : app v1 {
     timestamp: u64,
     metadata: bytes(256),
 }
-    encode @ bytes(365) {
+    @encode @ bytes(365) {
         user_id    @ le,
         from_state @ le,
         to_state   @ le,
@@ -38,23 +38,23 @@ data LifecycleTransition : app v1 {
         timestamp  @ le,
         metadata   @ le,
     }
-    store kv
-    series retain 365d
-    cortex {
+    @store kv
+    @series retain 365d
+    @cortex {
         inference on_write {
             consumer "lifecycle_classifier"
             throttle max_per_minute 200
         }
     }
-    observe metrics [from_state, to_state, trigger] level adaptive
-    observe events [from_state, to_state, trigger]
-    sign {
+    @observe metrics [from_state, to_state, trigger] level adaptive
+    @observe events [from_state, to_state, trigger]
+    @sign {
         algorithm mldsa87
         key_field user_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field user_id
         proof_system groth16
     }
@@ -65,9 +65,9 @@ data LifecycleStateRecord : circuit v1 {
     last_transition_at: u64,
     transition_count: u32,
 }
-    store kv
-    observe metrics [current_state, transition_count] level adaptive
-    observe events [current_state]
+    @store kv
+    @observe metrics [current_state, transition_count] level adaptive
+    @observe events [current_state]
 
 // =============================================================================
 // Transition Validation Matrix
@@ -88,18 +88,18 @@ data LifecycleStateRecord : circuit v1 {
 // =============================================================================
 
 stream crm_lifecycle_events: event<LifecycleTransition>
-    retention 7y
-    consumers [streamsight, audit, cortex, alerting]
-    classify user_id: IDENTIFIER, from_state: METADATA, to_state: METADATA, trigger: METADATA
+    @retention 7y
+    @consumers [streamsight, audit, cortex, alerting]
+    @classify user_id: IDENTIFIER, from_state: METADATA, to_state: METADATA, trigger: METADATA
 
 // =============================================================================
 // Series Declaration
 // =============================================================================
 
 series crm_lifecycle_audit: crm_lifecycle_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Transition Lifecycle State
@@ -111,22 +111,22 @@ series crm_lifecycle_audit: crm_lifecycle_events
 // emitted to the lifecycle event stream for Cortex classification.
 
 circuit crm_transition_lifecycle(user_id: bytes(32), new_state: u8, trigger: bytes(64), pk: bytes(1568)) -> LifecycleTransition
-    lex esn/marketplace/advertising/crm {
+    @lex marketplace/advertising/crm {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    witness threshold(2, 3)
-    observe metrics: [transitions_executed, transitions_rejected, churn_events, reactivation_events]
-    invariant "user_id_not_empty" { user_id != 0 }
-    invariant "state_valid" { new_state <= 6 }
-    invariant "trigger_not_empty" { trigger != 0 }
-    property safety "no_invalid_transition" { transitions_rejected == 0 || transitions_rejected < transitions_executed * 0.05 }
-    monitor "churn_rate" { churn_events / transitions_executed < 0.20 }
-    monitor "rejection_rate" { transitions_rejected / transitions_executed < 0.05 }
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @witness threshold(2, 3)
+    @observe metrics: [transitions_executed, transitions_rejected, churn_events, reactivation_events]
+    @invariant "user_id_not_empty" { user_id != 0 }
+    @invariant "state_valid" { new_state <= 6 }
+    @invariant "trigger_not_empty" { trigger != 0 }
+    @property safety "no_invalid_transition" { transitions_rejected == 0 || transitions_rejected < transitions_executed * 0.05 }
+    @monitor "churn_rate" { churn_events / transitions_executed < 0.20 }
+    @monitor "rejection_rate" { transitions_rejected / transitions_executed < 0.05 }
 {
     let transition_hash = sha3_256(user_id)
     let kem = mlkem_encaps(pk)
@@ -169,12 +169,12 @@ circuit crm_transition_lifecycle(user_id: bytes(32), new_state: u8, trigger: byt
 // for O(1) lookup. No mutation — read-only circuit.
 
 circuit crm_get_lifecycle_state(user_id: bytes(32)) -> u8
-    lex esn/marketplace/advertising/crm
-    precision C
-    streamsight true
-    observe metrics: [state_lookups, lookup_misses]
-    invariant "user_id_not_empty" { user_id != 0 }
-    monitor "miss_rate" { lookup_misses / state_lookups < 0.10 }
+    @lex marketplace/advertising/crm
+    @precision C
+    @observe true
+    @observe metrics: [state_lookups, lookup_misses]
+    @invariant "user_id_not_empty" { user_id != 0 }
+    @monitor "miss_rate" { lookup_misses / state_lookups < 0.10 }
 {
     let lookup_hash = sha3_256(user_id)
     let anomaly = streamsight_anomaly(lookup_hash)

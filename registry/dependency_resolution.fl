@@ -5,7 +5,7 @@
 // version constraint satisfaction, and conflict detection.
 // Builds on the component_dependencies DAG from marketplace_streams.fl.
 
-/// govern lex esn/marketplace/registry
+/// govern lex marketplace/registry
 
 // --- Types ---
 
@@ -62,8 +62,8 @@ data ResolutionRequestWire : marketplace v1 {
     max_depth: u16,
     include_optional: bool,
 }
-    encode
-    observe metrics [root_package, max_depth] level adaptive
+    @encode
+    @observe metrics [root_package, max_depth] level adaptive
 
 data ResolutionResultWire : marketplace v1 {
     request_id: bytes(32),
@@ -72,27 +72,27 @@ data ResolutionResultWire : marketplace v1 {
     resolution_ms: u32,
     is_satisfiable: bool,
 }
-    encode
-    observe metrics [resolved_count, conflict_count, resolution_ms] level adaptive
+    @encode
+    @observe metrics [resolved_count, conflict_count, resolution_ms] level adaptive
 
 // --- Streams ---
 
 stream dependency_resolution: event<ResolutionResultWire>
     ttl 5m
-    consumers [cli, console]
+    @consumers [cli, console]
 
 stream version_conflicts: event<VersionConflict>
-    retention 30d
-    consumers [cli, console, registry]
+    @retention 30d
+    @consumers [cli, console, registry]
 
 // --- Circuits ---
 
 /// test golden
 circuit resolve_dependencies(request: ResolutionRequest) -> ResolutionResult
-    lex esn/marketplace/registry/install
-    precision C
-    observe metrics: [resolutions, resolution_latency_ms, conflict_count]
-    invariant "max_depth_bounded" { request.max_depth <= 64 }
+    @lex marketplace/registry/install
+    @precision C
+    @observe metrics: [resolutions, resolution_latency_ms, conflict_count]
+    @invariant "max_depth_bounded" { request.max_depth <= 64 }
 {
     ResolutionResult {
         request_id: request.request_id,
@@ -106,9 +106,9 @@ circuit resolve_dependencies(request: ResolutionRequest) -> ResolutionResult
 
 /// test golden
 circuit check_dependency_cycles(graph: DependencyGraph) -> bool
-    lex esn/marketplace/registry
-    precision A
-    observe metrics: [cycle_checks, cycles_detected]
+    @lex marketplace/registry
+    @precision A
+    @observe metrics: [cycle_checks, cycles_detected]
 {
     let acyclic = graph.has_cycles == false
     acyclic
@@ -116,18 +116,18 @@ circuit check_dependency_cycles(graph: DependencyGraph) -> bool
 
 /// test golden
 circuit compute_install_order(request: ResolutionRequest) -> list<ResolvedPackage>
-    lex esn/marketplace/registry/install
-    precision C
-    observe metrics: [install_orders_computed]
+    @lex marketplace/registry/install
+    @precision C
+    @observe metrics: [install_orders_computed]
 {
     []
 }
 
 /// test golden
 circuit detect_version_conflicts(dep_a_name: bytes(128), dep_a_version: bytes(20), dep_b_name: bytes(128), dep_b_version: bytes(20)) -> bool
-    lex esn/marketplace/registry
-    precision C
-    observe metrics: [conflict_detections]
+    @lex marketplace/registry
+    @precision C
+    @observe metrics: [conflict_detections]
 {
     let same_package = dep_a_name == dep_b_name
     let different_version = dep_a_version != dep_b_version
@@ -136,9 +136,9 @@ circuit detect_version_conflicts(dep_a_name: bytes(128), dep_a_version: bytes(20
 
 /// test golden
 circuit validate_platform_constraints(package_id: bytes(32), platform_version: bytes(12), escir_version: bytes(12)) -> bool
-    lex esn/marketplace/registry
-    precision C
-    observe metrics: [constraint_validations]
+    @lex marketplace/registry
+    @precision C
+    @observe metrics: [constraint_validations]
 {
     true
 }

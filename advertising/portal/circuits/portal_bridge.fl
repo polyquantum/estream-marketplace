@@ -40,7 +40,7 @@ data BridgeMessage : app v1 {
     timestamp_ns: u64,
     signature: bytes(4627),
 }
-    encode @ bytes(4791) {
+    @encode @ bytes(4791) {
         message_id   @ le,
         instance_id  @ le,
         direction    @ le,
@@ -49,22 +49,22 @@ data BridgeMessage : app v1 {
         timestamp_ns @ le,
         signature    @ le,
     }
-    store kv
-    series retain 30d
-    sign {
+    @store kv
+    @series retain 30d
+    @sign {
         algorithm mldsa87
         key_field signature
         detached true
     }
-    cortex {
+    @cortex {
         visibility {
             payload_hash expose
             event_type expose
             instance_id expose
         }
     }
-    observe events [direction, event_type]
-    observe metrics [direction, event_type] level adaptive
+    @observe events [direction, event_type]
+    @observe metrics [direction, event_type] level adaptive
 
 data BridgeValidation : app v1 {
     validation_id: bytes(32),
@@ -74,7 +74,7 @@ data BridgeValidation : app v1 {
     signature_valid: u8,
     payload_valid: u8,
 }
-    encode @ bytes(133) {
+    @encode @ bytes(133) {
         validation_id    @ le,
         message_id       @ le,
         protocol_version @ le,
@@ -82,10 +82,10 @@ data BridgeValidation : app v1 {
         signature_valid  @ le,
         payload_valid    @ le,
     }
-    store series retain 30d
-    observe events [origin_verified, signature_valid, payload_valid]
-    observe metrics [origin_verified, signature_valid, payload_valid] level adaptive
-    sign {
+    @store series retain 30d
+    @observe events [origin_verified, signature_valid, payload_valid]
+    @observe metrics [origin_verified, signature_valid, payload_valid] level adaptive
+    @sign {
         algorithm mldsa87
         key_field validation_id
         detached true
@@ -96,23 +96,23 @@ data BridgeValidation : app v1 {
 // =============================================================================
 
 stream portal_bridge_events: event<BridgeMessage>
-    retention 30d
-    consumers [streamsight, security]
-    classify message_id: IDENTIFIER, instance_id: IDENTIFIER, event_type: METADATA, direction: METADATA
+    @retention 30d
+    @consumers [streamsight, security]
+    @classify message_id: IDENTIFIER, instance_id: IDENTIFIER, event_type: METADATA, direction: METADATA
 
 stream portal_validation_events: event<BridgeValidation>
-    retention 30d
-    consumers [streamsight, security, audit]
-    classify validation_id: IDENTIFIER, message_id: IDENTIFIER, origin_verified: METADATA, signature_valid: METADATA
+    @retention 30d
+    @consumers [streamsight, security, audit]
+    @classify validation_id: IDENTIFIER, message_id: IDENTIFIER, origin_verified: METADATA, signature_valid: METADATA
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series portal_bridge_series: portal_bridge_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Send Bridge Message
@@ -124,20 +124,20 @@ series portal_bridge_series: portal_bridge_events
 // content. Protocol version is set to "estream-embed-v1".
 
 circuit portal_send_message(instance_id: bytes(32), event_type: enum { Init, Ready, Resize, Close, Error, OptinPreview, OptinConsent, OptinReject, OptinSettled, ScoreUpdate, CompensationUpdate }, payload: bytes(4096), sk: bytes(4896), pk: bytes(1568)) -> BridgeMessage
-    lex esn/marketplace/advertising/portal {
+    @lex marketplace/advertising/portal {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [messages_sent, send_latency_ns, messages_by_event_type]
-    invariant "message_signed" { signature != 0 }
-    invariant "protocol_version_set" { protocol == "estream-embed-v1" }
-    invariant "instance_id_not_empty" { instance_id != 0 }
-    monitor "send_rate" { deviation(messages_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [messages_sent, send_latency_ns, messages_by_event_type]
+    @invariant "message_signed" { signature != 0 }
+    @invariant "protocol_version_set" { protocol == "estream-embed-v1" }
+    @invariant "instance_id_not_empty" { instance_id != 0 }
+    @monitor "send_rate" { deviation(messages_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let payload_hash = sha3_256(payload)
     let message_seed = sha3_256(instance_id)
@@ -174,19 +174,19 @@ circuit portal_send_message(instance_id: bytes(32), event_type: enum { Init, Rea
 // must pass for the validation to succeed.
 
 circuit portal_validate_message(message: BridgeMessage, expected_origin: bytes(64), pk: bytes(1568)) -> BridgeValidation
-    lex esn/marketplace/advertising/portal {
+    @lex marketplace/advertising/portal {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [messages_validated, validation_latency_ns, origin_failures, signature_failures, payload_failures]
-    invariant "all_checks_pass" { origin_verified && signature_valid && payload_valid }
-    invariant "message_id_not_empty" { message.message_id != 0 }
-    monitor "validation_failure_rate" { (origin_failures + signature_failures + payload_failures) / messages_validated < 0.05 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [messages_validated, validation_latency_ns, origin_failures, signature_failures, payload_failures]
+    @invariant "all_checks_pass" { origin_verified && signature_valid && payload_valid }
+    @invariant "message_id_not_empty" { message.message_id != 0 }
+    @monitor "validation_failure_rate" { (origin_failures + signature_failures + payload_failures) / messages_validated < 0.05 }
+    @fuzz_target
 {
     let validation_seed = sha3_256(message.message_id)
     let validation_id = sha3_256(validation_seed)
@@ -227,19 +227,19 @@ circuit portal_validate_message(message: BridgeMessage, expected_origin: bytes(6
 // Non-optin events are ignored (returns true without side effects).
 
 circuit portal_route_optin_event(message: BridgeMessage, pk: bytes(1568)) -> bool
-    lex esn/marketplace/advertising/portal {
+    @lex marketplace/advertising/portal {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [optin_events_routed, route_latency_ns, preview_count, consent_count, reject_count, settled_count]
-    invariant "message_signed" { message.signature != 0 }
-    invariant "instance_id_not_empty" { message.instance_id != 0 }
-    monitor "optin_route_rate" { deviation(optin_events_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [optin_events_routed, route_latency_ns, preview_count, consent_count, reject_count, settled_count]
+    @invariant "message_signed" { message.signature != 0 }
+    @invariant "instance_id_not_empty" { message.instance_id != 0 }
+    @monitor "optin_route_rate" { deviation(optin_events_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let route_hash = sha3_256(message.message_id)
     let kem = mlkem_encaps(pk)

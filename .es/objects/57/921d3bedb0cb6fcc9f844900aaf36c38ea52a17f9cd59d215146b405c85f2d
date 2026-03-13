@@ -1,0 +1,87 @@
+¤Blob‘Å!/// Publisher registration: Poly Labs
+/// Registers all 7 PolyKit packages in the marketplace.
+/// Epic: polylabs-dev/polykit#11, Issue: #19
+
+/// govern lex esn/marketplace/registry
+
+circuit register_polylabs_publisher() -> bool
+    lex esn/marketplace/registry
+    precision A
+    povc true
+    observe metrics: [publisher_registrations]
+{
+    let publisher = register_publisher(
+        "polylabs",
+        "Poly Labs",
+        "engineering@polylabs.dev",
+        "https://polylabs.dev",
+        "https://github.com/polylabs-dev"
+    )
+
+    register_polylabs_packages(publisher)
+}
+
+circuit register_polylabs_packages(publisher_id: bytes(32)) -> bool
+    lex esn/marketplace/registry
+    precision A
+    povc true
+    observe metrics: [packages_registered]
+{
+    register_package(publisher_id, "polykit-identity", "0.2.0", "smart-circuit",
+        "SPARK identity + PQ crypto: HKDF key derivation, ML-DSA-87 signing, ML-KEM-1024 encapsulation, auth handshake FSM",
+        ["identity", "spark", "ml-dsa-87", "ml-kem-1024", "pq-crypto"],
+        "0.11.0",
+        [],
+        ["derive_keys", "derive_user_id", "sign_message", "verify_signature", "encapsulate_key", "decapsulate_key"]
+    )
+
+    register_package(publisher_id, "polykit-metering", "0.2.0", "smart-circuit",
+        "8-dimension resource metering: executions, hashes, bandwidth, storage, observables, proofs, circuits, MPC sessions",
+        ["metering", "billing", "usage"],
+        "0.11.0",
+        [],
+        ["record_usage", "check_limits", "get_usage_summary", "accumulate"]
+    )
+
+    register_package(publisher_id, "polykit-telemetry", "0.2.0", "smart-circuit",
+        "StreamSight telemetry pipeline: Discard Normal, baseline comparison, anomaly detection, Cortex integration",
+        ["telemetry", "streamsight", "observability"],
+        "0.11.0",
+        [],
+        ["emit_gauge", "emit_counter", "emit_event", "check_baseline"]
+    )
+
+    register_package(publisher_id, "polykit-rate-limiter", "0.2.0", "smart-circuit",
+        "Per-tier rate limiting with sliding window FSM, WAL persistence, rollback on failure, bounded history",
+        ["rate-limit", "throttle", "sliding-window"],
+        "0.11.0",
+        [],
+        ["check_rate", "record_operation"]
+    )
+
+    register_package(publisher_id, "polykit-sanitize", "0.2.0", "smart-circuit",
+        "3-stage compliance sanitization: PII detection, value transform, PoVC-witnessed audit. HIPAA/PCI-DSS/GDPR/SOC2/CCPA",
+        ["sanitization", "pii", "compliance", "hipaa", "gdpr"],
+        "0.11.0",
+        [],
+        ["sanitize", "detect_only"]
+    )
+
+    register_package(publisher_id, "polykit-eslm-classify", "0.2.0", "smart-circuit",
+        "ESLM auto-classification with human-in-the-loop feedback, Cortex AI governance, confidence drift monitoring",
+        ["classification", "eslm", "machine-learning"],
+        "0.11.0",
+        [],
+        ["classify_content", "submit_human_feedback", "get_confidence_thresholds"]
+    )
+
+    register_package(publisher_id, "polykit-console", "0.2.0", "console-widget",
+        "Shared console infrastructure: widget registry graph, typed event bus, RBAC access control, render-ready payloads",
+        ["console", "widgets", "rbac", "event-bus"],
+        "0.11.0",
+        [],
+        ["check_access", "format_role", "process_widgets", "emit_widget_event"]
+    )
+
+    true
+}

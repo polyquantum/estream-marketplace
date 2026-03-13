@@ -1,0 +1,11 @@
+[package]
+name = "polyquantum.widgets"
+version = "0.12.0"
+publisher = "polyquantum"
+description = "UI interaction components and console widgets for eStream applications"
+category = "smart-circuit"
+license = "commercial"
+
+[platform]
+minimum = "0.12.0"
+escir_api = "1.0.0"

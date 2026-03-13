@@ -21,7 +21,7 @@ pricing = "freemium"
 visibility = "open"
 
 [component.estream]
-min_version = "0.10.0"
+platform = ">= 0.12.0"
 
 [component.dependencies]
 

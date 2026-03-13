@@ -6,7 +6,7 @@
 // with isolated package activation. Upgrades flow from solution publisher
 // through lex policy acceptance.
 
-/// govern lex esn/marketplace/solutions
+/// govern lex marketplace/solutions
 
 // --- Types ---
 
@@ -21,7 +21,7 @@ type CustomerProvision = struct {
     customer_lex_id: CustomerLexId,
     provisioned_packages_count: u16,
     provisioned_at: u64,
-    status: u8,
+    @status: u8,
 }
 // status: 0=Pending, 1=Active, 2=Deactivated
 
@@ -37,7 +37,7 @@ type UpgradeRequest = struct {
 
 type UpgradeStatus = struct {
     request_id: RequestId,
-    status: u8,
+    @status: u8,
     applied_at: u64,
 }
 // status: 0=Pending, 1=Accepted, 2=Applied, 3=Rejected, 4=RolledBack
@@ -45,22 +45,22 @@ type UpgradeStatus = struct {
 // --- Streams ---
 
 stream customer_provisions: state<ProvisionId, CustomerProvision>
-    retention 365d
-    consumers [solutions, platform, audit]
+    @retention 365d
+    @consumers [solutions, platform, audit]
 
 stream upgrade_events: event<UpgradeRequest>
-    retention 365d
-    consumers [solutions, platform, audit]
+    @retention 365d
+    @consumers [solutions, platform, audit]
 
 // --- Circuits ---
 
 /// test golden
 circuit provision_customer(solution_id: SolutionId, customer_lex_id: CustomerLexId) -> CustomerProvision
-    lex esn/marketplace/solutions
-    precision B
-    rbac [solution_admin]
-    povc true
-    observe metrics: [customers_provisioned, solution_id]
+    @lex marketplace/solutions
+    @precision B
+    @rbac [solution_admin]
+    @attested true
+    @observe metrics: [customers_provisioned, solution_id]
 {
     let id = sha3_256(concat(solution_id, customer_lex_id))
     CustomerProvision {
@@ -75,10 +75,10 @@ circuit provision_customer(solution_id: SolutionId, customer_lex_id: CustomerLex
 
 /// test golden
 circuit activate_packages(provision: CustomerProvision, package_count: u16) -> CustomerProvision
-    lex esn/marketplace/solutions
-    precision B
-    povc true
-    observe metrics: [packages_activated, solution_id, package_count]
+    @lex marketplace/solutions
+    @precision B
+    @attested true
+    @observe metrics: [packages_activated, solution_id, package_count]
 {
     CustomerProvision {
         provision_id: provision.provision_id,
@@ -92,11 +92,11 @@ circuit activate_packages(provision: CustomerProvision, package_count: u16) -> C
 
 /// test golden
 circuit deactivate_customer(provision_id: ProvisionId) -> bool
-    lex esn/marketplace/solutions
-    precision B
-    rbac [solution_admin]
-    povc true
-    observe metrics: [customers_deactivated, provision_id]
+    @lex marketplace/solutions
+    @precision B
+    @rbac [solution_admin]
+    @attested true
+    @observe metrics: [customers_deactivated, provision_id]
 {
     let deactivated = provision_id != provision_id
     deactivated
@@ -104,11 +104,11 @@ circuit deactivate_customer(provision_id: ProvisionId) -> bool
 
 /// test golden
 circuit request_upgrade(solution_id: SolutionId, from_version: bytes(32), to_version: bytes(32), customer_lex_id: CustomerLexId, auto_accept: bool) -> UpgradeRequest
-    lex esn/marketplace/solutions
-    precision B
-    rbac [solution_admin]
-    povc true
-    observe metrics: [upgrades_requested, solution_id]
+    @lex marketplace/solutions
+    @precision B
+    @rbac [solution_admin]
+    @attested true
+    @observe metrics: [upgrades_requested, solution_id]
 {
     let id = sha3_256(concat(solution_id, from_version, to_version))
     UpgradeRequest {
@@ -124,10 +124,10 @@ circuit request_upgrade(solution_id: SolutionId, from_version: bytes(32), to_ver
 
 /// test golden
 circuit accept_upgrade(request: UpgradeRequest) -> UpgradeStatus
-    lex esn/marketplace/solutions
-    precision B
-    povc true
-    observe metrics: [upgrades_accepted, request_id]
+    @lex marketplace/solutions
+    @precision B
+    @attested true
+    @observe metrics: [upgrades_accepted, request_id]
 {
     UpgradeStatus {
         request_id: request.request_id,
@@ -138,11 +138,11 @@ circuit accept_upgrade(request: UpgradeRequest) -> UpgradeStatus
 
 /// test golden
 circuit rollback_upgrade(request: UpgradeRequest) -> UpgradeStatus
-    lex esn/marketplace/solutions
-    precision B
-    rbac [solution_admin]
-    povc true
-    observe metrics: [upgrades_rolled_back, request_id]
+    @lex marketplace/solutions
+    @precision B
+    @rbac [solution_admin]
+    @attested true
+    @observe metrics: [upgrades_rolled_back, request_id]
 {
     UpgradeStatus {
         request_id: request.request_id,

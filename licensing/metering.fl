@@ -5,7 +5,7 @@
 // Each package meters independently. No cross-package
 // correlation possible — customer lex scope isolation enforced.
 
-/// govern lex esn/marketplace/licensing
+/// govern lex marketplace/licensing
 
 // --- Types ---
 
@@ -61,23 +61,23 @@ type BlindedBillingEvent = struct {
 
 stream meter_readings: event<MeterReading>
     ttl 1h
-    consumers [metering, licensing]
+    @consumers [metering, licensing]
 
 stream hourly_aggregates: event<HourlyAggregate>
-    retention 90d
-    consumers [metering, billing, audit]
+    @retention 90d
+    @consumers [metering, billing, audit]
 
 stream billing_events: event<BlindedBillingEvent>
-    retention 365d
-    consumers [billing, audit, console]
+    @retention 365d
+    @consumers [billing, audit, console]
 
 // --- Circuits ---
 
 /// test golden
 circuit record_meter_reading(config: MeterConfig, reading: MeterReading) -> bool
-    lex esn/marketplace/licensing/metering
-    precision A
-    observe metrics: [meter_readings_recorded, package_id, unit_type]
+    @lex marketplace/licensing/metering
+    @precision A
+    @observe metrics: [meter_readings_recorded, package_id, unit_type]
 {
     let scope_match = config.package_id == reading.package_id
     scope_match
@@ -85,11 +85,11 @@ circuit record_meter_reading(config: MeterConfig, reading: MeterReading) -> bool
 
 /// test golden
 circuit aggregate_hourly(package_id: PackageId, blinded_customer_id: BlindedCustomerId, hour_start: u64, readings: list<MeterReading>) -> HourlyAggregate
-    lex esn/marketplace/licensing/metering
-    precision B
-    observe metrics: [hourly_aggregations, package_id, reading_count]
-    povc true
-    invariant "hourly_bounded" { reading_count <= 60 }
+    @lex marketplace/licensing/metering
+    @precision B
+    @observe metrics: [hourly_aggregations, package_id, reading_count]
+    @attested true
+    @invariant "hourly_bounded" { reading_count <= 60 }
 {
     HourlyAggregate {
         aggregate_id: sha3_256(package_id),
@@ -107,10 +107,10 @@ circuit aggregate_hourly(package_id: PackageId, blinded_customer_id: BlindedCust
 
 /// test golden
 circuit emit_billing_event(aggregate: HourlyAggregate, rate_micros: u64, witness_key: bytes(1952)) -> BlindedBillingEvent
-    lex esn/marketplace/licensing/metering
-    precision B
-    observe metrics: [billing_events_emitted, package_id, amount_micros]
-    povc true
+    @lex marketplace/licensing/metering
+    @precision B
+    @observe metrics: [billing_events_emitted, package_id, amount_micros]
+    @attested true
 {
     let amount = aggregate.total_value * rate_micros
     let event_hash = sha3_256(aggregate.aggregate_id)
@@ -128,9 +128,9 @@ circuit emit_billing_event(aggregate: HourlyAggregate, rate_micros: u64, witness
 
 /// test golden
 circuit verify_metering_isolation(package_a: PackageId, package_b: PackageId, readings_a: list<MeterReading>, readings_b: list<MeterReading>) -> bool
-    lex esn/marketplace/licensing/metering
-    precision A
-    observe metrics: [isolation_verifications, isolation_failures]
+    @lex marketplace/licensing/metering
+    @precision A
+    @observe metrics: [isolation_verifications, isolation_failures]
 {
     let different_packages = package_a != package_b
     different_packages
@@ -138,9 +138,9 @@ circuit verify_metering_isolation(package_a: PackageId, package_b: PackageId, re
 
 /// test golden
 circuit get_usage_summary(blinded_customer_id: BlindedCustomerId, package_id: PackageId, period_start: u64, period_end: u64) -> HourlyAggregate
-    lex esn/marketplace/licensing/metering
-    precision C
-    observe metrics: [usage_summary_queries, package_id]
+    @lex marketplace/licensing/metering
+    @precision C
+    @observe metrics: [usage_summary_queries, package_id]
 {
     HourlyAggregate {
         aggregate_id: sha3_256(package_id),

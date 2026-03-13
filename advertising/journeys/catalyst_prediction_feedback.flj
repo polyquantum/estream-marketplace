@@ -1,0 +1,50 @@
+// Journey: Catalyst Prediction & Feedback Loop
+// Tests the AI-driven outcome prediction and feedback cycle:
+//   predict → record actual → evaluate drift
+
+journey "catalyst_prediction_feedback" {
+    description "Predict outcome, record actual result, evaluate model drift"
+    package "polyquantum.advertising"
+    platform ">= 0.12.0"
+
+    import advertising.catalyst.circuits.catalyst_optimizer {
+        catalyst_predict_outcome, catalyst_record_outcome,
+        catalyst_generate_suggestions, catalyst_evaluate_drift,
+        OutcomeRecord, FeedbackLoop
+    }
+
+    setup {
+        let pk = test_keygen(1568)
+    }
+
+    step "predict_outcome" {
+        let application_id = sha3_256("APP-2026-001")
+        let features = sha3_256("features_vector_001")
+        let prediction = catalyst_predict_outcome(application_id, features, pk)
+        assert prediction.record_id != 0
+        assert prediction.confidence > 0
+        assert prediction.features_hash != 0
+        assert prediction.submitted_at > 0
+        assert prediction.decided_at == 0
+    }
+
+    step "record_actual_outcome" {
+        let result = catalyst_record_outcome(application_id, Approved, pk)
+        assert result.actual_outcome == Approved
+        assert result.decided_at > 0
+    }
+
+    step "generate_suggestions" {
+        let suggestions = catalyst_generate_suggestions(application_id, pk)
+        assert len(suggestions) > 0
+        assert suggestions[0].confidence > 0
+    }
+
+    step "evaluate_model_drift" {
+        let loop_id = sha3_256("feedback_loop_001")
+        let feedback = catalyst_evaluate_drift(loop_id, pk)
+        assert feedback.loop_id != 0
+        assert feedback.accuracy >= 0
+        assert feedback.drift_score >= 0
+    }
+}

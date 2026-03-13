@@ -33,7 +33,7 @@ data LeadRecord : app v1 {
     created_at: u64,
     converted_at: u64,
 }
-    encode @ bytes(201) {
+    @encode @ bytes(201) {
         lead_id      @ le,
         user_id      @ le,
         partner_id   @ le,
@@ -43,10 +43,10 @@ data LeadRecord : app v1 {
         created_at   @ le,
         converted_at @ le,
     }
-    store kv
-    store graph
-    series retain 365d
-    cortex {
+    @store kv
+    @store graph
+    @series retain 365d
+    @cortex {
         ai_feed {
             model "lead_quality_scorer"
             input [user_id, source, state, score]
@@ -55,15 +55,15 @@ data LeadRecord : app v1 {
             drift_threshold 0.10
         }
     }
-    observe metrics [state, score, source] level adaptive
-    observe events [state, score, source]
-    sign {
+    @observe metrics [state, score, source] level adaptive
+    @observe events [state, score, source]
+    @sign {
         algorithm mldsa87
         key_field lead_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field lead_id
         proof_system groth16
     }
@@ -74,7 +74,7 @@ data LeadQualification : circuit v1 {
     partner_match: bytes(32),
     qualified_at: u64,
 }
-    observe events [lead_id, quality_score, partner_match]
+    @observe events [lead_id, quality_score, partner_match]
 
 // =============================================================================
 // Transition Validation Matrix
@@ -96,23 +96,23 @@ data LeadQualification : circuit v1 {
 // =============================================================================
 
 stream crm_lead_events: event<LeadRecord>
-    retention 7y
-    consumers [streamsight, audit, cortex, alerting, analytics]
-    classify lead_id: IDENTIFIER, user_id: IDENTIFIER, partner_id: IDENTIFIER, source: METADATA
+    @retention 7y
+    @consumers [streamsight, audit, cortex, alerting, analytics]
+    @classify lead_id: IDENTIFIER, user_id: IDENTIFIER, partner_id: IDENTIFIER, source: METADATA
 
 stream crm_lead_qualification_events: event<LeadQualification>
-    retention 365d
-    consumers [streamsight, cortex, analytics]
-    classify lead_id: IDENTIFIER, partner_match: IDENTIFIER
+    @retention 365d
+    @consumers [streamsight, cortex, analytics]
+    @classify lead_id: IDENTIFIER, partner_match: IDENTIFIER
 
 // =============================================================================
 // Series Declaration
 // =============================================================================
 
 series crm_lead_audit: crm_lead_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Create Lead
@@ -124,19 +124,19 @@ series crm_lead_audit: crm_lead_events
 // initial quality scoring.
 
 circuit crm_create_lead(user_id: bytes(32), source: bytes(64), pk: bytes(1568)) -> LeadRecord
-    lex esn/marketplace/advertising/crm {
+    @lex marketplace/advertising/crm {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [leads_created, creation_errors, leads_by_source]
-    invariant "user_id_not_empty" { user_id != 0 }
-    invariant "source_not_empty" { source != 0 }
-    monitor "creation_error_rate" { creation_errors / leads_created < 0.01 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [leads_created, creation_errors, leads_by_source]
+    @invariant "user_id_not_empty" { user_id != 0 }
+    @invariant "source_not_empty" { source != 0 }
+    @monitor "creation_error_rate" { creation_errors / leads_created < 0.01 }
+    @fuzz_target
 {
     let lead_seed = sha3_256(user_id)
     let lead_id = sha3_256(lead_seed)
@@ -170,17 +170,17 @@ circuit crm_create_lead(user_id: bytes(32), source: bytes(64), pk: bytes(1568)) 
 // Only leads in Contacted(1) state can be qualified.
 
 circuit crm_qualify_lead(lead_id: bytes(32), score: u32, pk: bytes(1568)) -> LeadRecord
-    lex esn/marketplace/advertising/crm {
+    @lex marketplace/advertising/crm {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    streamsight true
-    povc true
-    observe metrics: [leads_qualified, qualification_errors, avg_quality_score]
-    invariant "lead_id_not_empty" { lead_id != 0 }
-    invariant "score_bounded" { score <= 1000 }
-    monitor "qualification_error_rate" { qualification_errors / leads_qualified < 0.05 }
+    @precision A
+    @observe true
+    @attested true
+    @observe metrics: [leads_qualified, qualification_errors, avg_quality_score]
+    @invariant "lead_id_not_empty" { lead_id != 0 }
+    @invariant "score_bounded" { score <= 1000 }
+    @monitor "qualification_error_rate" { qualification_errors / leads_qualified < 0.05 }
 {
     let qualify_hash = sha3_256(lead_id)
     let kem = mlkem_encaps(pk)
@@ -216,18 +216,18 @@ circuit crm_qualify_lead(lead_id: bytes(32), score: u32, pk: bytes(1568)) -> Lea
 // the CRM graph. Cortex AI suggests the optimal partner match.
 
 circuit crm_match_lead(lead_id: bytes(32), partner_id: bytes(32), pk: bytes(1568)) -> LeadRecord
-    lex esn/marketplace/advertising/crm {
+    @lex marketplace/advertising/crm {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    streamsight true
-    povc true
-    witness threshold(2, 3)
-    observe metrics: [leads_matched, match_errors, partner_assignments]
-    invariant "lead_id_not_empty" { lead_id != 0 }
-    invariant "partner_id_not_empty" { partner_id != 0 }
-    monitor "match_error_rate" { match_errors / leads_matched < 0.05 }
+    @precision A
+    @observe true
+    @attested true
+    @witness threshold(2, 3)
+    @observe metrics: [leads_matched, match_errors, partner_assignments]
+    @invariant "lead_id_not_empty" { lead_id != 0 }
+    @invariant "partner_id_not_empty" { partner_id != 0 }
+    @monitor "match_error_rate" { match_errors / leads_matched < 0.05 }
 {
     let match_hash = sha3_256(lead_id)
     let kem = mlkem_encaps(pk)
@@ -263,21 +263,21 @@ circuit crm_match_lead(lead_id: bytes(32), partner_id: bytes(32), pk: bytes(1568
 // Cortex AI model feedback for quality score calibration.
 
 circuit crm_convert_lead(lead_id: bytes(32), pk: bytes(1568)) -> LeadRecord
-    lex esn/marketplace/advertising/crm {
+    @lex marketplace/advertising/crm {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    witness threshold(2, 3)
-    observe metrics: [leads_converted, conversion_errors, conversion_rate]
-    invariant "lead_id_not_empty" { lead_id != 0 }
-    property safety "conversion_from_engaged" { conversion_errors == 0 || conversion_errors < leads_converted * 0.01 }
-    monitor "conversion_error_rate" { conversion_errors / leads_converted < 0.01 }
-    esz_emit "verify/crm_lead_conversion.esz"
-    li_feed full_escir true, optimized_ir true
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @witness threshold(2, 3)
+    @observe metrics: [leads_converted, conversion_errors, conversion_rate]
+    @invariant "lead_id_not_empty" { lead_id != 0 }
+    @property safety "conversion_from_engaged" { conversion_errors == 0 || conversion_errors < leads_converted * 0.01 }
+    @monitor "conversion_error_rate" { conversion_errors / leads_converted < 0.01 }
+    @serialize "verify/crm_lead_conversion.esz"
+    @li_feed full_escir true, optimized_ir true
 {
     let convert_hash = sha3_256(lead_id)
     let kem = mlkem_encaps(pk)

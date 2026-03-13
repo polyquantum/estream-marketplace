@@ -30,7 +30,7 @@ data PartnerConfig : app v1 {
     active: u8,
     onboarded_at: u64,
 }
-    encode @ bytes(316) {
+    @encode @ bytes(316) {
         partner_id    @ le,
         name          @ le,
         industry      @ le,
@@ -40,24 +40,24 @@ data PartnerConfig : app v1 {
         active        @ le,
         onboarded_at  @ le,
     }
-    store kv
-    series retain 365d
-    cortex {
+    @store kv
+    @series retain 365d
+    @cortex {
         visibility {
             name expose
             budget_monthly redact for non-owner
             cost_per_lead redact for non-owner
         }
     }
-    observe events [active, budget_monthly]
-    observe metrics [budget_monthly, cost_per_lead, target_volume] level adaptive
-    sign {
+    @observe events [active, budget_monthly]
+    @observe metrics [budget_monthly, cost_per_lead, target_volume] level adaptive
+    @sign {
         algorithm mldsa87
         key_field partner_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field partner_id
         proof_system groth16
     }
@@ -73,7 +73,7 @@ data LeadPipelineView : app v1 {
     cost: u64,
     roi_pct: u32,
 }
-    encode @ bytes(168) {
+    @encode @ bytes(168) {
         partner_id         @ le,
         period             @ le,
         leads_generated    @ le,
@@ -84,17 +84,17 @@ data LeadPipelineView : app v1 {
         cost               @ le,
         roi_pct            @ le,
     }
-    store kv
-    series retain 365d
-    observe metrics [leads_generated, leads_qualified, leads_converted, conversion_rate_pct, roi_pct] level adaptive
-    observe events [leads_generated, leads_qualified, leads_converted, conversion_rate_pct, roi_pct]
-    sign {
+    @store kv
+    @series retain 365d
+    @observe metrics [leads_generated, leads_qualified, leads_converted, conversion_rate_pct, roi_pct] level adaptive
+    @observe events [leads_generated, leads_qualified, leads_converted, conversion_rate_pct, roi_pct]
+    @sign {
         algorithm mldsa87
         key_field partner_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field partner_id
         proof_system groth16
     }
@@ -109,7 +109,7 @@ data LeadQualityScore : circuit v1 {
     dim_fit: u32,
     scored_at: u64,
 }
-    encode @ bytes(92) {
+    @encode @ bytes(92) {
         lead_id          @ le,
         partner_id       @ le,
         quality_score    @ le,
@@ -119,9 +119,9 @@ data LeadQualityScore : circuit v1 {
         dim_fit          @ le,
         scored_at        @ le,
     }
-    store kv
-    series retain 90d
-    cortex {
+    @store kv
+    @series retain 90d
+    @cortex {
         ai_feed {
             model "scope_quality_scorer"
             input [user_activity, engagement_events, source, partner_criteria]
@@ -130,15 +130,15 @@ data LeadQualityScore : circuit v1 {
             drift_threshold 0.08
         }
     }
-    observe metrics [quality_score, dim_engagement, dim_authenticity, dim_intent, dim_fit] level adaptive
-    observe events [quality_score, dim_engagement, dim_intent]
-    sign {
+    @observe metrics [quality_score, dim_engagement, dim_authenticity, dim_intent, dim_fit] level adaptive
+    @observe events [quality_score, dim_engagement, dim_intent]
+    @sign {
         algorithm mldsa87
         key_field lead_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field lead_id
         proof_system groth16
     }
@@ -148,33 +148,33 @@ data LeadQualityScore : circuit v1 {
 // =============================================================================
 
 stream scope_partner_events: event<PartnerConfig>
-    retention 365d
-    consumers [streamsight, cortex, analytics, alerting]
-    classify partner_id: IDENTIFIER, name: METADATA, industry: METADATA, budget_monthly: METRIC
+    @retention 365d
+    @consumers [streamsight, cortex, analytics, alerting]
+    @classify partner_id: IDENTIFIER, name: METADATA, industry: METADATA, budget_monthly: METRIC
 
 stream scope_pipeline_events: event<LeadPipelineView>
-    retention 365d
-    consumers [streamsight, cortex, analytics, alerting]
-    classify partner_id: IDENTIFIER, period: IDENTIFIER, leads_generated: METRIC, conversion_rate_pct: METRIC, roi_pct: METRIC
+    @retention 365d
+    @consumers [streamsight, cortex, analytics, alerting]
+    @classify partner_id: IDENTIFIER, period: IDENTIFIER, leads_generated: METRIC, conversion_rate_pct: METRIC, roi_pct: METRIC
 
 stream scope_quality_events: event<LeadQualityScore>
-    retention 90d
-    consumers [streamsight, cortex, analytics]
-    classify lead_id: IDENTIFIER, partner_id: IDENTIFIER, quality_score: METRIC
+    @retention 90d
+    @consumers [streamsight, cortex, analytics]
+    @classify lead_id: IDENTIFIER, partner_id: IDENTIFIER, quality_score: METRIC
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series scope_partner_audit: scope_partner_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 series scope_pipeline_audit: scope_pipeline_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Onboard Partner
@@ -185,20 +185,20 @@ series scope_pipeline_audit: scope_pipeline_events
 // Signs the config and attests via PoVC for audit integrity.
 
 circuit scope_onboard_partner(name: bytes(128), industry: bytes(64), budget: u64, cpl: u64, pk: bytes(1568)) -> PartnerConfig
-    lex esn/marketplace/advertising/scope {
+    @lex marketplace/advertising/scope {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [partners_onboarded, onboarding_errors, budget_total]
-    invariant "name_not_empty" { name != 0 }
-    invariant "budget_positive" { budget > 0 }
-    invariant "cpl_positive" { cpl > 0 }
-    monitor "onboarding_error_rate" { onboarding_errors / partners_onboarded < 0.01 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [partners_onboarded, onboarding_errors, budget_total]
+    @invariant "name_not_empty" { name != 0 }
+    @invariant "budget_positive" { budget > 0 }
+    @invariant "cpl_positive" { cpl > 0 }
+    @monitor "onboarding_error_rate" { onboarding_errors / partners_onboarded < 0.01 }
+    @fuzz_target
 {
     let partner_id = sha3_256(name)
     let config_hash = sha3_256(partner_id)
@@ -230,20 +230,20 @@ circuit scope_onboard_partner(name: bytes(128), industry: bytes(64), budget: u64
 // Returns a LeadQualityScore with dimension breakdowns.
 
 circuit scope_score_lead(lead_id: bytes(32), partner_id: bytes(32), pk: bytes(1568)) -> LeadQualityScore
-    lex esn/marketplace/advertising/scope {
+    @lex marketplace/advertising/scope {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [leads_scored, avg_quality_score, low_quality_count, scoring_errors]
-    invariant "lead_id_not_empty" { lead_id != 0 }
-    invariant "partner_id_not_empty" { partner_id != 0 }
-    monitor "scoring_error_rate" { scoring_errors / leads_scored < 0.02 }
-    monitor "quality_score_floor" { avg_quality_score > 30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [leads_scored, avg_quality_score, low_quality_count, scoring_errors]
+    @invariant "lead_id_not_empty" { lead_id != 0 }
+    @invariant "partner_id_not_empty" { partner_id != 0 }
+    @monitor "scoring_error_rate" { scoring_errors / leads_scored < 0.02 }
+    @monitor "quality_score_floor" { avg_quality_score > 30 }
+    @fuzz_target
 {
     let score_hash = sha3_256(lead_id)
     let kem = mlkem_encaps(pk)
@@ -278,21 +278,21 @@ circuit scope_score_lead(lead_id: bytes(32), partner_id: bytes(32), pk: bytes(15
 // ROI percentage. Feeds metrics to StreamSight for anomaly detection.
 
 circuit scope_pipeline_summary(partner_id: bytes(32), period: bytes(32), pk: bytes(1568)) -> LeadPipelineView
-    lex esn/marketplace/advertising/scope {
+    @lex marketplace/advertising/scope {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [summaries_generated, avg_conversion_rate, avg_roi, summary_errors]
-    invariant "partner_id_not_empty" { partner_id != 0 }
-    invariant "period_not_empty" { period != 0 }
-    monitor "summary_error_rate" { summary_errors / summaries_generated < 0.01 }
-    monitor "roi_floor" { avg_roi > 0 }
-    esz_emit "verify/scope_pipeline_summary.esz"
-    li_feed full_escir true, optimized_ir true
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [summaries_generated, avg_conversion_rate, avg_roi, summary_errors]
+    @invariant "partner_id_not_empty" { partner_id != 0 }
+    @invariant "period_not_empty" { period != 0 }
+    @monitor "summary_error_rate" { summary_errors / summaries_generated < 0.01 }
+    @monitor "roi_floor" { avg_roi > 0 }
+    @serialize "verify/scope_pipeline_summary.esz"
+    @li_feed full_escir true, optimized_ir true
 {
     let summary_hash = sha3_256(partner_id)
     let kem = mlkem_encaps(pk)

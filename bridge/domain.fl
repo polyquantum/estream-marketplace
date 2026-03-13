@@ -1,0 +1,14 @@
+// polyquantum.bridge — Cross-Chain & Cross-Lex Bridge Circuits
+// Interoperability bridges between lex domains and external chains
+
+domain polyquantum.bridge v0.12.0 {
+    description "Cross-chain and cross-lex bridge circuits"
+    publisher "polyquantum"
+    license "commercial"
+
+    modules {
+        cross_chain "Bridge circuits to external blockchains (Ethereum, Solana, etc.)"
+        cross_lex   "Inter-lex bridges for sovereign lex domain interoperability"
+        relay       "Light-client relay proofs for trustless verification"
+    }
+}

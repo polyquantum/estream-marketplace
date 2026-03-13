@@ -35,8 +35,8 @@ data ComplianceResult : circuit v1 {
     risk_score: bytes(32),
     flags: bytes(32),
 }
-    observe events [cleared, flags]
-    govern {
+    @observe events [cleared, flags]
+    @govern {
         COMPLIANCE -> encrypted(compliance_officer)
         METADATA -> public
     }
@@ -46,9 +46,9 @@ data SettlementResult : circuit v1 {
     settlement_hash: bytes(32),
     counterparty_notified: bool,
 }
-    observe events [settled, settlement_hash]
-    attest {
-        povc true
+    @observe events [settled, settlement_hash]
+    @attest {
+        attested true
         anchor_field settlement_hash
         proof_system groth16
     }
@@ -60,14 +60,14 @@ data AuditRecord : app v1 {
     details_hash: bytes(32),
     witness_sig: bytes(2420),
 }
-    observe events [event_type, order_id, timestamp]
-    sign {
+    @observe events [event_type, order_id, timestamp]
+    @sign {
         algorithm mldsa87
         key_field witness_sig
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field details_hash
         commitment_scheme pedersen
     }
@@ -80,20 +80,20 @@ data GatewayHealth : metrics v1 {
     uptime_seconds: u64,
     healthy: bool,
 }
-    observe metrics [sessions_active, orders_today, fills_today, compliance_rejections] level adaptive
+    @observe metrics [sessions_active, orders_today, fills_today, compliance_rejections] level adaptive
 
 // =============================================================================
 // Stream Declarations (gateway-level)
 // =============================================================================
 
 stream gateway_audit: event<AuditRecord>
-    retention 7y
-    consumers [compliance_export, regulatory_reporting]
-    classify event_type: AUDIT, order_id: IDENTIFIER
+    @retention 7y
+    @consumers [compliance_export, regulatory_reporting]
+    @classify event_type: AUDIT, order_id: IDENTIFIER
 
 stream gateway_health: event<GatewayHealth>
     | throttle 1/s burst 5
-    consumers [ops_dashboard]
+    @consumers [ops_dashboard]
 
 // =============================================================================
 // Circuit: Pre-Trade Compliance Check
@@ -104,22 +104,22 @@ stream gateway_health: event<GatewayHealth>
 // timing-based information leakage about screening results.
 
 circuit compliance_check(order: EStreamOrder, pk: bytes(1568)) -> ComplianceResult
-    lex esn/fin/pci/org/estream/trading {
+    @lex fin/pci/org/estream/trading {
         governance hierarchical
         approval_required true
         audit_trail true
         compliance [pci_dss, aml_bsa, mifid2]
     }
-    precision A
-    constant_time true
-    streamsight true
-    sanitize pii_fields [order.client_order_id], retention 7y
-    witness threshold(2, 3)
-    observe metrics: [compliance_checks, compliance_rejections, ofac_hits, position_limit_hits]
-    invariant "compliance_never_skipped" { compliance_checks >= 1 }
-    invariant "pii_never_logged" { pii_in_telemetry == false }
-    monitor "rejection_rate" { compliance_rejections / compliance_checks < 0.10 }
-    esz_emit "verify/fix_trading_compliance.esz"
+    @precision A
+    @constant_time true
+    @observe true
+    @sanitize pii_fields [order.client_order_id], retention 7y
+    @witness threshold(2, 3)
+    @observe metrics: [compliance_checks, compliance_rejections, ofac_hits, position_limit_hits]
+    @invariant "compliance_never_skipped" { compliance_checks >= 1 }
+    @invariant "pii_never_logged" { pii_in_telemetry == false }
+    @monitor "rejection_rate" { compliance_rejections / compliance_checks < 0.10 }
+    @serialize "verify/fix_trading_compliance.esz"
 {
     let order_hash = sha3_256(order.order_id)
     let kem = mlkem_encaps(pk)
@@ -144,17 +144,17 @@ circuit compliance_check(order: EStreamOrder, pk: bytes(1568)) -> ComplianceResu
 // Generates the order hash for lex path addressing and emits witness attestation.
 
 circuit order_route(order: EStreamOrder, compliance: ComplianceResult, pk: bytes(1568)) -> bytes(32)
-    lex esn/fin/pci/org/estream/trading {
+    @lex fin/pci/org/estream/trading {
         governance hierarchical
         audit_trail true
     }
-    precision B
-    witness threshold(2, 3)
-    streamsight true
-    rbac [trading_desk, compliance_officer]
-    observe metrics: [orders_routed, orders_blocked]
-    invariant "only_cleared_orders_routed" { compliance.cleared == true }
-    property safety "no_uncleared_orders" { orders_blocked >= 0 }
+    @precision B
+    @witness threshold(2, 3)
+    @observe true
+    @rbac [trading_desk, compliance_officer]
+    @observe metrics: [orders_routed, orders_blocked]
+    @invariant "only_cleared_orders_routed" { compliance.cleared == true }
+    @property safety "no_uncleared_orders" { orders_blocked >= 0 }
 {
     let route_hash = sha3_256(order.order_id)
     let kem = mlkem_encaps(pk)
@@ -172,20 +172,20 @@ circuit order_route(order: EStreamOrder, compliance: ComplianceResult, pk: bytes
 // Triggers settlement and notifies counterparty via data_to_fix egress path.
 
 circuit settlement_bridge(fill: EStreamFill, pk: bytes(1568)) -> SettlementResult
-    lex esn/fin/pci/org/estream/trading {
+    @lex fin/pci/org/estream/trading {
         governance hierarchical
         audit_trail true
         compliance [pci_dss]
     }
-    precision A
-    witness threshold(2, 3)
-    streamsight true
-    observe metrics: [fills_settled, settlement_failures, settlement_latency_us]
-    invariant "fill_has_order" { fill.order_id != 0 }
-    invariant "settlement_atomic" { settled == true || settled == false }
-    property safety "no_double_settlement" { settle_count(fill.fill_id) <= 1 }
-    esz_emit "verify/fix_trading_settlement.esz"
-    li_feed full_escir true, optimized_ir true
+    @precision A
+    @witness threshold(2, 3)
+    @observe true
+    @observe metrics: [fills_settled, settlement_failures, settlement_latency_us]
+    @invariant "fill_has_order" { fill.order_id != 0 }
+    @invariant "settlement_atomic" { settled == true || settled == false }
+    @property safety "no_double_settlement" { settle_count(fill.fill_id) <= 1 }
+    @serialize "verify/fix_trading_settlement.esz"
+    @li_feed full_escir true, optimized_ir true
 {
     let fill_hash = sha3_256(fill.fill_id)
     let kem = mlkem_encaps(pk)
@@ -208,16 +208,16 @@ circuit settlement_bridge(fill: EStreamFill, pk: bytes(1568)) -> SettlementResul
 // Records are PoVC-attested and retained for 7 years per MiFID II / SEC 17a-4.
 
 circuit audit_export(event_type: bytes(32), order_id: bytes(32), details: bytes(1024), pk: bytes(1568)) -> AuditRecord
-    lex esn/fin/pci/org/estream/trading {
+    @lex fin/pci/org/estream/trading {
         governance hierarchical
         audit_trail true
         compliance [mifid2, sec_17a4]
     }
-    precision A
-    constant_time true
-    streamsight true
-    observe metrics: [audit_records_created, audit_export_bytes]
-    invariant "audit_always_signed" { witness_sig != 0 }
+    @precision A
+    @constant_time true
+    @observe true
+    @observe metrics: [audit_records_created, audit_export_bytes]
+    @invariant "audit_always_signed" { witness_sig != 0 }
 {
     let details_hash = sha3_256(details)
     let kem = mlkem_encaps(pk)
@@ -282,8 +282,8 @@ platform fix_trading_gateway v1 {
     // Platform Annotations
     // =========================================================================
 
-    target xilinx_u250
-    streamsight true
-    esz_emit "verify/fix_trading_gateway.esz"
-    li_feed full_escir true, optimized_ir true, optimization_metadata true
+    @target xilinx_u250
+    @observe true
+    @serialize "verify/fix_trading_gateway.esz"
+    @li_feed full_escir true, optimized_ir true, optimization_metadata true
 }

@@ -29,7 +29,7 @@ data AdCreative : app v1 {
     format: enum { JPEG, PNG, WebP },
     created_at: u64,
 }
-    encode @ bytes(173) {
+    @encode @ bytes(173) {
         creative_id   @ le,
         advertiser_id @ le,
         campaign_id   @ le,
@@ -39,8 +39,8 @@ data AdCreative : app v1 {
         format        @ le,
         created_at    @ le,
     }
-    store kv
-    observe events [format, width, height]
+    @store kv
+    @observe events [format, width, height]
 
 data ImpressionRecord : app v1 {
     impression_id: bytes(32),
@@ -52,7 +52,7 @@ data ImpressionRecord : app v1 {
     stego_payload: bytes(256),
     page_context_hash: bytes(32),
 }
-    encode @ bytes(5043) {
+    @encode @ bytes(5043) {
         impression_id    @ le,
         creative_id      @ le,
         viewer_hash      @ le,
@@ -62,10 +62,10 @@ data ImpressionRecord : app v1 {
         stego_payload    @ le,
         page_context_hash @ le,
     }
-    store kv
-    store dag
-    series retain 365d
-    cortex {
+    @store kv
+    @store dag
+    @series retain 365d
+    @cortex {
         visibility {
             viewer_hash hash
             session_hash hash
@@ -73,15 +73,15 @@ data ImpressionRecord : app v1 {
             signature expose
         }
     }
-    observe events [creative_id, timestamp_ns]
-    observe metrics [timestamp_ns] level adaptive
-    sign {
+    @observe events [creative_id, timestamp_ns]
+    @observe metrics [timestamp_ns] level adaptive
+    @sign {
         algorithm mldsa87
         key_field signature
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field impression_id
         proof_system groth16
     }
@@ -93,8 +93,8 @@ data StegoPayload : circuit v1 {
     campaign_fragment: bytes(16),
     checksum: bytes(32),
 }
-    encode cbor
-    observe events [impression_id]
+    @encode cbor
+    @observe events [impression_id]
 
 // =============================================================================
 // DAG Declaration — Impression Chain
@@ -104,7 +104,7 @@ dag impression_dag {
     node ImpressionNode : ImpressionRecord
     edge parent : ImpressionNode -> ImpressionNode
     storage csr { tier bram { capacity: 1000000 } }
-    sign ml_dsa_87
+    @sign ml_dsa_87
 }
 
 // =============================================================================
@@ -112,18 +112,18 @@ dag impression_dag {
 // =============================================================================
 
 stream etch_impression_events: event<ImpressionRecord>
-    retention 365d
-    consumers [streamsight, audit, advertiser_dashboard]
-    classify impression_id: IDENTIFIER, creative_id: IDENTIFIER, viewer_hash: IDENTIFIER, session_hash: IDENTIFIER, timestamp_ns: METRIC, page_context_hash: METADATA
+    @retention 365d
+    @consumers [streamsight, audit, advertiser_dashboard]
+    @classify impression_id: IDENTIFIER, creative_id: IDENTIFIER, viewer_hash: IDENTIFIER, session_hash: IDENTIFIER, timestamp_ns: METRIC, page_context_hash: METADATA
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series etch_impression_series: etch_impression_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Sign Impression
@@ -135,19 +135,19 @@ series etch_impression_series: etch_impression_events
 // the ad image. Viewer identity is always blinded.
 
 circuit etch_sign_impression(creative_id: bytes(32), viewer_hash: bytes(32), session_hash: bytes(32), page_context: bytes(32), sk: bytes(4896), pk: bytes(1568)) -> ImpressionRecord
-    lex esn/marketplace/advertising/etch {
+    @lex marketplace/advertising/etch {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [impressions_signed, signing_latency_ns, stego_embed_latency_ns]
-    invariant "every_impression_signed" { signature != 0 }
-    invariant "viewer_always_blinded" { viewer_hash == sha3_256(viewer_id || session_salt) }
-    monitor "signing_rate" { deviation(impressions_per_sec, baseline) < 0.25 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [impressions_signed, signing_latency_ns, stego_embed_latency_ns]
+    @invariant "every_impression_signed" { signature != 0 }
+    @invariant "viewer_always_blinded" { viewer_hash == sha3_256(viewer_id || session_salt) }
+    @monitor "signing_rate" { deviation(impressions_per_sec, baseline) < 0.25 }
+    @fuzz_target
 {
     let impression_seed = sha3_256(creative_id)
     let impression_id = sha3_256(impression_seed)
@@ -189,19 +189,19 @@ circuit etch_sign_impression(creative_id: bytes(32), viewer_hash: bytes(32), ses
 // Constant-time to prevent timing side channels during embedding.
 
 circuit etch_embed_stego(image_hash: bytes(32), payload: StegoPayload, key: bytes(32), pk: bytes(1568)) -> bytes(32)
-    lex esn/marketplace/advertising/etch {
+    @lex marketplace/advertising/etch {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [stego_embeds, embed_latency_ns, embed_failures]
-    invariant "payload_fits" { len(payload) <= 256 }
-    invariant "image_hash_not_empty" { image_hash != 0 }
-    monitor "embed_failure_rate" { embed_failures / stego_embeds < 0.01 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [stego_embeds, embed_latency_ns, embed_failures]
+    @invariant "payload_fits" { len(payload) <= 256 }
+    @invariant "image_hash_not_empty" { image_hash != 0 }
+    @monitor "embed_failure_rate" { embed_failures / stego_embeds < 0.01 }
+    @fuzz_target
 {
     let embed_hash = sha3_256(image_hash)
     let kem = mlkem_encaps(pk)
@@ -225,18 +225,18 @@ circuit etch_embed_stego(image_hash: bytes(32), payload: StegoPayload, key: byte
 // or none if the image does not contain a valid payload.
 
 circuit etch_extract_stego(image_hash: bytes(32), key: bytes(32), pk: bytes(1568)) -> option<StegoPayload>
-    lex esn/marketplace/advertising/etch {
+    @lex marketplace/advertising/etch {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [stego_extractions, extract_latency_ns, extract_failures, checksum_mismatches]
-    invariant "image_hash_not_empty" { image_hash != 0 }
-    monitor "extract_failure_rate" { extract_failures / stego_extractions < 0.02 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [stego_extractions, extract_latency_ns, extract_failures, checksum_mismatches]
+    @invariant "image_hash_not_empty" { image_hash != 0 }
+    @monitor "extract_failure_rate" { extract_failures / stego_extractions < 0.02 }
+    @fuzz_target
 {
     let extract_hash = sha3_256(image_hash)
     let kem = mlkem_encaps(pk)

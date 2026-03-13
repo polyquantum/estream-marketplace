@@ -1,0 +1,51 @@
+// Journey: Fleet Aggregation Profile Selection
+// Tests profile creation and fleet instantiation:
+//   select profile → configure weights → create fleet
+
+journey "fleet_aggregation_profiles" {
+    description "Select a fleet profile, configure weights, and create a fleet graph"
+    package "polyquantum.industrial"
+    platform ">= 0.12.0"
+
+    import industrial.fleet-aggregation.circuits.fleet_aggregation {
+        fleet_profile_small, fleet_profile_medium, fleet_profile_large,
+        default_weights_energy, create_fleet,
+        FleetConfig, FleetProfile, HealthWeights
+    }
+
+    step "select_small_profile" {
+        let small = fleet_profile_small()
+        assert small.max_sites == 50
+        assert small.max_regions == 4
+        assert small.ai_model_slots == 2
+    }
+
+    step "select_medium_profile" {
+        let medium = fleet_profile_medium()
+        assert medium.max_sites == 200
+        assert medium.max_regions == 16
+    }
+
+    step "select_large_profile" {
+        let large = fleet_profile_large()
+        assert large.max_sites == 1000
+        assert large.aggregation_interval == 30
+    }
+
+    step "configure_energy_weights" {
+        let weights = default_weights_energy()
+        assert weights.uptime_weight == 0.30
+        assert weights.fault_weight == 0.20
+    }
+
+    step "create_fleet_with_small_profile" {
+        let config = FleetConfig {
+            profile: fleet_profile_small(),
+            region_mappings: [],
+            health_weights: default_weights_energy(),
+            ai_models: [],
+        }
+        let fleet_ref = create_fleet(config)
+        assert fleet_ref != 0
+    }
+}

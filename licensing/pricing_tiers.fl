@@ -6,7 +6,7 @@
 // Private tier: higher price, zero telemetry.
 // Both tiers are legitimate — no coercion, no dark patterns.
 
-/// govern lex esn/marketplace/licensing
+/// govern lex marketplace/licensing
 
 // --- Types ---
 
@@ -59,20 +59,20 @@ type TelemetrySchema = struct {
 // --- Streams ---
 
 stream pricing_tier_events: event<TierChangeRecord>
-    retention 365d
-    consumers [billing, audit, console, publisher_dashboard]
+    @retention 365d
+    @consumers [billing, audit, console, publisher_dashboard]
 
 stream telemetry_preferences: state<BlindedCustomerId, CustomerTelemetryPreference>
-    retention 365d
-    consumers [licensing, metering, billing]
+    @retention 365d
+    @consumers [licensing, metering, billing]
 
 // --- Circuits ---
 
 /// test golden
 circuit set_telemetry_preference(blinded_customer_id: BlindedCustomerId, package_id: PackageId, telemetry_share: bool) -> CustomerTelemetryPreference
-    lex esn/marketplace/licensing/pricing
-    precision B
-    observe metrics: [preference_updates, package_id, telemetry_share]
+    @lex marketplace/licensing/pricing
+    @precision B
+    @observe metrics: [preference_updates, package_id, telemetry_share]
 {
     CustomerTelemetryPreference {
         blinded_customer_id: blinded_customer_id,
@@ -85,9 +85,9 @@ circuit set_telemetry_preference(blinded_customer_id: BlindedCustomerId, package
 
 /// test golden
 circuit get_effective_price(tier: PricingTier, preference: CustomerTelemetryPreference) -> u64
-    lex esn/marketplace/licensing/pricing
-    precision C
-    observe metrics: [price_lookups, package_id, tier_type]
+    @lex marketplace/licensing/pricing
+    @precision C
+    @observe metrics: [price_lookups, package_id, tier_type]
 {
     let price = tier.share_price_micros
     price
@@ -95,10 +95,10 @@ circuit get_effective_price(tier: PricingTier, preference: CustomerTelemetryPref
 
 /// test golden
 circuit change_pricing_tier(blinded_customer_id: BlindedCustomerId, package_id: PackageId, current_tier: PricingTier, new_telemetry_share: bool, next_billing_period_start: u64) -> TierChangeRecord
-    lex esn/marketplace/licensing/pricing
-    precision B
-    observe metrics: [tier_changes, package_id, old_tier_type, new_tier_type]
-    povc true
+    @lex marketplace/licensing/pricing
+    @precision B
+    @observe metrics: [tier_changes, package_id, old_tier_type, new_tier_type]
+    @attested true
 {
     let old_type = current_tier.tier_type
     let old_price = current_tier.share_price_micros
@@ -117,9 +117,9 @@ circuit change_pricing_tier(blinded_customer_id: BlindedCustomerId, package_id: 
 
 /// test golden
 circuit validate_telemetry_schema(schema: TelemetrySchema) -> bool
-    lex esn/marketplace/licensing/pricing
-    precision B
-    observe metrics: [schema_validations, schema_failures]
+    @lex marketplace/licensing/pricing
+    @precision B
+    @observe metrics: [schema_validations, schema_failures]
 {
     let no_pii = schema.contains_pii == false
     let has_anonymization = schema.anonymization_method > 0
@@ -128,9 +128,9 @@ circuit validate_telemetry_schema(schema: TelemetrySchema) -> bool
 
 /// test golden
 circuit compute_tier_savings(tier: PricingTier) -> u64
-    lex esn/marketplace/licensing/pricing
-    precision C
-    observe metrics: [savings_calculations, package_id]
+    @lex marketplace/licensing/pricing
+    @precision C
+    @observe metrics: [savings_calculations, package_id]
 {
     let savings = tier.private_price_micros - tier.share_price_micros
     savings

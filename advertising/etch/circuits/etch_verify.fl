@@ -30,7 +30,7 @@ data ImpressionProof : app v1 {
     verified: u8,
     generated_at: u64,
 }
-    encode @ bytes(620) {
+    @encode @ bytes(620) {
         proof_id     @ le,
         campaign_id  @ le,
         count        @ le,
@@ -38,17 +38,17 @@ data ImpressionProof : app v1 {
         verified     @ le,
         generated_at @ le,
     }
-    store kv
-    series retain 365d
-    observe events [campaign_id, count, verified]
-    observe metrics [count] level adaptive
-    sign {
+    @store kv
+    @series retain 365d
+    @observe events [campaign_id, count, verified]
+    @observe metrics [count] level adaptive
+    @sign {
         algorithm mldsa87
         key_field proof_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field proof_id
         proof_system groth16
     }
@@ -61,30 +61,30 @@ data VerificationResult : circuit v1 {
     chain_valid: u8,
     timestamp: u64,
 }
-    observe events [verified, proof_valid, chain_valid]
+    @observe events [verified, proof_valid, chain_valid]
 
 // =============================================================================
 // Stream Declarations
 // =============================================================================
 
 stream etch_proof_events: event<ImpressionProof>
-    retention 365d
-    consumers [streamsight, audit, advertiser_dashboard]
-    classify proof_id: IDENTIFIER, campaign_id: IDENTIFIER, count: METRIC, verified: METADATA
+    @retention 365d
+    @consumers [streamsight, audit, advertiser_dashboard]
+    @classify proof_id: IDENTIFIER, campaign_id: IDENTIFIER, count: METRIC, verified: METADATA
 
 stream etch_verification_events: event<VerificationResult>
-    retention 365d
-    consumers [streamsight, audit, advertiser_dashboard, alerting]
-    classify campaign_id: IDENTIFIER, claimed_count: METRIC, verified: METADATA, proof_valid: METADATA, chain_valid: METADATA
+    @retention 365d
+    @consumers [streamsight, audit, advertiser_dashboard, alerting]
+    @classify campaign_id: IDENTIFIER, claimed_count: METRIC, verified: METADATA, proof_valid: METADATA, chain_valid: METADATA
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series etch_proof_audit: etch_proof_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Generate Count Proof
@@ -96,19 +96,19 @@ series etch_proof_audit: etch_proof_events
 // head and total impression count.
 
 circuit etch_generate_count_proof(campaign_id: bytes(32), count: u64, pk: bytes(1568)) -> ImpressionProof
-    lex esn/marketplace/advertising/etch {
+    @lex marketplace/advertising/etch {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [proofs_generated, proof_generation_latency_ns, proof_failures]
-    invariant "campaign_id_not_empty" { campaign_id != 0 }
-    invariant "count_positive" { count > 0 }
-    monitor "proof_failure_rate" { proof_failures / proofs_generated < 0.01 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [proofs_generated, proof_generation_latency_ns, proof_failures]
+    @invariant "campaign_id_not_empty" { campaign_id != 0 }
+    @invariant "count_positive" { count > 0 }
+    @monitor "proof_failure_rate" { proof_failures / proofs_generated < 0.01 }
+    @fuzz_target
 {
     let proof_seed = sha3_256(campaign_id)
     let proof_id = sha3_256(proof_seed)
@@ -143,20 +143,20 @@ circuit etch_generate_count_proof(campaign_id: bytes(32), count: u64, pk: bytes(
 // proof_valid and chain_valid flags.
 
 circuit etch_verify_count(campaign_id: bytes(32), claimed_count: u64, proof: bytes(512), pk: bytes(1568)) -> VerificationResult
-    lex esn/marketplace/advertising/etch {
+    @lex marketplace/advertising/etch {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [counts_verified, verify_latency_ns, proof_rejections, chain_rejections]
-    invariant "campaign_id_not_empty" { campaign_id != 0 }
-    invariant "proof_not_empty" { proof != 0 }
-    monitor "proof_rejection_rate" { proof_rejections / counts_verified < 0.05 }
-    monitor "chain_rejection_rate" { chain_rejections / counts_verified < 0.02 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [counts_verified, verify_latency_ns, proof_rejections, chain_rejections]
+    @invariant "campaign_id_not_empty" { campaign_id != 0 }
+    @invariant "proof_not_empty" { proof != 0 }
+    @monitor "proof_rejection_rate" { proof_rejections / counts_verified < 0.05 }
+    @monitor "chain_rejection_rate" { chain_rejections / counts_verified < 0.02 }
+    @fuzz_target
 {
     let verify_hash = sha3_256(campaign_id)
     let kem = mlkem_encaps(pk)
@@ -189,20 +189,20 @@ circuit etch_verify_count(campaign_id: bytes(32), claimed_count: u64, proof: byt
 // verifies it against the chain's total impression count.
 
 circuit etch_audit_campaign(campaign_id: bytes(32), pk: bytes(1568)) -> VerificationResult
-    lex esn/marketplace/advertising/etch {
+    @lex marketplace/advertising/etch {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    witness threshold(2, 3)
-    observe metrics: [campaigns_audited, audit_latency_ns, audit_failures, chain_failures, proof_failures]
-    invariant "campaign_id_not_empty" { campaign_id != 0 }
-    monitor "audit_failure_rate" { audit_failures / campaigns_audited < 0.02 }
-    esz_emit "verify/etch_audit_campaign.esz"
-    li_feed full_escir true, optimized_ir true
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @witness threshold(2, 3)
+    @observe metrics: [campaigns_audited, audit_latency_ns, audit_failures, chain_failures, proof_failures]
+    @invariant "campaign_id_not_empty" { campaign_id != 0 }
+    @monitor "audit_failure_rate" { audit_failures / campaigns_audited < 0.02 }
+    @serialize "verify/etch_audit_campaign.esz"
+    @li_feed full_escir true, optimized_ir true
 {
     let audit_hash = sha3_256(campaign_id)
     let kem = mlkem_encaps(pk)

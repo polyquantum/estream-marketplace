@@ -25,7 +25,7 @@ data ImpressionChainNode : app v1 {
     campaign_id: bytes(32),
     timestamp_ns: u64,
 }
-    encode @ bytes(200) {
+    @encode @ bytes(200) {
         node_hash     @ le,
         impression_id @ le,
         parent_hash   @ le,
@@ -33,17 +33,17 @@ data ImpressionChainNode : app v1 {
         campaign_id   @ le,
         timestamp_ns  @ le,
     }
-    store dag
-    series retain 365d
-    observe events [campaign_id, timestamp_ns]
-    observe metrics [depth] level adaptive
-    sign {
+    @store dag
+    @series retain 365d
+    @observe events [campaign_id, timestamp_ns]
+    @observe metrics [depth] level adaptive
+    @sign {
         algorithm mldsa87
         key_field node_hash
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field node_hash
         proof_system groth16
     }
@@ -55,17 +55,17 @@ data ChainHead : app v1 {
     total_impressions: u64,
     last_updated_ns: u64,
 }
-    encode @ bytes(136) {
+    @encode @ bytes(136) {
         campaign_id       @ le,
         head_hash         @ le,
         depth             @ le,
         total_impressions @ le,
         last_updated_ns   @ le,
     }
-    store kv
-    series retain forever
-    observe metrics [depth, total_impressions] level adaptive
-    observe events [campaign_id, depth, total_impressions]
+    @store kv
+    @series retain forever
+    @observe metrics [depth, total_impressions] level adaptive
+    @observe events [campaign_id, depth, total_impressions]
 
 // =============================================================================
 // DAG Declaration — Impression Chain
@@ -75,7 +75,7 @@ dag impression_chain {
     node ImpressionChainNode : ImpressionChainNode
     edge parent : ImpressionChainNode -> ImpressionChainNode
     storage csr { tier bram { capacity: 1000000 } }
-    sign ml_dsa_87
+    @sign ml_dsa_87
 }
 
 // =============================================================================
@@ -83,23 +83,23 @@ dag impression_chain {
 // =============================================================================
 
 stream etch_chain_events: event<ImpressionChainNode>
-    retention 365d
-    consumers [streamsight, audit, advertiser_dashboard]
-    classify node_hash: IDENTIFIER, impression_id: IDENTIFIER, parent_hash: IDENTIFIER, campaign_id: IDENTIFIER, depth: METRIC, timestamp_ns: METRIC
+    @retention 365d
+    @consumers [streamsight, audit, advertiser_dashboard]
+    @classify node_hash: IDENTIFIER, impression_id: IDENTIFIER, parent_hash: IDENTIFIER, campaign_id: IDENTIFIER, depth: METRIC, timestamp_ns: METRIC
 
 stream etch_chain_head_events: event<ChainHead>
-    retention forever
-    consumers [streamsight, audit, advertiser_dashboard]
-    classify campaign_id: IDENTIFIER, head_hash: IDENTIFIER, depth: METRIC, total_impressions: METRIC
+    @retention forever
+    @consumers [streamsight, audit, advertiser_dashboard]
+    @classify campaign_id: IDENTIFIER, head_hash: IDENTIFIER, depth: METRIC, total_impressions: METRIC
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series etch_chain_audit: etch_chain_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Append to Chain
@@ -111,20 +111,20 @@ series etch_chain_audit: etch_chain_events
 // is signed and added as a DAG edge from the new node to the previous head.
 
 circuit etch_append_chain(impression_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568)) -> ImpressionChainNode
-    lex esn/marketplace/advertising/etch {
+    @lex marketplace/advertising/etch {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [nodes_appended, append_latency_ns, chain_depth_max, append_errors]
-    invariant "impression_id_not_empty" { impression_id != 0 }
-    invariant "campaign_id_not_empty" { campaign_id != 0 }
-    monitor "append_error_rate" { append_errors / nodes_appended < 0.01 }
-    monitor "chain_depth_ceiling" { chain_depth_max < 10000000 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [nodes_appended, append_latency_ns, chain_depth_max, append_errors]
+    @invariant "impression_id_not_empty" { impression_id != 0 }
+    @invariant "campaign_id_not_empty" { campaign_id != 0 }
+    @monitor "append_error_rate" { append_errors / nodes_appended < 0.01 }
+    @monitor "chain_depth_ceiling" { chain_depth_max < 10000000 }
+    @fuzz_target
 {
     let head = kv_get(campaign_id)
     let parent_hash = head.head_hash
@@ -159,18 +159,18 @@ circuit etch_append_chain(impression_id: bytes(32), campaign_id: bytes(32), pk: 
 // Returns true if every node's parent hash matches and all signatures verify.
 
 circuit etch_verify_chain(head_hash: bytes(32), depth: u64, pk: bytes(1568)) -> bool
-    lex esn/marketplace/advertising/etch {
+    @lex marketplace/advertising/etch {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [chains_verified, verify_latency_ns, verify_failures, nodes_traversed]
-    invariant "head_hash_not_empty" { head_hash != 0 }
-    invariant "depth_positive" { depth > 0 }
-    monitor "verify_failure_rate" { verify_failures / chains_verified < 0.01 }
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [chains_verified, verify_latency_ns, verify_failures, nodes_traversed]
+    @invariant "head_hash_not_empty" { head_hash != 0 }
+    @invariant "depth_positive" { depth > 0 }
+    @monitor "verify_failure_rate" { verify_failures / chains_verified < 0.01 }
 {
     let verify_hash = sha3_256(head_hash)
     let kem = mlkem_encaps(pk)
@@ -192,12 +192,12 @@ circuit etch_verify_chain(head_hash: bytes(32), depth: u64, pk: bytes(1568)) -> 
 // depth, total impression count, and last update timestamp.
 
 circuit etch_chain_head(campaign_id: bytes(32)) -> ChainHead
-    lex esn/marketplace/advertising/etch
-    precision C
-    streamsight true
-    observe metrics: [head_lookups, head_misses]
-    invariant "campaign_id_not_empty" { campaign_id != 0 }
-    monitor "head_miss_rate" { head_misses / head_lookups < 0.10 }
+    @lex marketplace/advertising/etch
+    @precision C
+    @observe true
+    @observe metrics: [head_lookups, head_misses]
+    @invariant "campaign_id_not_empty" { campaign_id != 0 }
+    @monitor "head_miss_rate" { head_misses / head_lookups < 0.10 }
 {
     let lookup_hash = sha3_256(campaign_id)
     let anomaly = streamsight_anomaly(lookup_hash)

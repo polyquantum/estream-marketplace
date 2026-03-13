@@ -37,12 +37,12 @@ data EngagementCode : app v1 {
     visible_fields: list<string>,
     user_compensation_type: enum { PrioritySupport, EarlyAccess, AffiliateCredit, CharitableDonation },
     escrow_id: bytes(32),
-    status: enum { Generated, Viewed, Activated, Expired, Revoked },
+    @status: enum { Generated, Viewed, Activated, Expired, Revoked },
     created_at: u64,
     activated_at: u64,
     consent_signature: bytes(4627),
 }
-    encode @ bytes(4883) {
+    @encode @ bytes(4883) {
         code_id                 @ le,
         partner_id              @ le,
         user_id                 @ le,
@@ -55,9 +55,9 @@ data EngagementCode : app v1 {
         activated_at            @ le,
         consent_signature       @ le,
     }
-    store kv
-    series retain 7y
-    cortex {
+    @store kv
+    @series retain 7y
+    @cortex {
         visibility {
             user_id obfuscate
             partner_id expose
@@ -66,15 +66,15 @@ data EngagementCode : app v1 {
             user_compensation_type expose
         }
     }
-    observe events [status, partner_id]
-    observe metrics [status, partner_id] level adaptive
-    sign {
+    @observe events [status, partner_id]
+    @observe metrics [status, partner_id] level adaptive
+    @sign {
         algorithm mldsa87
         key_field consent_signature
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field code_id
     }
 
@@ -89,7 +89,7 @@ data ConsentProof : app v1 {
     timestamp_ns: u64,
     provenance_hop_id: bytes(32),
 }
-    encode @ bytes(4851) {
+    @encode @ bytes(4851) {
         proof_id          @ le,
         code_id           @ le,
         user_id           @ le,
@@ -100,9 +100,9 @@ data ConsentProof : app v1 {
         timestamp_ns      @ le,
         provenance_hop_id @ le,
     }
-    store dag
-    series retain 7y
-    cortex {
+    @store dag
+    @series retain 7y
+    @cortex {
         visibility {
             user_id obfuscate
             partner_id expose
@@ -110,15 +110,15 @@ data ConsentProof : app v1 {
             consent_hash expose
         }
     }
-    observe events [code_id, partner_id, consent_hash]
-    observe metrics [consent_hash] level adaptive
-    sign {
+    @observe events [code_id, partner_id, consent_hash]
+    @observe metrics [consent_hash] level adaptive
+    @sign {
         algorithm mldsa87
         key_field signature
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field consent_hash
         proof_system groth16
     }
@@ -128,23 +128,23 @@ data ConsentProof : app v1 {
 // =============================================================================
 
 stream optin_engagement_events: event<EngagementCode>
-    retention 7y
-    consumers [streamsight, audit, cortex, analytics, alerting]
-    classify code_id: IDENTIFIER, partner_id: IDENTIFIER, user_id: IDENTIFIER, status: METADATA
+    @retention 7y
+    @consumers [streamsight, audit, cortex, analytics, alerting]
+    @classify code_id: IDENTIFIER, partner_id: IDENTIFIER, user_id: IDENTIFIER, status: METADATA
 
 stream optin_consent_proofs: event<ConsentProof>
-    retention 7y
-    consumers [streamsight, audit, cortex, analytics]
-    classify proof_id: IDENTIFIER, code_id: IDENTIFIER, consent_hash: IDENTIFIER
+    @retention 7y
+    @consumers [streamsight, audit, cortex, analytics]
+    @classify proof_id: IDENTIFIER, code_id: IDENTIFIER, consent_hash: IDENTIFIER
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series optin_consent_chain: optin_consent_proofs
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Generate Engagement Code
@@ -156,20 +156,20 @@ series optin_consent_chain: optin_consent_proofs
 // deterministically derived from the partner, user, and offer hash.
 
 circuit optin_generate_code(partner_id: bytes(32), user_id: bytes(32), offer_hash: bytes(32), visible_fields: list<string>, compensation_type: enum { PrioritySupport, EarlyAccess, AffiliateCredit, CharitableDonation }, escrow_id: bytes(32), pk: bytes(1568)) -> EngagementCode
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [codes_generated, generation_latency_ns, codes_per_partner]
-    invariant "partner_id_not_empty" { partner_id != 0 }
-    invariant "user_id_not_empty" { user_id != 0 }
-    invariant "escrow_id_not_empty" { escrow_id != 0 }
-    monitor "generation_rate" { deviation(codes_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [codes_generated, generation_latency_ns, codes_per_partner]
+    @invariant "partner_id_not_empty" { partner_id != 0 }
+    @invariant "user_id_not_empty" { user_id != 0 }
+    @invariant "escrow_id_not_empty" { escrow_id != 0 }
+    @monitor "generation_rate" { deviation(codes_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let code_seed = sha3_256(partner_id)
     let code_id = sha3_256(code_seed)
@@ -210,19 +210,19 @@ circuit optin_generate_code(partner_id: bytes(32), user_id: bytes(32), offer_has
 // implies a non-zero consent signature.
 
 circuit optin_activate_code(code_id: bytes(32), user_sk: bytes(4896), user_pk: bytes(1568)) -> ConsentProof
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [codes_activated, activation_latency_ns, consent_proofs_created]
-    invariant "consent_requires_activation" { status == Activated implies consent_signature != 0 }
-    invariant "code_id_not_empty" { code_id != 0 }
-    monitor "activation_rate" { deviation(activations_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [codes_activated, activation_latency_ns, consent_proofs_created]
+    @invariant "consent_requires_activation" { status == Activated implies consent_signature != 0 }
+    @invariant "code_id_not_empty" { code_id != 0 }
+    @monitor "activation_rate" { deviation(activations_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let consent_seed = sha3_256(code_id)
     let consent_hash = sha3_256(consent_seed)
@@ -260,18 +260,18 @@ circuit optin_activate_code(code_id: bytes(32), user_sk: bytes(4896), user_pk: b
 // are not clawed back — settlement is final.
 
 circuit optin_revoke_code(code_id: bytes(32), user_sk: bytes(4896), pk: bytes(1568)) -> EngagementCode
-    lex esn/marketplace/advertising/optin {
+    @lex marketplace/advertising/optin {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [codes_revoked, revocation_latency_ns]
-    invariant "code_id_not_empty" { code_id != 0 }
-    monitor "revocation_rate" { deviation(revocations_per_sec, baseline) < 0.30 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [codes_revoked, revocation_latency_ns]
+    @invariant "code_id_not_empty" { code_id != 0 }
+    @monitor "revocation_rate" { deviation(revocations_per_sec, baseline) < 0.30 }
+    @fuzz_target
 {
     let revoke_hash = sha3_256(code_id)
     let kem = mlkem_encaps(pk)

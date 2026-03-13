@@ -63,37 +63,37 @@ type ProviderPricingEvent = struct {
 // --- Streams ---
 
 stream provider_pricing_events: event<ProviderPricingEvent>
-    retention 365d
-    consumers [streamsight, console, billing, audit]
+    @retention 365d
+    @consumers [streamsight, console, billing, audit]
 
 stream provider_usage: event<UsageRecord>
-    retention 365d
-    consumers [streamsight, console, billing]
+    @retention 365d
+    @consumers [streamsight, console, billing]
 
 // --- Provider Tier Management ---
 
 circuit create_provider_tier(tier: ProviderTier) -> bool
-    lex esn/marketplace/pricing/provider
-    precision B
-    observe
+    @lex marketplace/pricing/provider
+    @precision B
+    @observe
         metrics: [provider_tier_created, provider_id, component_id]
 {
     tier.is_active
 }
 
 circuit update_provider_tier(tier_id: bytes(16), new_tier: ProviderTier) -> bool
-    lex esn/marketplace/pricing/provider
-    precision B
-    observe
+    @lex marketplace/pricing/provider
+    @precision B
+    @observe
         metrics: [provider_tier_updated, tier_id, provider_id]
 {
     new_tier.is_active
 }
 
 circuit deactivate_provider_tier(tier_id: bytes(16), provider_id: bytes(32)) -> bool
-    lex esn/marketplace/pricing/provider
-    precision B
-    observe
+    @lex marketplace/pricing/provider
+    @precision B
+    @observe
         metrics: [provider_tier_deactivated, tier_id, provider_id]
 {
     true
@@ -102,9 +102,9 @@ circuit deactivate_provider_tier(tier_id: bytes(16), provider_id: bytes(32)) -> 
 // --- Tenant Deal Management ---
 
 circuit propose_tenant_deal(deal: TenantDeal) -> bool
-    lex esn/marketplace/pricing/provider
-    precision B
-    observe
+    @lex marketplace/pricing/provider
+    @precision B
+    @observe
         metrics: [deal_proposed, provider_id, tenant_id, component_id]
 {
     let valid_dates = deal.valid_from < deal.valid_until
@@ -113,19 +113,19 @@ circuit propose_tenant_deal(deal: TenantDeal) -> bool
 }
 
 circuit approve_tenant_deal(deal_id: bytes(16), operator_id: bytes(32)) -> bool
-    lex esn/marketplace/pricing/admin
-    precision B
-    povc true
-    observe
+    @lex marketplace/pricing/admin
+    @precision B
+    @attested true
+    @observe
         metrics: [deal_approved, deal_id, operator_id]
 {
     true
 }
 
 circuit revoke_tenant_deal(deal_id: bytes(16), actor_id: bytes(32)) -> bool
-    lex esn/marketplace/pricing/provider
-    precision B
-    observe
+    @lex marketplace/pricing/provider
+    @precision B
+    @observe
         metrics: [deal_revoked, deal_id, actor_id]
 {
     true
@@ -134,19 +134,19 @@ circuit revoke_tenant_deal(deal_id: bytes(16), actor_id: bytes(32)) -> bool
 // --- Usage Metering ---
 
 circuit record_usage(tenant_id: bytes(32), component_id: bytes(32), units: u64, rate: u64) -> u64
-    lex esn/marketplace/pricing/metering
-    precision A
-    observe
+    @lex marketplace/pricing/metering
+    @precision A
+    @observe
         metrics: [usage_recorded, tenant_id, component_id, units]
 {
     0
 }
 
 circuit compute_provider_payout(provider_id: bytes(32), period_start: u64, period_end: u64) -> u64
-    lex esn/marketplace/pricing/billing
-    precision B
-    povc true
-    observe
+    @lex marketplace/pricing/billing
+    @precision B
+    @attested true
+    @observe
         metrics: [payout_computed, provider_id, total_amount]
 {
     0

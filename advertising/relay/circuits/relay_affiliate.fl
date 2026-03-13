@@ -31,7 +31,7 @@ data ReferralLink : app v1 {
     click_count: u64,
     conversion_count: u64,
 }
-    encode @ bytes(216) {
+    @encode @ bytes(216) {
         link_id          @ le,
         referrer_id      @ le,
         campaign_id      @ le,
@@ -41,18 +41,18 @@ data ReferralLink : app v1 {
         click_count      @ le,
         conversion_count @ le,
     }
-    store kv
-    store graph
-    series retain 365d
-    observe events [click_count, conversion_count]
-    observe metrics [click_count, conversion_count] level adaptive
-    sign {
+    @store kv
+    @store graph
+    @series retain 365d
+    @observe events [click_count, conversion_count]
+    @observe metrics [click_count, conversion_count] level adaptive
+    @sign {
         algorithm mldsa87
         key_field link_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field link_id
         proof_system groth16
     }
@@ -63,7 +63,7 @@ data ReferrerInfo : circuit v1 {
     total_referrals: u64,
     total_compensation: u64,
 }
-    observe events [referrer_id, total_referrals]
+    @observe events [referrer_id, total_referrals]
 
 data RefereeInfo : circuit v1 {
     referee_id: bytes(32),
@@ -71,7 +71,7 @@ data RefereeInfo : circuit v1 {
     converted: u8,
     converted_at: u64,
 }
-    observe events [referee_id, converted]
+    @observe events [referee_id, converted]
 
 data CampaignInfo : circuit v1 {
     campaign_id: bytes(32),
@@ -79,7 +79,7 @@ data CampaignInfo : circuit v1 {
     active: u8,
     commission_rate_bps: u32,
 }
-    observe events [campaign_id, active]
+    @observe events [campaign_id, active]
 
 data ReferralTree : circuit v1 {
     tree_id: bytes(32),
@@ -88,14 +88,14 @@ data ReferralTree : circuit v1 {
     total_nodes: u64,
     total_conversions: u64,
 }
-    store graph
-    sign {
+    @store graph
+    @sign {
         algorithm mldsa87
         key_field tree_id
         detached true
     }
-    observe metrics [depth, total_nodes, total_conversions] level adaptive
-    observe events [tree_id, depth, total_conversions]
+    @observe metrics [depth, total_nodes, total_conversions] level adaptive
+    @observe events [tree_id, depth, total_conversions]
 
 // CompensationStatus: 0 = Pending, 1 = Approved, 2 = Paid, 3 = Expired
 
@@ -106,11 +106,11 @@ data Compensation : app v1 {
     campaign_id: bytes(32),
     amount: u64,
     currency: bytes(8),
-    status: u8,
+    @status: u8,
     earned_at: u64,
     paid_at: u64,
 }
-    encode @ bytes(181) {
+    @encode @ bytes(181) {
         comp_id      @ le,
         referrer_id  @ le,
         referee_id   @ le,
@@ -121,24 +121,24 @@ data Compensation : app v1 {
         earned_at    @ le,
         paid_at      @ le,
     }
-    store kv
-    series retain 7y
-    cortex {
+    @store kv
+    @series retain 7y
+    @cortex {
         visibility {
             referrer_id obfuscate
             referee_id obfuscate
             amount expose
         }
     }
-    observe events [amount, status]
-    observe metrics [amount, status] level adaptive
-    sign {
+    @observe events [amount, status]
+    @observe metrics [amount, status] level adaptive
+    @sign {
         algorithm mldsa87
         key_field comp_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field comp_id
         proof_system groth16
     }
@@ -152,7 +152,7 @@ data ViralMetrics : circuit v1 {
     revenue_per_referral: u64,
     total_compensation: u64,
 }
-    encode @ bytes(100) {
+    @encode @ bytes(100) {
         campaign_id          @ le,
         period               @ le,
         viral_coefficient    @ le,
@@ -161,22 +161,22 @@ data ViralMetrics : circuit v1 {
         revenue_per_referral @ le,
         total_compensation   @ le,
     }
-    store series retain 365d
-    cortex {
+    @store series retain 365d
+    @cortex {
         inference on_threshold {
             consumer "relay_viral_detector"
             threshold viral_coefficient > 1.5
         }
     }
-    observe metrics [viral_coefficient, referrals_per_user, depth_avg] level adaptive
-    observe events [viral_coefficient, referrals_per_user, depth_avg]
-    sign {
+    @observe metrics [viral_coefficient, referrals_per_user, depth_avg] level adaptive
+    @observe events [viral_coefficient, referrals_per_user, depth_avg]
+    @sign {
         algorithm mldsa87
         key_field campaign_id
         detached true
     }
-    attest {
-        povc true
+    @attest {
+        attested true
         anchor_field campaign_id
         proof_system groth16
     }
@@ -193,9 +193,9 @@ graph referral_graph {
     edge belongs_to : ReferralLink -> Campaign
     edge earned : Referrer -> Compensation
     storage csr { tier bram { capacity: 500000 } }
-    sign ml_dsa_87
+    @sign ml_dsa_87
     ai_feed viral_coefficient_analysis
-    observe streamsight: [referral_depth, viral_coefficient] threshold: {
+    @observe streamsight: [referral_depth, viral_coefficient] threshold: {
         viral_coefficient 0.9
         baseline_window 86400
     }
@@ -208,33 +208,33 @@ graph referral_graph {
 stream relay_link_events: event<ReferralLink>
     | filter record.click_count > 0
     | throttle 1000/s burst 5000
-    retention 365d
-    consumers [streamsight, cortex, analytics, alerting]
-    classify link_id: IDENTIFIER, referrer_id: IDENTIFIER, campaign_id: IDENTIFIER, click_count: METRIC, conversion_count: METRIC
+    @retention 365d
+    @consumers [streamsight, cortex, analytics, alerting]
+    @classify link_id: IDENTIFIER, referrer_id: IDENTIFIER, campaign_id: IDENTIFIER, click_count: METRIC, conversion_count: METRIC
 
 stream relay_compensation_events: event<Compensation>
-    retention 7y
-    consumers [streamsight, audit, cortex, analytics, alerting]
-    classify comp_id: IDENTIFIER, referrer_id: IDENTIFIER, referee_id: IDENTIFIER, amount: METRIC, status: METADATA
+    @retention 7y
+    @consumers [streamsight, audit, cortex, analytics, alerting]
+    @classify comp_id: IDENTIFIER, referrer_id: IDENTIFIER, referee_id: IDENTIFIER, amount: METRIC, status: METADATA
 
 stream relay_viral_events: event<ViralMetrics>
-    retention 365d
-    consumers [streamsight, cortex, analytics, alerting]
-    classify campaign_id: IDENTIFIER, period: IDENTIFIER, viral_coefficient: METRIC, referrals_per_user: METRIC
+    @retention 365d
+    @consumers [streamsight, cortex, analytics, alerting]
+    @classify campaign_id: IDENTIFIER, period: IDENTIFIER, viral_coefficient: METRIC, referrals_per_user: METRIC
 
 // =============================================================================
 // Series Declarations
 // =============================================================================
 
 series relay_compensation_audit: relay_compensation_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 series relay_viral_audit: relay_viral_events
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Circuit: Create Referral Link
@@ -246,19 +246,19 @@ series relay_viral_audit: relay_viral_events
 // counts start at zero.
 
 circuit relay_create_link(referrer_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568)) -> ReferralLink
-    lex esn/marketplace/advertising/relay {
+    @lex marketplace/advertising/relay {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [links_created, creation_errors, links_by_campaign]
-    invariant "referrer_id_not_empty" { referrer_id != 0 }
-    invariant "campaign_id_not_empty" { campaign_id != 0 }
-    monitor "creation_error_rate" { creation_errors / links_created < 0.01 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [links_created, creation_errors, links_by_campaign]
+    @invariant "referrer_id_not_empty" { referrer_id != 0 }
+    @invariant "campaign_id_not_empty" { campaign_id != 0 }
+    @monitor "creation_error_rate" { creation_errors / links_created < 0.01 }
+    @fuzz_target
 {
     let link_seed = sha3_256(referrer_id)
     let link_id = sha3_256(link_seed)
@@ -293,17 +293,17 @@ circuit relay_create_link(referrer_id: bytes(32), campaign_id: bytes(32), pk: by
 // filtering, click fraud).
 
 circuit relay_record_click(link_id: bytes(32), pk: bytes(1568)) -> ReferralLink
-    lex esn/marketplace/advertising/relay {
+    @lex marketplace/advertising/relay {
         governance hierarchical
         audit_trail true
     }
-    precision B
-    streamsight true
-    povc true
-    observe metrics: [clicks_recorded, click_errors, clicks_per_link_avg]
-    invariant "link_id_not_empty" { link_id != 0 }
-    monitor "click_error_rate" { click_errors / clicks_recorded < 0.01 }
-    monitor "click_fraud_threshold" { clicks_per_link_avg < 10000 }
+    @precision B
+    @observe true
+    @attested true
+    @observe metrics: [clicks_recorded, click_errors, clicks_per_link_avg]
+    @invariant "link_id_not_empty" { link_id != 0 }
+    @monitor "click_error_rate" { click_errors / clicks_recorded < 0.01 }
+    @monitor "click_fraud_threshold" { clicks_per_link_avg < 10000 }
 {
     let click_hash = sha3_256(link_id)
     let kem = mlkem_encaps(pk)
@@ -336,20 +336,20 @@ circuit relay_record_click(link_id: bytes(32), pk: bytes(1568)) -> ReferralLink
 // a Compensation record in Pending status.
 
 circuit relay_record_conversion(link_id: bytes(32), referee_id: bytes(32), pk: bytes(1568)) -> Compensation
-    lex esn/marketplace/advertising/relay {
+    @lex marketplace/advertising/relay {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    witness threshold(2, 3)
-    observe metrics: [conversions_recorded, conversion_errors, conversion_rate, avg_compensation]
-    invariant "link_id_not_empty" { link_id != 0 }
-    invariant "referee_id_not_empty" { referee_id != 0 }
-    monitor "conversion_error_rate" { conversion_errors / conversions_recorded < 0.02 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @witness threshold(2, 3)
+    @observe metrics: [conversions_recorded, conversion_errors, conversion_rate, avg_compensation]
+    @invariant "link_id_not_empty" { link_id != 0 }
+    @invariant "referee_id_not_empty" { referee_id != 0 }
+    @monitor "conversion_error_rate" { conversion_errors / conversions_recorded < 0.02 }
+    @fuzz_target
 {
     let conversion_hash = sha3_256(link_id)
     let comp_id = sha3_256(referee_id)
@@ -388,22 +388,22 @@ circuit relay_record_conversion(link_id: bytes(32), referee_id: bytes(32), pk: b
 // Pending to Approved.
 
 circuit relay_calculate_compensation(referrer_id: bytes(32), campaign_id: bytes(32), pk: bytes(1568)) -> Compensation
-    lex esn/marketplace/advertising/relay {
+    @lex marketplace/advertising/relay {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    witness threshold(2, 3)
-    observe metrics: [compensations_calculated, total_amount_distributed, avg_compensation_amount, calculation_errors]
-    invariant "referrer_id_not_empty" { referrer_id != 0 }
-    invariant "campaign_id_not_empty" { campaign_id != 0 }
-    property safety "compensation_non_negative" { total_amount_distributed >= 0 }
-    monitor "calculation_error_rate" { calculation_errors / compensations_calculated < 0.01 }
-    esz_emit "verify/relay_calculate_compensation.esz"
-    li_feed full_escir true, optimized_ir true
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @witness threshold(2, 3)
+    @observe metrics: [compensations_calculated, total_amount_distributed, avg_compensation_amount, calculation_errors]
+    @invariant "referrer_id_not_empty" { referrer_id != 0 }
+    @invariant "campaign_id_not_empty" { campaign_id != 0 }
+    @property safety "compensation_non_negative" { total_amount_distributed >= 0 }
+    @monitor "calculation_error_rate" { calculation_errors / compensations_calculated < 0.01 }
+    @serialize "verify/relay_calculate_compensation.esz"
+    @li_feed full_escir true, optimized_ir true
 {
     let calc_hash = sha3_256(referrer_id)
     let comp_id = sha3_256(campaign_id)
@@ -441,20 +441,20 @@ circuit relay_calculate_compensation(referrer_id: bytes(32), campaign_id: bytes(
 // consumer when the coefficient exceeds 1.5.
 
 circuit relay_viral_metrics(campaign_id: bytes(32), period: bytes(32), pk: bytes(1568)) -> ViralMetrics
-    lex esn/marketplace/advertising/relay {
+    @lex marketplace/advertising/relay {
         governance hierarchical
         audit_trail true
     }
-    precision A
-    constant_time true
-    streamsight true
-    povc true
-    observe metrics: [metrics_computed, avg_viral_coefficient, avg_depth, high_virality_campaigns]
-    invariant "campaign_id_not_empty" { campaign_id != 0 }
-    invariant "period_not_empty" { period != 0 }
-    monitor "viral_coefficient_ceiling" { avg_viral_coefficient < 10.0 }
-    monitor "depth_ceiling" { avg_depth < 20 }
-    fuzz_target
+    @precision A
+    @constant_time true
+    @observe true
+    @attested true
+    @observe metrics: [metrics_computed, avg_viral_coefficient, avg_depth, high_virality_campaigns]
+    @invariant "campaign_id_not_empty" { campaign_id != 0 }
+    @invariant "period_not_empty" { period != 0 }
+    @monitor "viral_coefficient_ceiling" { avg_viral_coefficient < 10.0 }
+    @monitor "depth_ceiling" { avg_depth < 20 }
+    @fuzz_target
 {
     let metrics_hash = sha3_256(campaign_id)
     let kem = mlkem_encaps(pk)

@@ -1,0 +1,11 @@
+[package]
+name = "polyquantum.bridge"
+version = "0.12.0"
+publisher = "polyquantum"
+description = "Cross-chain and cross-lex bridge circuits for interoperability"
+category = "smart-circuit"
+license = "commercial"
+
+[platform]
+minimum = "0.12.0"
+escir_api = "1.0.0"

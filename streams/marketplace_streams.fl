@@ -139,7 +139,7 @@ graph marketplace_registry {
 
     ai_feed marketplace_recommendation
 
-    observe marketplace_registry: [download_count, rating_x100, vulnerability_count, signature_valid] threshold: {
+    @observe marketplace_registry: [download_count, rating_x100, vulnerability_count, signature_valid] threshold: {
         anomaly_score 0.85
         baseline_window 300
     }
@@ -168,14 +168,14 @@ dag component_dependencies {
 // =============================================================================
 
 series registry_series: marketplace_registry
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 series dependency_series: component_dependencies
-    merkle_chain true
-    lattice_imprint true
-    witness_attest true
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
 
 // =============================================================================
 // Data Declarations — Wire Formats
@@ -198,7 +198,7 @@ data ComponentSummary : marketplace v1 {
     source_hash: Checksum,
     updated_at: u64,
 }
-    encode @ bytes(1474) {
+    @encode @ bytes(1474) {
         name             @ le,
         version          @ le,
         category         @ le,
@@ -215,7 +215,7 @@ data ComponentSummary : marketplace v1 {
         source_hash      @ le,
         updated_at       @ le,
     }
-    observe metrics [download_count, rating_x100, pricing_type, category] level adaptive
+    @observe metrics [download_count, rating_x100, pricing_type, category] level adaptive
 
 data SearchQuery : marketplace v1 {
     query_text: bytes(256),
@@ -226,8 +226,8 @@ data SearchQuery : marketplace v1 {
     offset: u32,
     limit: u32,
 }
-    encode
-    observe metrics [query_text, category_filter, sort_order] level adaptive
+    @encode
+    @observe metrics [query_text, category_filter, sort_order] level adaptive
 
 // sort_order: 0=Relevance, 1=Downloads, 2=Rating, 3=Recent, 4=Trending
 
@@ -237,8 +237,8 @@ data SearchResult : marketplace v1 {
     result_count: u16,
     query_ms: u32,
 }
-    encode
-    observe metrics [total_count, query_ms] level adaptive
+    @encode
+    @observe metrics [total_count, query_ms] level adaptive
 
 data InstallRequest : marketplace v1 {
     request_id: RequestId,
@@ -247,7 +247,7 @@ data InstallRequest : marketplace v1 {
     force: bool,
     skip_verify: bool,
 }
-    encode
+    @encode
 
 data InstallProgress : marketplace v1 {
     request_id: RequestId,
@@ -259,8 +259,8 @@ data InstallProgress : marketplace v1 {
     signature_valid: bool,
     checksum_valid: bool,
 }
-    encode
-    observe metrics [phase, component_name] level adaptive
+    @encode
+    @observe metrics [phase, component_name] level adaptive
 
 // phase: 0=Resolving, 1=Downloading, 2=Verifying, 3=Installing, 4=Complete, 255=Error
 
@@ -274,8 +274,8 @@ data PublishRequest : marketplace v1 {
     signature: Signature,
     signer_key_id: bytes(64),
 }
-    encode
-    sign {
+    @encode
+    @sign {
         algorithm mldsa87
         fields [component_name, version, archive_checksum]
     }
@@ -287,8 +287,8 @@ data PublishProgress : marketplace v1 {
     pr_url: bytes(256),
     registry_entry_url: bytes(256),
 }
-    encode
-    observe metrics [phase] level adaptive
+    @encode
+    @observe metrics [phase] level adaptive
 
 // phase: 0=Validating, 1=Testing, 2=Building, 3=Signing, 4=Submitting, 5=Merged, 255=Error
 
@@ -298,38 +298,38 @@ data PublishProgress : marketplace v1 {
 
 // Registry index: projected from marketplace_registry graph + overlays
 stream marketplace_index: state<ComponentName, ComponentSummary>
-    retention 24h
-    consumers [designer, cli, console]
+    @retention 24h
+    @consumers [designer, cli, console]
 
 // Search: emit query, receive results + matching component summaries
 stream marketplace_search: event<SearchResult>
     ttl 60s
-    consumers [designer, cli]
+    @consumers [designer, cli]
 
 // Reviews: event stream projected from ReviewNode graph entries
 stream marketplace_reviews: event<ReviewNode>
-    retention 1y
-    consumers [designer, cli, console]
+    @retention 1y
+    @consumers [designer, cli, console]
 
 // Install progress: keyed by request ID
 stream marketplace_install: event<InstallProgress>
     ttl 5m
-    consumers [designer, cli]
+    @consumers [designer, cli]
 
 // Publish progress: keyed by request ID
 stream marketplace_publish: event<PublishProgress>
     ttl 10m
-    consumers [designer, cli]
+    @consumers [designer, cli]
 
 // Active licenses: projected from LicenseNode graph entries
 stream marketplace_licenses: state<ComponentName, LicenseNode>
-    retention 30d
-    consumers [designer, cli, console]
+    @retention 30d
+    @consumers [designer, cli, console]
 
 // Publisher profiles: projected from PublisherNode graph entries
 stream marketplace_publishers: state<PublisherName, PublisherNode>
-    retention 1y
-    consumers [designer, cli, registry]
+    @retention 1y
+    @consumers [designer, cli, registry]
 
 // =============================================================================
 // Circuits — Registry Operations
@@ -337,10 +337,10 @@ stream marketplace_publishers: state<PublisherName, PublisherNode>
 
 // Search the registry graph — filter + reduce over ComponentNode
 circuit marketplace_search_query(query: SearchQuery) -> SearchResult
-    lex estream/marketplace
-    precision C
-    observe metrics: [search_queries, search_latency_ns, result_count]
-    invariant "limit_bounded" { query.limit <= 100 }
+    @lex estream/marketplace
+    @precision C
+    @observe metrics: [search_queries, search_latency_ns, result_count]
+    @invariant "limit_bounded" { query.limit <= 100 }
 {
     let results = index_search(query.query_text, query.category_filter, query.pricing_filter, query.badges_filter, query.sort_order, query.offset, query.limit)
     SearchResult {
@@ -353,9 +353,9 @@ circuit marketplace_search_query(query: SearchQuery) -> SearchResult
 
 // Verify a component package signature (ML-DSA-87, runs in WASM trust boundary)
 circuit marketplace_verify_signature(archive_hash: Checksum, signature: Signature, pubkey: PublicKey) -> bool
-    lex estream/marketplace
-    precision A
-    observe metrics: [signature_verifications, verification_failures]
+    @lex estream/marketplace
+    @precision A
+    @observe metrics: [signature_verifications, verification_failures]
 {
     let valid = mldsa_verify(archive_hash, signature, pubkey)
     valid
@@ -363,8 +363,8 @@ circuit marketplace_verify_signature(archive_hash: Checksum, signature: Signatur
 
 // Verify a component checksum (SHA3-256)
 circuit marketplace_verify_checksum(archive_data: bytes(8192), expected_hash: Checksum) -> bool
-    lex estream/marketplace
-    precision A
+    @lex estream/marketplace
+    @precision A
 {
     let computed = sha3_256(archive_data)
     computed == expected_hash
@@ -372,12 +372,12 @@ circuit marketplace_verify_checksum(archive_data: bytes(8192), expected_hash: Ch
 
 // Register or update a publisher — mutates marketplace_registry graph
 circuit marketplace_register_publisher(registry: bytes(32), profile: PublisherNode) -> bool
-    lex estream/marketplace
-    precision B
-    rbac [publisher, marketplace_admin]
-    observe metrics: [publishers_registered]
-    povc true
-    invariant "key_not_expired" { profile.key_expires_at > current_time() }
+    @lex estream/marketplace
+    @precision B
+    @rbac [publisher, marketplace_admin]
+    @observe metrics: [publishers_registered]
+    @attested true
+    @invariant "key_not_expired" { profile.key_expires_at > current_time() }
 {
     let profile_hash = sha3_256(profile.name)
     let sig = mldsa_sign(profile_hash, profile.signing_key_pubkey)
@@ -387,11 +387,11 @@ circuit marketplace_register_publisher(registry: bytes(32), profile: PublisherNo
 
 // Publish a component — mutates marketplace_registry, series records the event
 circuit marketplace_publish_component(registry: bytes(32), request: PublishRequest) -> bool
-    lex estream/marketplace/publish
-    precision B
-    rbac [publisher, marketplace_admin]
-    observe metrics: [components_published, publish_latency_ns]
-    povc true
+    @lex estream/marketplace/publish
+    @precision B
+    @rbac [publisher, marketplace_admin]
+    @observe metrics: [components_published, publish_latency_ns]
+    @attested true
 {
     let sig_valid = mldsa_verify(request.archive_checksum, request.signature, bytes(1952))
     sig_valid
@@ -399,18 +399,18 @@ circuit marketplace_publish_component(registry: bytes(32), request: PublishReque
 
 // Resolve dependencies — topological sort on component_dependencies dag
 circuit marketplace_resolve_dependencies(deps: bytes(32), root: ComponentName) -> list<ComponentName>
-    lex estream/marketplace/install
-    precision C
-    observe metrics: [dependency_count, resolution_latency_ns]
+    @lex estream/marketplace/install
+    @precision C
+    @observe metrics: [dependency_count, resolution_latency_ns]
 {
     []
 }
 
 // Install a component — verifies signature, resolves deps, records in series
 circuit marketplace_install_component(registry: bytes(32), deps: bytes(32), request: InstallRequest) -> InstallProgress
-    lex estream/marketplace/install
-    precision C
-    observe metrics: [installs, install_latency_ns]
+    @lex estream/marketplace/install
+    @precision C
+    @observe metrics: [installs, install_latency_ns]
 {
     InstallProgress {
         request_id: request.request_id,

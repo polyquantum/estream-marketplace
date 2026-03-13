@@ -1,0 +1,41 @@
+// Journey: FIX Trading Compliance Gate
+// Tests the compliance check and order routing flow:
+//   create order → compliance check → route if cleared
+
+journey "fix_trading_compliance" {
+    description "Order passes compliance check and gets routed to lex stream"
+    package "polyquantum.fintech"
+    platform ">= 0.12.0"
+
+    import fintech.fix-trading.fix_trading_gateway { compliance_check, order_route }
+    import fintech.fix-trading.trading_schemas { EStreamOrder }
+
+    setup {
+        let pk = test_keygen(1568)
+    }
+
+    step "create_order" {
+        let order = EStreamOrder {
+            order_id: sha3_256("ORD-2026-001"),
+            instrument: sha3_256("AAPL"),
+            side: 0,
+            quantity: 100,
+            price: 17500,
+            order_type: 0,
+            client_order_id: sha3_256("CLT-001"),
+        }
+        assert order.quantity == 100
+    }
+
+    step "run_compliance_check" {
+        let result = compliance_check(order, pk)
+        assert result.cleared == true
+        assert result.risk_score != 0
+    }
+
+    step "route_cleared_order" {
+        let route_hash = order_route(order, result, pk)
+        assert route_hash != 0
+        assert len(route_hash) == 32
+    }
+}
