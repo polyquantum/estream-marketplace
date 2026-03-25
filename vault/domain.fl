@@ -1,0 +1,17 @@
+domain polylabs.polypass {
+  /// PQ password manager: SPARK biometric vault, credential autofill, breach monitoring, TOTP/HOTP, enterprise RBAC
+
+  module encrypt           from "circuits/polypass_encrypt.fl"
+  module rbac              from "circuits/polypass_rbac.fl"
+  module share             from "circuits/polypass_share.fl"
+  module autofill          from "circuits/polypass_autofill.fl"
+  module audit             from "circuits/polypass_audit.fl"
+  module breach            from "circuits/polypass_breach.fl"
+  module totp              from "circuits/polypass_totp.fl"
+  module import            from "circuits/polypass_import.fl"
+  module metering          from "circuits/polypass_metering.fl"
+  module platform_health   from "circuits/polypass_platform_health.fl"
+
+  graph vault_registry     from "circuits/graphs/polypass_vault_graph.fl"
+  graph share_network      from "circuits/graphs/polypass_share_graph.fl"
+}

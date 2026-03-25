@@ -1,8 +1,8 @@
 # ISO 20022 Parser Circuit
 
-> Marketplace reference implementation: FPGA + ESCIR + Rust
+> Marketplace reference implementation: FPGA + FLIR + Rust
 
-**Note:** As of v0.12.0, the canonical ISO 20022 message circuits (pacs008, pacs002, camt052, camt053, types) live in the `polyquantum.payments` package. This package provides the FPGA-accelerated parser implementation and ESCIR codegen reference that builds on those message definitions.
+**Note:** As of v0.12.0, the canonical ISO 20022 message circuits (pacs008, pacs002, camt052, camt053, types) live in the `polyquantum.payments` package. This package provides the FPGA-accelerated parser implementation and FLIR codegen reference that builds on those message definitions.
 
 **Dependency:** `polyquantum.payments >= 0.12.0`
 
@@ -13,7 +13,7 @@ The ISO 20022 Parser is the first complete marketplace component, demonstrating 
 | Target | Description | Throughput | Use Case |
 |--------|-------------|------------|----------|
 | **FPGA** | Hardware-accelerated RTL | 125 MB/s - 1 GB/s | Production payments |
-| **ESCIR→Rust** | Compiled from circuit spec | 50-200 MB/s | Fallback/verification |
+| **FLIR→Rust** | Compiled from circuit spec | 50-200 MB/s | Fallback/verification |
 | **Native Rust** | Hand-optimized crate | 150-280 MB/s | Development/testing |
 
 ## Files
@@ -21,7 +21,7 @@ The ISO 20022 Parser is the first complete marketplace component, demonstrating 
 ```
 circuits/iso20022/
 ├── README.md                    # This file
-├── circuit.v080.escir.yaml      # ESCIR circuit definition
+├── circuit.v080.flir.yaml      # FLIR circuit definition
 └── test_vectors/                # Shared test data
     ├── pacs008_minimal.xml
     ├── pacs008_full.xml
@@ -61,9 +61,9 @@ crates/estream-iso20022/
     └── parser_benchmark.rs
 ```
 
-## ESCIR Circuit
+## FLIR Circuit
 
-The ESCIR circuit (`circuit.v080.escir.yaml`) defines the parser as a dataflow graph:
+The FLIR circuit (`circuit.v080.flir.yaml`) defines the parser as a dataflow graph:
 
 ```
 ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
@@ -85,13 +85,13 @@ The ESCIR circuit (`circuit.v080.escir.yaml`) defines the parser as a dataflow g
 ### Compile to Rust
 
 ```bash
-estream codegen --circuit circuit.v080.escir.yaml --target rust --output parser.rs
+estream codegen --circuit circuit.v080.flir.yaml --target rust --output parser.rs
 ```
 
 ### Compile to Verilog
 
 ```bash
-estream codegen --circuit circuit.v080.escir.yaml --target verilog --output parser.v
+estream codegen --circuit circuit.v080.flir.yaml --target verilog --output parser.v
 ```
 
 ## Supported Messages
@@ -123,10 +123,10 @@ let msg: Pacs008 = parse_xml(&xml_bytes)?;
 let data = msg.to_data()?;
 ```
 
-### ESCIR→Rust (Generated)
+### FLIR→Rust (Generated)
 
 ```rust
-// Generated from circuit.v080.escir.yaml
+// Generated from circuit.v080.flir.yaml
 use iso20022_parser::Iso20022ParserCircuit;
 
 let mut circuit = Iso20022ParserCircuit::new();
@@ -160,7 +160,7 @@ make test_performance
 This component is published to the eStream Component Marketplace with:
 
 - **3 FPGA variants**: Lite (14K LUTs), Standard (18K LUTs), Premium (22K LUTs)
-- **ESCIR source**: Open visibility for verification
+- **FLIR source**: Open visibility for verification
 - **Rust crate**: `estream-iso20022` on crates.io
 
 See `component.yaml` for full manifest and `COMPONENT_MARKETPLACE.md` for SKU details.

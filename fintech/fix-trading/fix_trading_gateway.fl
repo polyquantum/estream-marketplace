@@ -185,7 +185,7 @@ circuit settlement_bridge(fill: EStreamFill, pk: bytes(1568)) -> SettlementResul
     @invariant "settlement_atomic" { settled == true || settled == false }
     @property safety "no_double_settlement" { settle_count(fill.fill_id) <= 1 }
     @serialize "verify/fix_trading_settlement.esz"
-    @li_feed full_escir true, optimized_ir true
+    @li_feed full_flir true, optimized_ir true
 {
     let fill_hash = sha3_256(fill.fill_id)
     let kem = mlkem_encaps(pk)
@@ -285,5 +285,5 @@ platform fix_trading_gateway v1 {
     @target xilinx_u250
     @observe true
     @serialize "verify/fix_trading_gateway.esz"
-    @li_feed full_escir true, optimized_ir true, optimization_metadata true
+    @li_feed full_flir true, optimized_ir true, optimization_metadata true
 }

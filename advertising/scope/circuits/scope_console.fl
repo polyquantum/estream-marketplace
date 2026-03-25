@@ -292,7 +292,7 @@ circuit scope_pipeline_summary(partner_id: bytes(32), period: bytes(32), pk: byt
     @monitor "summary_error_rate" { summary_errors / summaries_generated < 0.01 }
     @monitor "roi_floor" { avg_roi > 0 }
     @serialize "verify/scope_pipeline_summary.esz"
-    @li_feed full_escir true, optimized_ir true
+    @li_feed full_flir true, optimized_ir true
 {
     let summary_hash = sha3_256(partner_id)
     let kem = mlkem_encaps(pk)

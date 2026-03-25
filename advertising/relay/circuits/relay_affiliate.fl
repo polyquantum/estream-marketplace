@@ -403,7 +403,7 @@ circuit relay_calculate_compensation(referrer_id: bytes(32), campaign_id: bytes(
     @property safety "compensation_non_negative" { total_amount_distributed >= 0 }
     @monitor "calculation_error_rate" { calculation_errors / compensations_calculated < 0.01 }
     @serialize "verify/relay_calculate_compensation.esz"
-    @li_feed full_escir true, optimized_ir true
+    @li_feed full_flir true, optimized_ir true
 {
     let calc_hash = sha3_256(referrer_id)
     let comp_id = sha3_256(campaign_id)

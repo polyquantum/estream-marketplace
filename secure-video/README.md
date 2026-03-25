@@ -11,7 +11,7 @@ Secure video distribution and content security circuits for eStream.
 ## Platform Requirements
 
 - eStream platform >= 0.12.0
-- ESCIR API 1.0.0
+- FLIR API 1.0.0
 
 ## License
 

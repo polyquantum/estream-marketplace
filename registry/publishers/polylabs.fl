@@ -83,5 +83,30 @@ circuit register_polylabs_packages(publisher_id: bytes(32)) -> bool
         ["check_access", "format_role", "process_widgets", "emit_widget_event"]
     )
 
+    register_package(publisher_id, "polypass", "0.12.0", "smart-circuit",
+        "PQ password manager: SPARK biometric vault, AES-256-GCM per-credential encryption, breach monitoring, TOTP/HOTP, enterprise RBAC with role inheritance, team/family sharing (0xC0-0xD8)",
+        ["vault", "password-manager", "pq-crypto", "rbac", "breach-monitoring", "totp", "autofill"],
+        "0.12.0",
+        ["polykit-identity", "polykit-metering", "polykit-telemetry", "polykit-rate-limiter"],
+        ["encrypt_credential", "decrypt_credential", "derive_vault_key", "rotate_vault_key",
+         "create_credential", "update_credential", "delete_credential",
+         "check_access", "assign_role", "revoke_role", "create_default_roles",
+         "share_credential", "accept_share", "revoke_share",
+         "match_url", "autofill_form", "check_breach", "generate_totp", "verify_totp",
+         "import_csv", "import_1password", "import_bitwarden"]
+    )
+
+    register_package(publisher_id, "polymessenger", "0.12.0", "smart-circuit",
+        "PQ encrypted messaging: blind relay, double-ratchet forward secrecy, RBAC, incognito, agent-to-agent/human-to-agent wire protocol (0xB0-0xB5)",
+        ["messaging", "pq-crypto", "blind-relay", "double-ratchet", "rbac", "wire-protocol"],
+        "0.12.0",
+        ["polykit-identity", "polykit-metering", "polykit-telemetry", "polykit-rate-limiter"],
+        ["establish_session", "encrypt_message", "decrypt_message", "rotate_session_key",
+         "init_ratchet", "ratchet_encrypt", "ratchet_decrypt", "advance_chain",
+         "select_relay_path", "generate_cover_traffic", "onion_wrap", "onion_unwrap",
+         "classify_content", "assign_role", "check_permission", "enter_incognito",
+         "record_usage", "check_relay_health"]
+    )
+
     true
 }

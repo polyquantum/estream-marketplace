@@ -10,14 +10,14 @@
 // --- Package Format Constants ---
 // .escx packages are opaque compiled domain artifacts.
 // They are NOT reverse-engineerable — the compiler produces
-// position-independent ESCIR bytecode with symbol stripping.
+// position-independent FLIR bytecode with symbol stripping.
 
 // --- Core Types ---
 
 type PackageId = bytes(32)
 type PublisherId = bytes(32)
 type PackageVersion = bytes(20)
-type EscirApiVersion = bytes(12)
+type FlirApiVersion = bytes(12)
 type PlatformVersion = bytes(12)
 type PackageChecksum = bytes(32)
 type PackageSignature = bytes(4627)
@@ -25,7 +25,7 @@ type AttestationHash = bytes(32)
 type LexRequirement = bytes(64)
 type DependencySpec = bytes(128)
 
-// Package stability tiers (mirrors ESCIR public API stability)
+// Package stability tiers (mirrors FLIR public API stability)
 type PackageStability = u8
 // 0=Stable, 1=Preview, 2=Experimental
 
@@ -41,7 +41,7 @@ type PackageManifest = struct {
     description: bytes(512),
     stability: PackageStability,
     visibility: PackageVisibility,
-    escir_api_version: EscirApiVersion,
+    flir_api_version: FlirApiVersion,
     min_platform_version: PlatformVersion,
     max_platform_version: PlatformVersion,
     lex_requirements: bytes(512),
@@ -70,7 +70,7 @@ type PackageAttestation = struct {
     version: PackageVersion,
     attestation_type: u8,
     compiler_version: PlatformVersion,
-    escir_api_version: EscirApiVersion,
+    flir_api_version: FlirApiVersion,
     source_hash: PackageChecksum,
     compiled_hash: PackageChecksum,
     attestation_hash: AttestationHash,
@@ -84,8 +84,8 @@ type VersionConstraint = struct {
     package_id: PackageId,
     min_version: PackageVersion,
     max_version: PackageVersion,
-    min_escir_api: EscirApiVersion,
-    max_escir_api: EscirApiVersion,
+    min_flir_api: FlirApiVersion,
+    max_flir_api: FlirApiVersion,
     min_platform: PlatformVersion,
     max_platform: PlatformVersion,
 }
@@ -99,7 +99,7 @@ data PackageManifestWire : marketplace v1 {
     publisher_id: PublisherId,
     stability: PackageStability,
     visibility: PackageVisibility,
-    escir_api_version: EscirApiVersion,
+    flir_api_version: FlirApiVersion,
     min_platform_version: PlatformVersion,
     share_price_micros: u64,
     private_price_micros: u64,
@@ -108,7 +108,7 @@ data PackageManifestWire : marketplace v1 {
     created_at: u64,
 }
     @encode
-    @observe metrics [stability, visibility, escir_api_version] level adaptive
+    @observe metrics [stability, visibility, flir_api_version] level adaptive
 
 data AttestationWire : marketplace v1 {
     package_id: PackageId,
@@ -168,7 +168,7 @@ circuit verify_package_attestation(package_id: PackageId, version: PackageVersio
 }
 
 /// test golden
-circuit check_version_compatibility(constraint: VersionConstraint, target_platform: PlatformVersion, target_escir: EscirApiVersion) -> bool
+circuit check_version_compatibility(constraint: VersionConstraint, target_platform: PlatformVersion, target_flir: FlirApiVersion) -> bool
     @lex marketplace/registry
     @precision C
     @observe metrics: [version_checks, compatibility_failures]

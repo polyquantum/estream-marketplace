@@ -202,7 +202,7 @@ circuit etch_audit_campaign(campaign_id: bytes(32), pk: bytes(1568)) -> Verifica
     @invariant "campaign_id_not_empty" { campaign_id != 0 }
     @monitor "audit_failure_rate" { audit_failures / campaigns_audited < 0.02 }
     @serialize "verify/etch_audit_campaign.esz"
-    @li_feed full_escir true, optimized_ir true
+    @li_feed full_flir true, optimized_ir true
 {
     let audit_hash = sha3_256(campaign_id)
     let kem = mlkem_encaps(pk)

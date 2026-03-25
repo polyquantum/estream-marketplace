@@ -59,7 +59,7 @@ eStream supports **7 languages** at full parity: Rust (native), Python (PyO3), T
 
 - Lead with **"7 supported languages"** — developers choose the language they already know
 - Position FastLang as **"the shortest path to silicon"** — the easiest way to design for eStream hardware
-- **ESCIR (eStream Circuit Intermediate Representation) is strictly internal** — never mention it in external-facing materials, docs, pitches, or marketing. It is an implementation detail of the compiler
+- **FLIR (eStream Circuit Intermediate Representation) is strictly internal** — never mention it in external-facing materials, docs, pitches, or marketing. It is an implementation detail of the compiler
 - Swift (not Solidity) is the 7th language
 
 ### Internal Development
@@ -67,7 +67,7 @@ eStream supports **7 languages** at full parity: Rust (native), Python (PyO3), T
 - **FastLang first**: all new circuits and features are authored in FastLang (.fl) first
 - **Six-language parity**: every FastLang feature must have equivalent API surface in Rust, Python, TypeScript, Go, C++, and Swift. Do not ship a FastLang-only feature
 - Implementation types: FastLang (.fl), Hybrid (FastLang + Rust/RTL), Pure Rust, Pure RTL, Platform (tooling)
-- ESCIR operations power the compiler pipeline but are invisible to users
+- FLIR operations power the compiler pipeline but are invisible to users
 
 ## Cross-Repo Coordination
 

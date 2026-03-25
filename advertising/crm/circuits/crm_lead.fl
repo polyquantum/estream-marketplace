@@ -277,7 +277,7 @@ circuit crm_convert_lead(lead_id: bytes(32), pk: bytes(1568)) -> LeadRecord
     @property safety "conversion_from_engaged" { conversion_errors == 0 || conversion_errors < leads_converted * 0.01 }
     @monitor "conversion_error_rate" { conversion_errors / leads_converted < 0.01 }
     @serialize "verify/crm_lead_conversion.esz"
-    @li_feed full_escir true, optimized_ir true
+    @li_feed full_flir true, optimized_ir true
 {
     let convert_hash = sha3_256(lead_id)
     let kem = mlkem_encaps(pk)

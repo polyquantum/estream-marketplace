@@ -16,7 +16,7 @@ type ResolutionRequest = struct {
     max_depth: u16,
     include_optional: bool,
     platform_version: bytes(12),
-    escir_api_version: bytes(12),
+    flir_api_version: bytes(12),
 }
 
 type ResolvedPackage = struct {
@@ -135,7 +135,7 @@ circuit detect_version_conflicts(dep_a_name: bytes(128), dep_a_version: bytes(20
 }
 
 /// test golden
-circuit validate_platform_constraints(package_id: bytes(32), platform_version: bytes(12), escir_version: bytes(12)) -> bool
+circuit validate_platform_constraints(package_id: bytes(32), platform_version: bytes(12), flir_version: bytes(12)) -> bool
     @lex marketplace/registry
     @precision C
     @observe metrics: [constraint_validations]

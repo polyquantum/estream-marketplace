@@ -1,6 +1,6 @@
 # Payment Circuits
 
-ESCIR circuit definitions for offline payment protocol.
+FLIR circuit definitions for offline payment protocol.
 
 **Issue**: [#351](https://github.com/toddrooke/estream-io/issues/351)  
 **Spec**: [SPARK_OFFLINE_PAYMENT_SPEC.md](../../specs/protocol/SPARK_OFFLINE_PAYMENT_SPEC.md)  

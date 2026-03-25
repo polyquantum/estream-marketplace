@@ -2,7 +2,7 @@
 // Epic 7: estream-marketplace#7
 //
 // Developer workflow circuits: package development, testing, linting,
-// docs generation. Local dev server with hot-reload, ESCIR compatibility
+// docs generation. Local dev server with hot-reload, FLIR compatibility
 // testing, manifest validation, and package scaffolding. All dev events
 // are short-lived (1h TTL) except test results retained for regression.
 
@@ -22,7 +22,7 @@ type DevServerConfig = struct {
 type TestResult = struct {
     test_id: bytes(32),
     package_id: PackageId,
-    escir_version: bytes(32),
+    flir_version: bytes(32),
     passed: bool,
     failed_count: u16,
     total_count: u16,
@@ -34,7 +34,7 @@ type LintResult = struct {
     errors: u16,
     warnings: u16,
     info: u16,
-    escir_compatibility: bool,
+    flir_compatibility: bool,
     manifest_valid: bool,
 }
 
@@ -73,16 +73,16 @@ circuit start_dev_server(config: DevServerConfig) -> DevServerConfig
 }
 
 /// test golden
-circuit run_package_tests(package_id: PackageId, escir_version: bytes(32)) -> TestResult
+circuit run_package_tests(package_id: PackageId, flir_version: bytes(32)) -> TestResult
     @lex marketplace/dev
     @precision C
-    @observe metrics: [test_runs, package_id, escir_version]
+    @observe metrics: [test_runs, package_id, flir_version]
 {
-    let test_hash = sha3_256(concat(package_id, escir_version))
+    let test_hash = sha3_256(concat(package_id, flir_version))
     TestResult {
         test_id: test_hash,
         package_id: package_id,
-        escir_version: escir_version,
+        flir_version: flir_version,
         passed: true,
         failed_count: 0,
         total_count: 0,
@@ -101,7 +101,7 @@ circuit lint_package(package_id: PackageId) -> LintResult
         errors: 0,
         warnings: 0,
         info: 0,
-        escir_compatibility: true,
+        flir_compatibility: true,
         manifest_valid: true,
     }
 }
@@ -122,16 +122,16 @@ circuit generate_docs(package_id: PackageId, output_path: bytes(256)) -> DocGenR
 }
 
 /// test golden
-circuit check_escir_compatibility(package_id: PackageId, target_escir_version: bytes(32)) -> TestResult
+circuit check_flir_compatibility(package_id: PackageId, target_flir_version: bytes(32)) -> TestResult
     @lex marketplace/dev
     @precision C
-    @observe metrics: [escir_compat_checks, package_id, target_escir_version]
+    @observe metrics: [flir_compat_checks, package_id, target_flir_version]
 {
-    let test_hash = sha3_256(concat(package_id, target_escir_version))
+    let test_hash = sha3_256(concat(package_id, target_flir_version))
     TestResult {
         test_id: test_hash,
         package_id: package_id,
-        escir_version: target_escir_version,
+        flir_version: target_flir_version,
         passed: true,
         failed_count: 0,
         total_count: 0,

@@ -2,13 +2,13 @@
 name = "polyquantum.fintech-iso20022"
 version = "0.12.0"
 publisher = "polyquantum"
-description = "ISO 20022 FPGA-accelerated parser and ESCIR codegen reference implementation"
+description = "ISO 20022 FPGA-accelerated parser and FLIR codegen reference implementation"
 category = "wire-adapter"
 license = "commercial"
 
 [platform]
-minimum = "0.12.0"
-escir_api = "1.0.0"
+minimum = "0.22.0"
+flir_api = "1.0.0"
 
 [dependencies]
 polyquantum_payments = { package = "polyquantum.payments", version = ">= 0.12.0" }
@@ -18,7 +18,7 @@ protocol_family = "financial"
 transports = ["tcp", "tls"]
 
 [include]
-circuits = ["circuit.v091.escir.yaml"]
+circuits = ["circuit.v091.flir.yaml"]
 tests = ["test_vectors/**"]
 docs = ["README.md", "COMPONENT_MARKETPLACE.md"]
 

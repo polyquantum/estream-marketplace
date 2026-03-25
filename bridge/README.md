@@ -11,7 +11,7 @@ Cross-chain and cross-lex bridge circuits for eStream interoperability.
 ## Platform Requirements
 
 - eStream platform >= 0.12.0
-- ESCIR API 1.0.0
+- FLIR API 1.0.0
 
 ## License
 

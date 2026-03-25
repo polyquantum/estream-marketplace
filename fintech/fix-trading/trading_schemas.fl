@@ -290,7 +290,7 @@ circuit position_risk_check(order: EStreamOrder, current_position: u64, daily_or
     @invariant "risk_always_checked" { risk_checks >= 1 }
     @monitor "breach_rate" { risk_breaches / risk_checks < 0.05 }
     @serialize "verify/trading_risk.esz"
-    @li_feed full_escir true, optimized_ir true
+    @li_feed full_flir true, optimized_ir true
 {
     let order_hash = sha3_256(order.order_id)
     let kem = mlkem_encaps(pk)

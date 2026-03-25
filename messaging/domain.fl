@@ -1,0 +1,16 @@
+domain polylabs.polymessenger {
+  /// PQ encrypted messaging: blind relay, double-ratchet, RBAC, incognito, agent-to-agent, human-to-agent
+
+  module encrypt           from "circuits/polymsg_encrypt.fl"
+  module ratchet           from "circuits/polymsg_ratchet.fl"
+  module relay             from "circuits/polymsg_relay.fl"
+  module classify          from "circuits/polymsg_classify.fl"
+  module rbac              from "circuits/polymsg_rbac.fl"
+  module incognito         from "circuits/polymsg_incognito.fl"
+  module metering          from "circuits/polymsg_metering.fl"
+  module platform_health   from "circuits/polymsg_platform_health.fl"
+
+  graph contact_network    from "circuits/graphs/polymsg_contact_graph.fl"
+  graph relay_mesh         from "circuits/graphs/polymsg_relay_graph.fl"
+  dag   conversation       from "circuits/graphs/polymsg_conversation_dag.fl"
+}

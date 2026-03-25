@@ -229,7 +229,7 @@ circuit scope_compare_projections(partner_id: bytes(32), periods: list<bytes(32)
     @monitor "comparison_error_rate" { comparison_errors / comparisons_run < 0.01 }
     @property safety "accuracy_bounded" { projection_accuracy >= 0 }
     @serialize "verify/scope_compare_projections.esz"
-    @li_feed full_escir true, optimized_ir true
+    @li_feed full_flir true, optimized_ir true
 {
     let comparison_hash = sha3_256(partner_id)
     let kem = mlkem_encaps(pk)

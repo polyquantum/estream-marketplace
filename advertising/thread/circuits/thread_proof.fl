@@ -200,7 +200,7 @@ circuit thread_prove_attribution(session_id: bytes(32), pk: bytes(1568)) -> Path
     @invariant "session_id_not_empty" { session_id != 0 }
     @monitor "attribution_failure_rate" { attribution_failures / attributions_proved < 0.02 }
     @serialize "verify/thread_prove_attribution.esz"
-    @li_feed full_escir true, optimized_ir true
+    @li_feed full_flir true, optimized_ir true
 {
     let attr_seed = sha3_256(session_id)
     let proof_id = sha3_256(attr_seed)

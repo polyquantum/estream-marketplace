@@ -1,7 +1,7 @@
 // Console & Developer Experience — Admin Console
 // Epic 7: estream-marketplace#7
 //
-// Platform admin: marketplace health, compliance monitoring, ESCIR version
+// Platform admin: marketplace health, compliance monitoring, FLIR version
 // compatibility matrix, and deprecation tracker. Admin circuits enforce
 // lex-governed access and PoVC attestation for state-changing operations.
 // Compliance alerts cover lex violations, attestation failures, disputes,
@@ -37,8 +37,8 @@ type ComplianceAlert = struct {
 // alert_type: 0=LexViolation, 1=AttestationFailure, 2=DisputeEscalation, 3=MaliciousPackage, 4=VersionConflict
 // severity: 0=Info, 1=Warning, 2=Critical
 
-type EscirCompatMatrix = struct {
-    escir_version: bytes(32),
+type FlirCompatMatrix = struct {
+    flir_version: bytes(32),
     compatible_packages: u32,
     incompatible_packages: u32,
     deprecated_ops_used: u16,
@@ -88,14 +88,14 @@ circuit get_compliance_dashboard(period_start: u64, period_end: u64) -> list<Com
 }
 
 /// test golden
-circuit get_escir_version_matrix(escir_version: bytes(32)) -> EscirCompatMatrix
+circuit get_flir_version_matrix(flir_version: bytes(32)) -> FlirCompatMatrix
     @lex marketplace/console/admin
     @precision C
     @rbac [marketplace_admin]
-    @observe metrics: [escir_matrix_queries, escir_version]
+    @observe metrics: [flir_matrix_queries, flir_version]
 {
-    EscirCompatMatrix {
-        escir_version: escir_version,
+    FlirCompatMatrix {
+        flir_version: flir_version,
         compatible_packages: 0,
         incompatible_packages: 0,
         deprecated_ops_used: 0,
@@ -104,13 +104,13 @@ circuit get_escir_version_matrix(escir_version: bytes(32)) -> EscirCompatMatrix
 }
 
 /// test golden
-circuit get_deprecation_tracker(escir_version: bytes(32)) -> list<EscirCompatMatrix>
+circuit get_deprecation_tracker(flir_version: bytes(32)) -> list<FlirCompatMatrix>
     @lex marketplace/console/admin
     @precision C
     @rbac [marketplace_admin]
     @observe metrics: [deprecation_tracker_views]
 {
-    let empty = list<EscirCompatMatrix>
+    let empty = list<FlirCompatMatrix>
     empty
 }
 
