@@ -1,0 +1,183 @@
+/// Poly Labs Suite — Solution Bundle for Third-Party Consumption
+/// Defines the complete Poly Labs product suite as a marketplace solution
+/// bundle that TakeTitle (and other platform consumers) can install.
+///
+/// Epic: estream-marketplace#19, polylabs-dev/polylabs#25
+
+/// govern lex marketplace/solutions
+
+circuit register_polylabs_suite() -> SolutionId
+    @lex marketplace/solutions
+    @precision A
+    @attested true
+    @observe metrics: [solution_registrations]
+{
+    let manifest = SolutionManifest {
+        solution_id: derive_solution_id("polylabs-suite", "0.22.0"),
+        name: "polylabs-suite",
+        version: "0.22.0",
+        publisher: "polylabs",
+        description: "Complete Poly Labs platform: 38 products across 8 verticals — productivity, communication, security, developer, enterprise, consumer, data rooms, hardware-enhanced",
+        packages_count: 38,
+        lex_policy_hash: hash_lex_policy(polylabs_suite_lex_policy()),
+        branding_hash: hash_branding(polylabs_suite_branding()),
+        pricing_model: 0,
+        tier: 1,
+        created_at: now(),
+    }
+
+    let packages = polylabs_suite_packages()
+    register_solution(manifest, packages)
+
+    manifest.solution_id
+}
+
+circuit polylabs_suite_packages() -> list<BundledPackage>
+    @lex marketplace/solutions
+{
+    [
+        BundledPackage { package_id: resolve("polylabs", "polykit"), version: "0.22.0", required: true },
+        BundledPackage { package_id: resolve("polylabs", "polylabs-console"), version: "0.22.0", required: true },
+
+        BundledPackage { package_id: resolve("polylabs", "polydocs"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyslides"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polysheets"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polynotes"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polycalendar"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polytasks"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyforms"), version: "0.1.0", required: false },
+
+        BundledPackage { package_id: resolve("polylabs", "polymessenger"), version: "0.12.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polymail"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyphone"), version: "0.1.0", required: false },
+
+        BundledPackage { package_id: resolve("polylabs", "polypass"), version: "0.12.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyoauth"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyvpn"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyauthenticator"), version: "0.1.0", required: false },
+
+        BundledPackage { package_id: resolve("polylabs", "polygit"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polystudio"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyregistry"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polymonitor"), version: "0.1.0", required: false },
+
+        BundledPackage { package_id: resolve("polylabs", "polycomply"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polysign"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyarchive"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyaudit"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyvault"), version: "0.1.0", required: false },
+
+        BundledPackage { package_id: resolve("polylabs", "polyphotos"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polycontacts"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polystream"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polymind"), version: "0.1.0", required: false },
+
+        BundledPackage { package_id: resolve("polylabs", "polyportal"), version: "0.1.0", required: false },
+
+        BundledPackage { package_id: resolve("polylabs", "polyfiles"), version: "0.12.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polywallet"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polycamera"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyfind"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyhealth"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polybrowse"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polymaps"), version: "0.1.0", required: false },
+    ]
+}
+
+circuit polylabs_suite_lex_policy() -> LexPolicy
+    @lex marketplace/solutions
+{
+    LexPolicy {
+        hierarchy: "esn/global/org/polylabs/suite",
+        isolation: "PRIME-attested",
+        rbac_template: "polylabs-default",
+        data_residency: "customer-choice",
+        retention_default: "365d",
+        zero_linkage: true,
+    }
+}
+
+circuit polylabs_suite_branding() -> SolutionBranding
+    @lex marketplace/solutions
+{
+    SolutionBranding {
+        display_name: "Poly Labs Suite",
+        theme_hash: hash("polylabs-default-theme-v1"),
+        logo_hash: hash("polylabs-logo-v1"),
+        documentation_url: "https://docs.polylabs.dev/suite",
+    }
+}
+
+/// Vertical-specific sub-bundles for selective installation
+circuit register_polylabs_productivity_bundle() -> SolutionId
+    @lex marketplace/solutions
+    @precision A
+    @attested true
+{
+    let manifest = SolutionManifest {
+        solution_id: derive_solution_id("polylabs-productivity", "0.22.0"),
+        name: "polylabs-productivity",
+        version: "0.22.0",
+        publisher: "polylabs",
+        description: "Poly Labs Productivity Suite: Docs, Slides, Sheets, Notes, Calendar, Tasks, Forms",
+        packages_count: 9,
+        lex_policy_hash: hash_lex_policy(polylabs_suite_lex_policy()),
+        branding_hash: hash_branding(polylabs_suite_branding()),
+        pricing_model: 0,
+        tier: 1,
+        created_at: now(),
+    }
+
+    let packages = [
+        BundledPackage { package_id: resolve("polylabs", "polykit"), version: "0.22.0", required: true },
+        BundledPackage { package_id: resolve("polylabs", "polylabs-console"), version: "0.22.0", required: true },
+        BundledPackage { package_id: resolve("polylabs", "polydocs"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyslides"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polysheets"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polynotes"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polycalendar"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polytasks"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyforms"), version: "0.1.0", required: false },
+    ]
+
+    register_solution(manifest, packages)
+    manifest.solution_id
+}
+
+circuit register_polylabs_enterprise_bundle() -> SolutionId
+    @lex marketplace/solutions
+    @precision A
+    @attested true
+{
+    let manifest = SolutionManifest {
+        solution_id: derive_solution_id("polylabs-enterprise", "0.22.0"),
+        name: "polylabs-enterprise",
+        version: "0.22.0",
+        publisher: "polylabs",
+        description: "Poly Labs Enterprise: Comply, Sign, Archive, Audit, Vault, Portal + Files + Git + OAuth",
+        packages_count: 12,
+        lex_policy_hash: hash_lex_policy(polylabs_suite_lex_policy()),
+        branding_hash: hash_branding(polylabs_suite_branding()),
+        pricing_model: 0,
+        tier: 1,
+        created_at: now(),
+    }
+
+    let packages = [
+        BundledPackage { package_id: resolve("polylabs", "polykit"), version: "0.22.0", required: true },
+        BundledPackage { package_id: resolve("polylabs", "polylabs-console"), version: "0.22.0", required: true },
+        BundledPackage { package_id: resolve("polylabs", "polycomply"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polysign"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyarchive"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyaudit"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyvault"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyportal"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyfiles"), version: "0.12.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polygit"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polyoauth"), version: "0.1.0", required: false },
+        BundledPackage { package_id: resolve("polylabs", "polypass"), version: "0.12.0", required: false },
+    ]
+
+    register_solution(manifest, packages)
+    manifest.solution_id
+}
