@@ -60,6 +60,14 @@ type ProviderPricingEvent = struct {
     timestamp: u64,
 }
 
+// --- Store ---
+
+store kv pricing_store {
+    persistence disk
+    key bytes(32)
+    value PricingTier
+}
+
 // --- Streams ---
 
 stream provider_pricing_events: event<ProviderPricingEvent>

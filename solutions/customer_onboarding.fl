@@ -42,6 +42,27 @@ type UpgradeStatus = struct {
 }
 // status: 0=Pending, 1=Accepted, 2=Applied, 3=Rejected, 4=RolledBack
 
+// --- State Machine ---
+
+state_machine customer_provision_lifecycle {
+    initial PENDING
+    persistence wal
+    terminal [ACTIVE, CANCELLED, SUSPENDED]
+    ai_anomaly_detection true
+    verify deadlock_free
+    verify reachable_all
+    verify terminal_convergence
+
+    PENDING -> VALIDATING { trigger submit_request; guard valid_request; action verify_identity }
+    VALIDATING -> PROVISIONING { trigger validation_passed; action allocate_resources }
+    VALIDATING -> CANCELLED { trigger validation_failed; action notify_rejection }
+    PROVISIONING -> CONFIGURING { trigger resources_ready; action apply_rbac }
+    CONFIGURING -> ACTIVE { trigger config_complete; guard health_check_passed; action enable_access }
+    ACTIVE -> SUSPENDED { trigger suspend; guard admin_action; action revoke_access }
+    SUSPENDED -> ACTIVE { trigger reactivate; guard compliance_restored; action restore_access }
+    ACTIVE -> CANCELLED { trigger cancel; action deprovision_resources }
+}
+
 // --- Streams ---
 
 stream customer_provisions: state<ProvisionId, CustomerProvision>

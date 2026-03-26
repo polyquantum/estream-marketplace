@@ -33,7 +33,7 @@ type Pacs002 = struct {
     status_count: u32,
 }
 
-data Pacs002Data : core v1 {
+schema Pacs002Data : core v1 {
     msg_type: u16,
     message_id: bytes(35),
     creation_timestamp: u64,
@@ -43,6 +43,7 @@ data Pacs002Data : core v1 {
     transaction_status: u8,
     reason_code: bytes(4),
     additional_info: bytes(140),
+    signer: bytes(2592),
 }
     encode @ bytes(328) {
         msg_type                @ le = 0x0002,
@@ -55,6 +56,8 @@ data Pacs002Data : core v1 {
         reason_code             @ le,
         additional_info         @ le,
     }
+    sign { algorithm mldsa87; key_field signer; detached true }
+    attest { @attested true; anchor_field msg_type; proof_system groth16 }
 
 circuit pacs002_hash(msg: Pacs002Data) -> bytes(32)
     @status production

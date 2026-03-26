@@ -75,6 +75,13 @@ data ResolutionResultWire : marketplace v1 {
     @encode
     @observe metrics [resolved_count, conflict_count, resolution_ms] level adaptive
 
+// --- Store ---
+
+store graph dependency_store {
+    persistence disk
+    storage csr { hot @bram }
+}
+
 // --- Streams ---
 
 stream dependency_resolution: event<ResolutionResultWire>

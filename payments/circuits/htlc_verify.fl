@@ -16,6 +16,23 @@ type HtlcResult = struct {
     overall_valid: bool,
 }
 
+// --- State Machine ---
+
+state_machine htlc_lifecycle {
+    initial CREATED
+    persistence wal
+    terminal [REDEEMED, REFUNDED, EXPIRED]
+    ai_anomaly_detection true
+    verify deadlock_free
+    verify reachable_all
+    verify terminal_convergence
+
+    CREATED -> FUNDED { trigger fund; guard amount_matches; action lock_funds }
+    FUNDED -> REDEEMED { trigger redeem; guard valid_preimage; action release_to_recipient }
+    FUNDED -> EXPIRED { trigger timeout; guard timelock_expired; action enable_refund }
+    EXPIRED -> REFUNDED { trigger refund; guard is_sender; action return_funds }
+}
+
 // Verify that SHA3-256(preimage) matches the hashlock
 circuit verify_hashlock(params: HtlcParams) -> HtlcResult
     @status production

@@ -163,6 +163,15 @@ series crm_audit_series: crm_profile_events
     @witness_attest true
 
 // =============================================================================
+// Store Declaration
+// =============================================================================
+
+store graph crm_store {
+    persistence disk
+    storage csr { hot @bram, warm @ddr, cold @nvme }
+}
+
+// =============================================================================
 // Circuit: Create User Profile
 // =============================================================================
 //

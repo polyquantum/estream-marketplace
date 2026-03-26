@@ -163,6 +163,17 @@ series catalyst_feedback_audit: catalyst_feedback_events
     @witness_attest true
 
 // =============================================================================
+// Cortex AI Governance
+// =============================================================================
+
+cortex campaign_intelligence {
+    expose [campaign_budget, conversion_rate, roi_score]
+    infer on_write { model cortex_optimizer; confidence_threshold 0.75 }
+    on_anomaly alert { severity warning; channel ops }
+    on_suggestion store { review_required true }
+}
+
+// =============================================================================
 // Circuit: Predict Outcome
 // =============================================================================
 //

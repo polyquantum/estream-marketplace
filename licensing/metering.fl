@@ -57,6 +57,45 @@ type BlindedBillingEvent = struct {
     emitted_at: u64,
 }
 
+// --- State Machine ---
+
+state_machine metering_session_lifecycle {
+    initial IDLE
+    persistence wal
+    terminal [SETTLED, EXPIRED, REVOKED]
+    ai_anomaly_detection true
+    verify deadlock_free
+    verify reachable_all
+    verify terminal_convergence
+
+    IDLE -> ACTIVE { trigger start_session; guard valid_license; action create_escrow }
+    ACTIVE -> ACCUMULATING { trigger first_usage; action start_metering }
+    ACCUMULATING -> AGGREGATING { trigger aggregation_window; action blind_aggregate }
+    AGGREGATING -> ACCUMULATING { trigger window_complete; action commit_aggregate }
+    ACCUMULATING -> SETTLING { trigger session_end; action compute_settlement }
+    AGGREGATING -> SETTLING { trigger session_end; action compute_settlement }
+    SETTLING -> SETTLED { trigger settlement_confirmed; guard escrow_released; action finalize }
+    ACTIVE -> EXPIRED { trigger timeout; action release_escrow }
+    ACTIVE -> REVOKED { trigger revoke; guard admin_action; action forfeit_escrow }
+    ACCUMULATING -> REVOKED { trigger revoke; guard fraud_detected; action forfeit_escrow }
+}
+
+// --- Store ---
+
+store series metering_series {
+    persistence scatter
+    merkle_chain true
+    retention 365d
+}
+
+// --- Cortex ---
+
+cortex usage_intelligence {
+    expose [usage_minutes, tier_id, overage_flag]
+    infer on_write { model usage_pattern; confidence_threshold 0.80 }
+    on_anomaly alert { severity critical; channel fraud }
+}
+
 // --- Streams ---
 
 stream meter_readings: event<MeterReading>

@@ -37,7 +37,7 @@ type Camt052 = struct {
     report_count: u32,
 }
 
-data Camt052Data : core v1 {
+schema Camt052Data : core v1 {
     msg_type: u16,
     message_id: bytes(35),
     creation_timestamp: u64,
@@ -48,6 +48,7 @@ data Camt052Data : core v1 {
     available_balance_cents: u64,
     available_currency: bytes(3),
     entry_count: u32,
+    signer: bytes(2592),
 }
     encode @ bytes(200) {
         msg_type                @ le = 0x0052,
@@ -61,6 +62,8 @@ data Camt052Data : core v1 {
         available_currency      @ le,
         entry_count             @ le,
     }
+    sign { algorithm mldsa87; key_field signer; detached true }
+    attest { @attested true; anchor_field msg_type; proof_system groth16 }
 
 circuit camt052_hash(msg: Camt052Data) -> bytes(32)
     @status production

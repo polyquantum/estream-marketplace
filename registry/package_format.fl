@@ -90,6 +90,28 @@ type VersionConstraint = struct {
     max_platform: PlatformVersion,
 }
 
+// --- State Machine ---
+
+state_machine package_publish_lifecycle {
+    initial DRAFT
+    persistence wal
+    terminal [PUBLISHED, REJECTED]
+    ai_anomaly_detection true
+    verify deadlock_free
+    verify reachable_all
+    verify terminal_convergence
+
+    DRAFT -> SUBMITTED { trigger submit; guard has_valid_signature; action validate_package }
+    SUBMITTED -> REVIEWING { trigger begin_review; action assign_reviewer }
+    REVIEWING -> APPROVED { trigger approve; guard reviewer_consensus; action sign_approval }
+    REVIEWING -> CHANGES_REQUESTED { trigger request_changes; action notify_publisher }
+    CHANGES_REQUESTED -> SUBMITTED { trigger resubmit; guard changes_applied; action revalidate }
+    APPROVED -> PUBLISHING { trigger publish; action replicate_to_mirrors }
+    PUBLISHING -> PUBLISHED { trigger confirm; guard mirrors_healthy; action index_package }
+    SUBMITTED -> REJECTED { trigger reject; guard policy_violation; action notify_rejection }
+    REVIEWING -> REJECTED { trigger reject; guard critical_issue; action revoke_draft }
+}
+
 // --- Data Declarations ---
 
 data PackageManifestWire : marketplace v1 {

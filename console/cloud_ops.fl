@@ -1,0 +1,39 @@
+/// Marketplace Cloud Operations — v0.22.0
+/// Multi-provider deployment circuits for marketplace infrastructure
+
+cloud publish_component(package_id: bytes(32), artifact: bytes, publisher_key: bytes(2592)) -> bytes(32)
+    lex marketplace/ops/publish
+    providers [aws, gcp, azure]
+    tier_progression [alpha, beta, devnet, testnet, mainnet]
+    approval_threshold 2
+    cost_estimate { compute: 0.25, storage: 0.05 }
+    @attested true
+    observe metrics: [package_id, tier, provider]
+{
+    let signed = mldsa_sign(sha3_256(artifact), publisher_key)
+    sha3_256(concat(package_id, signed))
+}
+
+cloud provision_solution(solution_id: bytes(32), customer_id: bytes(32), tier: u8) -> bytes(32)
+    lex marketplace/ops/provision
+    providers [aws, gcp, azure]
+    tier_progression [alpha, beta, devnet, mainnet]
+    approval_threshold 2
+    cost_estimate { compute: 0.50, storage: 0.10 }
+    @attested true
+    observe metrics: [solution_id, customer_id, tier]
+{
+    sha3_256(concat(solution_id, customer_id))
+}
+
+cloud migrate_customer(customer_id: bytes(32), from_tier: u8, to_tier: u8) -> bool
+    lex marketplace/ops/migrate
+    providers [aws, gcp, azure]
+    tier_progression [devnet, testnet, mainnet]
+    approval_threshold 3
+    cost_estimate { compute: 0.10, storage: 0.02 }
+    @attested true
+    observe metrics: [customer_id, from_tier, to_tier]
+{
+    to_tier > from_tier
+}

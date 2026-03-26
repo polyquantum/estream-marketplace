@@ -40,7 +40,7 @@ type Pacs008 = struct {
     transaction_count: u32,
 }
 
-data Pacs008Data : core v1 {
+schema Pacs008Data : core v1 {
     msg_type: u16,
     message_id: bytes(35),
     creation_timestamp: u64,
@@ -59,6 +59,7 @@ data Pacs008Data : core v1 {
     creditor_account: bytes(34),
     creditor_agent_bic: bytes(11),
     remittance_info: bytes(140),
+    signer: bytes(2592),
 }
     encode @ bytes(680) {
         msg_type            @ le = 0x0008,
@@ -80,6 +81,8 @@ data Pacs008Data : core v1 {
         creditor_agent_bic  @ le,
         remittance_info     @ le,
     }
+    sign { algorithm mldsa87; key_field signer; detached true }
+    attest { @attested true; anchor_field msg_type; proof_system groth16 }
 
 circuit pacs008_hash(msg: Pacs008Data) -> bytes(32)
     @status production

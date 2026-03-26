@@ -26,6 +26,9 @@ state_machine deposit_flow {
     persistence wal
     terminal [DEPOSIT_COMPLETED, DEPOSIT_FAILED]
     ai_anomaly_detection true
+    verify deadlock_free
+    verify reachable_all
+    verify terminal_convergence
 
     DEPOSIT_PENDING -> DEPOSIT_PROCESSING when processing_started
     DEPOSIT_PROCESSING -> DEPOSIT_COMPLETED when mint_success

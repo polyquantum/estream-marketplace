@@ -42,6 +42,15 @@ type WaterfallProof = struct {
     proof_data: bytes(512),
 }
 
+// --- Cortex ---
+
+cortex revenue_intelligence {
+    expose [total_revenue, split_ratios, settlement_status]
+    infer on_write { model revenue_optimizer; confidence_threshold 0.70 }
+    on_anomaly alert { severity warning; channel finance }
+    on_suggestion store { review_required true }
+}
+
 // --- Streams ---
 
 stream waterfall_settlements: event<WaterfallTransaction>
