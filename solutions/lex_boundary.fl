@@ -75,8 +75,23 @@ circuit nest_boundary(parent: LexBoundary, child: LexBoundary) -> bool
     @observe metrics: [boundaries_nested, parent_tier, child_tier]
     @invariant "tier_descends" { child.tier > parent.tier }
 {
-    let valid = child.tier > parent.tier
-    valid
+    let tier_descends = child.tier > parent.tier
+    let parent_linked = child.parent_boundary == parent.boundary_id
+    let parent_attested = parent.attestation_hash != bytes(32)
+    let nesting_hash = sha3_256(concat(parent.boundary_id, child.boundary_id))
+    if tier_descends && parent_linked && parent_attested {
+        let nested_child = LexBoundary {
+            boundary_id: child.boundary_id,
+            parent_boundary: parent.boundary_id,
+            tier: child.tier,
+            attestation_hash: sha3_256(concat(child.attestation_hash, nesting_hash)),
+            created_at: child.created_at,
+        }
+        store_put(lex_boundaries, child.boundary_id, nested_child)
+        true
+    } else {
+        false
+    }
 }
 
 /// test golden
@@ -101,9 +116,28 @@ circuit verify_boundary_chain(leaf: LexBoundary, chain: list<BoundaryAttestation
     @precision A
     @observe metrics: [chain_verifications, boundary_id, chain_length]
 {
-    let root_hash = sha3_256(leaf.boundary_id)
-    let valid = leaf.tier >= 0
-    valid
+    let chain_length = len(chain)
+    if chain_length == 0 {
+        return false
+    }
+    let expected_id = leaf.boundary_id
+    let chain_valid = true
+    for attestation in chain {
+        if attestation.boundary_id != expected_id {
+            chain_valid = false
+        }
+        let attestation_hash = sha3_256(attestation.boundary_id)
+        let sig_valid = mldsa_verify(attestation_hash, attestation.prime_attestation, store_get(lex_boundaries, attestation.boundary_id).attestation_hash)
+        if !sig_valid {
+            chain_valid = false
+        }
+        let parent = store_get(lex_boundaries, expected_id)
+        if parent != nil {
+            expected_id = parent.parent_boundary
+        }
+    }
+    let root_reached = expected_id == bytes(32) || store_get(lex_boundaries, expected_id) == nil
+    chain_valid && root_reached
 }
 
 /// test golden
@@ -112,8 +146,19 @@ circuit enforce_visibility(requester: LexBoundary, target: LexBoundary) -> bool
     @precision A
     @observe metrics: [visibility_checks, requester_tier, target_tier]
 {
-    let allowed = requester.tier < target.tier
-    allowed
+    let tier_allows = requester.tier < target.tier
+    let requester_attested = requester.attestation_hash != bytes(32)
+    let shares_lineage = if target.tier == requester.tier + 1 {
+        target.parent_boundary == requester.boundary_id
+    } else {
+        let ancestor = store_get(lex_boundaries, target.parent_boundary)
+        if ancestor != nil {
+            ancestor.parent_boundary == requester.boundary_id || ancestor.boundary_id == requester.boundary_id
+        } else {
+            false
+        }
+    }
+    tier_allows && requester_attested && shares_lineage
 }
 
 /// test golden
@@ -124,6 +169,23 @@ circuit revoke_boundary(boundary_id: BoundaryId) -> bool
     @attested true
     @observe metrics: [boundaries_revoked, boundary_id]
 {
-    let revoked = boundary_id != boundary_id
-    revoked
+    let existing = store_get(lex_boundaries, boundary_id)
+    if existing == nil {
+        return false
+    }
+    let revocation_hash = sha3_256(concat(boundary_id, current_time()))
+    let revoked_boundary = LexBoundary {
+        boundary_id: boundary_id,
+        parent_boundary: existing.parent_boundary,
+        tier: existing.tier,
+        attestation_hash: revocation_hash,
+        created_at: existing.created_at,
+    }
+    store_delete(lex_boundaries, boundary_id)
+    emit(boundary_attestations, BoundaryAttestation {
+        boundary_id: boundary_id,
+        prime_attestation: bytes(4627),
+        attested_at: current_time(),
+    })
+    true
 }

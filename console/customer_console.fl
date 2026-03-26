@@ -67,14 +67,38 @@ circuit get_customer_dashboard(customer_id_blinded: BlindedCustomerId) -> Custom
     @precision C
     @observe metrics: [customer_dashboard_views]
 {
-    CustomerDashboard {
-        customer_id_blinded: customer_id_blinded,
-        installed_count: 0,
-        active_licenses: 0,
-        monthly_cost_micros: 0,
-        telemetry_share_count: 0,
-        telemetry_private_count: 0,
+    let cached = store_get(customer_dashboards, customer_id_blinded)
+    if cached != nil {
+        return cached
     }
+    let packages = store_scan(billing_history, customer_id_blinded)
+    let installed = 0
+    let active = 0
+    let cost = 0
+    let share_count = 0
+    let private_count = 0
+    for record in packages {
+        installed = installed + 1
+        if record.paid {
+            active = active + 1
+        }
+        cost = cost + record.cost_micros
+        if record.tier == 0 {
+            share_count = share_count + 1
+        } else {
+            private_count = private_count + 1
+        }
+    }
+    let dashboard = CustomerDashboard {
+        customer_id_blinded: customer_id_blinded,
+        installed_count: installed,
+        active_licenses: active,
+        monthly_cost_micros: cost,
+        telemetry_share_count: share_count,
+        telemetry_private_count: private_count,
+    }
+    store_put(customer_dashboards, customer_id_blinded, dashboard)
+    dashboard
 }
 
 /// test golden
@@ -83,8 +107,26 @@ circuit list_installed_packages(customer_id_blinded: BlindedCustomerId) -> list<
     @precision C
     @observe metrics: [installed_package_queries]
 {
-    let empty = list<InstalledPackageInfo>
-    empty
+    let records = store_scan(billing_history, customer_id_blinded)
+    let result = list<InstalledPackageInfo>
+    for record in records {
+        let pkg_key = sha3_256(concat(customer_id_blinded, record.package_id))
+        let license_active = record.paid && record.period_end > current_time()
+        let license_type = record.tier
+        let info = InstalledPackageInfo {
+            package_id: record.package_id,
+            name: sha3_256(record.package_id),
+            version: sha3_256(concat(record.package_id, record.period_start)),
+            license_type: license_type,
+            license_expires_at: record.period_end,
+            usage_this_period: record.usage_count,
+            cost_this_period_micros: record.cost_micros,
+            update_available: false,
+            telemetry_preference: record.tier,
+        }
+        append(result, info)
+    }
+    result
 }
 
 /// test golden
@@ -93,16 +135,31 @@ circuit get_license_status(customer_id_blinded: BlindedCustomerId, package_id: P
     @precision C
     @observe metrics: [license_status_queries, package_id]
 {
+    let license_key = sha3_256(concat(customer_id_blinded, package_id))
+    let records = store_scan(billing_history, license_key)
+    let latest_record = nil
+    let latest_time = 0
+    for record in records {
+        if record.package_id == package_id && record.period_end > latest_time {
+            latest_record = record
+            latest_time = record.period_end
+        }
+    }
+    if latest_record == nil {
+        fail("no license found for package")
+    }
+    let is_active = latest_record.paid && latest_record.period_end > current_time()
+    let has_update = store_get(billing_history, sha3_256(concat(package_id, "update"))) != nil
     InstalledPackageInfo {
         package_id: package_id,
-        name: bytes(128),
-        version: bytes(32),
-        license_type: 0,
-        license_expires_at: 0,
-        usage_this_period: 0,
-        cost_this_period_micros: 0,
-        update_available: false,
-        telemetry_preference: 0,
+        name: sha3_256(package_id),
+        version: sha3_256(concat(package_id, latest_record.period_start)),
+        license_type: latest_record.tier,
+        license_expires_at: latest_record.period_end,
+        usage_this_period: latest_record.usage_count,
+        cost_this_period_micros: latest_record.cost_micros,
+        update_available: has_update,
+        telemetry_preference: latest_record.tier,
     }
 }
 
@@ -112,8 +169,14 @@ circuit get_billing_history(customer_id_blinded: BlindedCustomerId, period_start
     @precision C
     @observe metrics: [billing_history_queries]
 {
-    let empty = list<BillingRecord>
-    empty
+    let all_records = store_scan(billing_history, customer_id_blinded, period_start, period_end)
+    let result = list<BillingRecord>
+    for record in all_records {
+        if record.period_start >= period_start && record.period_end <= period_end {
+            append(result, record)
+        }
+    }
+    result
 }
 
 /// test golden
@@ -123,14 +186,33 @@ circuit toggle_telemetry(customer_id_blinded: BlindedCustomerId, package_id: Pac
     @attested true
     @observe metrics: [telemetry_toggles, package_id, new_preference]
 {
+    if new_preference > 1 {
+        fail("telemetry preference must be 0 (Share) or 1 (Private)")
+    }
+    let license_key = sha3_256(concat(customer_id_blinded, package_id))
+    let current = store_get(billing_history, license_key)
+    if current == nil {
+        fail("no active license for package")
+    }
+    let updated_record = BillingRecord {
+        record_id: sha3_256(concat(license_key, current_time())),
+        period_start: current.period_start,
+        period_end: current.period_end,
+        package_id: package_id,
+        tier: new_preference,
+        usage_count: current.usage_count,
+        cost_micros: current.cost_micros,
+        paid: current.paid,
+    }
+    emit(billing_history, updated_record)
     InstalledPackageInfo {
         package_id: package_id,
-        name: bytes(128),
-        version: bytes(32),
-        license_type: 0,
-        license_expires_at: 0,
-        usage_this_period: 0,
-        cost_this_period_micros: 0,
+        name: sha3_256(package_id),
+        version: sha3_256(concat(package_id, current.period_start)),
+        license_type: current.tier,
+        license_expires_at: current.period_end,
+        usage_this_period: current.usage_count,
+        cost_this_period_micros: current.cost_micros,
         update_available: false,
         telemetry_preference: new_preference,
     }
@@ -142,6 +224,25 @@ circuit get_dependency_graph(customer_id_blinded: BlindedCustomerId) -> list<Ins
     @precision C
     @observe metrics: [dependency_graph_views]
 {
-    let empty = list<InstalledPackageInfo>
-    empty
+    let records = store_scan(billing_history, customer_id_blinded)
+    let result = list<InstalledPackageInfo>
+    for record in records {
+        let dep_key = sha3_256(concat(customer_id_blinded, record.package_id))
+        let is_active = record.paid && record.period_end > current_time()
+        if is_active {
+            let info = InstalledPackageInfo {
+                package_id: record.package_id,
+                name: sha3_256(record.package_id),
+                version: sha3_256(concat(record.package_id, record.period_start)),
+                license_type: record.tier,
+                license_expires_at: record.period_end,
+                usage_this_period: record.usage_count,
+                cost_this_period_micros: record.cost_micros,
+                update_available: false,
+                telemetry_preference: record.tier,
+            }
+            append(result, info)
+        }
+    }
+    result
 }

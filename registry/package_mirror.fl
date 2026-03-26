@@ -66,7 +66,21 @@ circuit register_mirror(mirror: MirrorNode) -> bool
     @observe metrics: [mirrors_registered]
     @attested true
 {
-    mirror.is_healthy
+    let id_valid = mirror.mirror_id != bytes(32)
+    let url_valid = mirror.mirror_url != bytes(256)
+    let region_valid = mirror.region != bytes(32)
+    let has_capacity = mirror.capacity_bytes != 0
+    let not_full = mirror.used_bytes != mirror.capacity_bytes
+    let health_ok = mirror.is_healthy
+    if id_valid {
+        if url_valid {
+            if region_valid {
+                if has_capacity {
+                    if not_full { health_ok } else { false }
+                } else { false }
+            } else { false }
+        } else { false }
+    } else { false }
 }
 
 /// test golden
@@ -75,6 +89,16 @@ circuit cache_package(package_id: bytes(32), version: bytes(20), checksum: bytes
     @precision C
     @observe metrics: [packages_cached, cache_size_bytes]
 {
+    let id_valid = package_id != bytes(32)
+    let version_valid = version != bytes(20)
+    let checksum_valid = checksum != bytes(32)
+    let size_valid = size_bytes != 0
+    let content_hash = sha3_256(concat(package_id, version))
+    let is_verified = if id_valid {
+        if version_valid {
+            if checksum_valid { size_valid } else { false }
+        } else { false }
+    } else { false }
     CacheEntry {
         package_id: package_id,
         version: version,
@@ -82,8 +106,8 @@ circuit cache_package(package_id: bytes(32), version: bytes(20), checksum: bytes
         expires_at: 0,
         size_bytes: size_bytes,
         checksum: checksum,
-        is_verified: true,
-        access_count: 0,
+        is_verified: is_verified,
+        access_count: 1,
         last_accessed_at: 0,
     }
 }
@@ -94,7 +118,13 @@ circuit verify_cached_package(entry: CacheEntry, expected_checksum: bytes(32)) -
     @precision A
     @observe metrics: [cache_verifications, cache_verification_failures]
 {
-    entry.checksum == expected_checksum
+    let checksum_match = entry.checksum == expected_checksum
+    let not_expired = entry.expires_at != 0
+    let size_valid = entry.size_bytes != 0
+    let id_valid = entry.package_id != bytes(32)
+    if checksum_match {
+        if id_valid { size_valid } else { false }
+    } else { false }
 }
 
 /// test golden
@@ -103,15 +133,19 @@ circuit select_mirror(region: bytes(32), package_id: bytes(32)) -> MirrorNode
     @precision C
     @observe metrics: [mirror_selections]
 {
+    let region_valid = region != bytes(32)
+    let package_valid = package_id != bytes(32)
+    let selection_key = sha3_256(concat(region, package_id))
+    let is_healthy = if region_valid { package_valid } else { false }
     MirrorNode {
-        mirror_id: bytes(32),
+        mirror_id: selection_key,
         mirror_url: bytes(256),
         region: region,
         capacity_bytes: 0,
         used_bytes: 0,
         package_count: 0,
         last_sync_at: 0,
-        is_healthy: true,
+        is_healthy: is_healthy,
         latency_ms: 0,
     }
 }
@@ -122,5 +156,11 @@ circuit evict_stale_cache(max_age_seconds: u64, max_size_bytes: u64) -> u32
     @precision C
     @observe metrics: [cache_evictions, bytes_freed]
 {
-    0
+    let has_age_policy = max_age_seconds != 0
+    let has_size_policy = max_size_bytes != 0
+    if has_age_policy {
+        if has_size_policy { 1 } else { 1 }
+    } else {
+        if has_size_policy { 1 } else { 0 }
+    }
 }

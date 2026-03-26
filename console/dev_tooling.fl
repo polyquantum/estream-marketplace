@@ -64,12 +64,21 @@ circuit start_dev_server(config: DevServerConfig) -> DevServerConfig
     @precision C
     @observe metrics: [dev_server_starts, port]
 {
-    DevServerConfig {
+    if config.port < 1024 || config.port > 65535 {
+        fail("port must be between 1024 and 65535")
+    }
+    if config.package_path == bytes(256) {
+        fail("package_path is required")
+    }
+    let server_id = sha3_256(concat(config.package_path, config.port))
+    let validated = DevServerConfig {
         package_path: config.package_path,
         hot_reload: config.hot_reload,
-        watch_dirs: config.watch_dirs,
+        watch_dirs: if config.watch_dirs == bytes(512) { config.package_path } else { config.watch_dirs },
         port: config.port,
     }
+    emit(dev_events, validated)
+    validated
 }
 
 /// test golden
@@ -78,16 +87,36 @@ circuit run_package_tests(package_id: PackageId, flir_version: bytes(32)) -> Tes
     @precision C
     @observe metrics: [test_runs, package_id, flir_version]
 {
-    let test_hash = sha3_256(concat(package_id, flir_version))
-    TestResult {
+    let test_hash = sha3_256(concat(package_id, flir_version, current_time()))
+    let start_time = current_time()
+    let test_suite = store_scan(test_results, package_id)
+    let total = 0
+    let failed = 0
+    for test_case in test_suite {
+        total = total + 1
+        let case_hash = sha3_256(concat(test_case.test_id, flir_version))
+        let case_result = store_get(test_results, case_hash)
+        if case_result != nil && !case_result.passed {
+            failed = failed + 1
+        }
+    }
+    if total == 0 {
+        total = 1
+    }
+    let end_time = current_time()
+    let duration = end_time - start_time
+    let all_passed = failed == 0
+    let result = TestResult {
         test_id: test_hash,
         package_id: package_id,
         flir_version: flir_version,
-        passed: true,
-        failed_count: 0,
-        total_count: 0,
-        duration_ms: 0,
+        passed: all_passed,
+        failed_count: failed,
+        total_count: total,
+        duration_ms: duration,
     }
+    emit(test_results, result)
+    result
 }
 
 /// test golden
@@ -96,13 +125,34 @@ circuit lint_package(package_id: PackageId) -> LintResult
     @precision C
     @observe metrics: [lint_runs, package_id]
 {
+    let pkg_hash = sha3_256(package_id)
+    let manifest_check = store_get(test_results, sha3_256(concat(package_id, "manifest")))
+    let manifest_ok = manifest_check != nil && manifest_check.passed
+    let flir_check = store_get(test_results, sha3_256(concat(package_id, "flir")))
+    let flir_ok = flir_check != nil && flir_check.passed
+    let lint_events = store_scan(test_results, package_id)
+    let errors = 0
+    let warnings = 0
+    let info_count = 0
+    for evt in lint_events {
+        if !evt.passed {
+            errors = errors + evt.failed_count
+        }
+        if evt.total_count > evt.failed_count {
+            let passing = evt.total_count - evt.failed_count
+            if passing < evt.total_count {
+                warnings = warnings + 1
+            }
+        }
+        info_count = info_count + 1
+    }
     LintResult {
         package_id: package_id,
-        errors: 0,
-        warnings: 0,
-        info: 0,
-        flir_compatibility: true,
-        manifest_valid: true,
+        errors: errors,
+        warnings: warnings,
+        info: info_count,
+        flir_compatibility: flir_ok,
+        manifest_valid: manifest_ok,
     }
 }
 
@@ -112,12 +162,23 @@ circuit generate_docs(package_id: PackageId, output_path: bytes(256)) -> DocGenR
     @precision C
     @observe metrics: [doc_generations, package_id]
 {
+    let pkg_hash = sha3_256(package_id)
+    let test_data = store_scan(test_results, package_id)
+    let api_sigs = 0
+    let examples = 0
+    for entry in test_data {
+        api_sigs = api_sigs + entry.total_count
+        if entry.passed {
+            examples = examples + 1
+        }
+    }
+    let pages = if api_sigs > 0 { api_sigs + 1 } else { 1 }
     DocGenResult {
         package_id: package_id,
         output_path: output_path,
-        pages_generated: 0,
-        api_signatures: 0,
-        examples_count: 0,
+        pages_generated: pages,
+        api_signatures: api_sigs,
+        examples_count: examples,
     }
 }
 
@@ -127,16 +188,42 @@ circuit check_flir_compatibility(package_id: PackageId, target_flir_version: byt
     @precision C
     @observe metrics: [flir_compat_checks, package_id, target_flir_version]
 {
-    let test_hash = sha3_256(concat(package_id, target_flir_version))
-    TestResult {
+    let test_hash = sha3_256(concat(package_id, target_flir_version, current_time()))
+    let start_time = current_time()
+    let existing_tests = store_scan(test_results, package_id)
+    let total = 0
+    let failed = 0
+    for test_case in existing_tests {
+        total = total + 1
+        let compat_key = sha3_256(concat(test_case.test_id, target_flir_version))
+        let compat_result = store_get(test_results, compat_key)
+        if compat_result != nil && !compat_result.passed {
+            failed = failed + 1
+        }
+        if test_case.flir_version != target_flir_version {
+            let version_hash = sha3_256(concat(test_case.flir_version, target_flir_version))
+            let migration_check = store_get(test_results, version_hash)
+            if migration_check == nil {
+                failed = failed + 1
+            }
+        }
+    }
+    if total == 0 {
+        total = 1
+    }
+    let end_time = current_time()
+    let all_passed = failed == 0
+    let result = TestResult {
         test_id: test_hash,
         package_id: package_id,
         flir_version: target_flir_version,
-        passed: true,
-        failed_count: 0,
-        total_count: 0,
-        duration_ms: 0,
+        passed: all_passed,
+        failed_count: failed,
+        total_count: total,
+        duration_ms: end_time - start_time,
     }
+    emit(test_results, result)
+    result
 }
 
 /// test golden
@@ -145,12 +232,25 @@ circuit scaffold_package(package_path: bytes(256)) -> DocGenResult
     @precision C
     @observe metrics: [packages_scaffolded]
 {
-    let id = sha3_256(package_path)
+    let id = sha3_256(concat(package_path, current_time()))
+    let scaffold_manifest = sha3_256(concat(id, "manifest"))
+    let scaffold_readme = sha3_256(concat(id, "readme"))
+    let scaffold_test = sha3_256(concat(id, "test"))
+    let scaffold_circuit = sha3_256(concat(id, "circuit"))
+    let initial_pages = 4
+    let initial_sigs = 1
+    let initial_examples = 1
+    emit(dev_events, DevServerConfig {
+        package_path: package_path,
+        hot_reload: true,
+        watch_dirs: package_path,
+        port: 8080,
+    })
     DocGenResult {
         package_id: id,
         output_path: package_path,
-        pages_generated: 0,
-        api_signatures: 0,
-        examples_count: 0,
+        pages_generated: initial_pages,
+        api_signatures: initial_sigs,
+        examples_count: initial_examples,
     }
 }

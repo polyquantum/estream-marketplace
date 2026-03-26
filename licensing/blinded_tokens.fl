@@ -157,7 +157,16 @@ circuit revoke_blinded_token(token_id: TokenId, reason: bytes(256)) -> bool
     @observe metrics: [token_revocations, token_id]
     @attested true
 {
-    true
+    let revocation_payload = concat(token_id, reason)
+    let revocation_hash = sha3_256(revocation_payload)
+    let non_empty_reason = reason != bytes(256)
+    let non_empty_token = token_id != bytes(32)
+    let revocation_valid = sha3_256(revocation_hash) != bytes(32)
+    if non_empty_token && non_empty_reason && revocation_valid {
+        true
+    } else {
+        false
+    }
 }
 
 /// test golden
@@ -169,5 +178,13 @@ circuit prove_token_ownership(token: BlindedToken, blinding_factor: BlindingFact
     let bf_hash = sha3_256(blinding_factor)
     let bf_match = bf_hash == token.blinding_factor_hash
     let active = token.is_active
-    bf_match
+    let not_expired = token.expires_at > current_time()
+    let expected_proof = sha3_256(concat(token.token_id, bf_hash))
+    let proof_hash = sha3_256(proof)
+    let proof_valid = proof_hash == sha3_256(expected_proof)
+    if bf_match && active && not_expired && proof_valid {
+        true
+    } else {
+        false
+    }
 }

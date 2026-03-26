@@ -90,8 +90,32 @@ circuit add_package_to_solution(solution_id: SolutionId, package: BundledPackage
     @attested true
     @observe metrics: [packages_added, solution_id, package_id]
 {
-    let valid = package.package_id != solution_id
-    valid
+    let pkg_hash = sha3_256(concat(package.package_id, package.version))
+    let binding_key = sha3_256(concat(solution_id, pkg_hash))
+    let existing = store_get(solution_registry, solution_id)
+    if existing == nil {
+        false
+    } else {
+        let manifest = existing
+        let updated_count = manifest.packages_count + 1
+        store_put(solution_registry, binding_key, package)
+        let updated = SolutionManifest {
+            solution_id: manifest.solution_id,
+            name: manifest.name,
+            version: manifest.version,
+            publisher: manifest.publisher,
+            description: manifest.description,
+            packages_count: updated_count,
+            lex_policy_hash: manifest.lex_policy_hash,
+            branding_hash: manifest.branding_hash,
+            pricing_model: manifest.pricing_model,
+            tier: manifest.tier,
+            created_at: manifest.created_at,
+        }
+        store_put(solution_registry, solution_id, updated)
+        emit(solution_events, updated)
+        true
+    }
 }
 
 /// test golden
@@ -102,8 +126,33 @@ circuit remove_package_from_solution(solution_id: SolutionId, package_id: Packag
     @attested true
     @observe metrics: [packages_removed, solution_id, package_id]
 {
-    let removed = package_id != solution_id
-    removed
+    let pkg_binding = sha3_256(concat(solution_id, package_id))
+    let bound = store_get(solution_registry, pkg_binding)
+    if bound == nil {
+        false
+    } else {
+        store_delete(solution_registry, pkg_binding)
+        let manifest = store_get(solution_registry, solution_id)
+        if manifest != nil {
+            let updated_count = manifest.packages_count - 1
+            let updated = SolutionManifest {
+                solution_id: manifest.solution_id,
+                name: manifest.name,
+                version: manifest.version,
+                publisher: manifest.publisher,
+                description: manifest.description,
+                packages_count: updated_count,
+                lex_policy_hash: manifest.lex_policy_hash,
+                branding_hash: manifest.branding_hash,
+                pricing_model: manifest.pricing_model,
+                tier: manifest.tier,
+                created_at: manifest.created_at,
+            }
+            store_put(solution_registry, solution_id, updated)
+            emit(solution_events, updated)
+        }
+        true
+    }
 }
 
 /// test golden
@@ -113,9 +162,18 @@ circuit validate_solution_bundle(manifest: SolutionManifest, packages: list<Bund
     @observe metrics: [bundles_validated, solution_id, packages_count]
     @invariant "has_packages" { manifest.packages_count > 0 }
 {
-    let hash = sha3_256(manifest.solution_id)
-    let valid = manifest.packages_count > 0
-    valid
+    let has_packages = manifest.packages_count > 0
+    let count_matches = manifest.packages_count == len(packages)
+    let content_hash = sha3_256(manifest.solution_id)
+    for pkg in packages {
+        let pkg_hash = sha3_256(concat(pkg.package_id, pkg.version))
+        content_hash = sha3_256(concat(content_hash, pkg_hash))
+        if pkg.package_id == manifest.solution_id {
+            return false
+        }
+    }
+    let bundle_integrity = sha3_256(concat(content_hash, manifest.lex_policy_hash))
+    has_packages && count_matches && bundle_integrity != nil
 }
 
 /// test golden
@@ -126,7 +184,13 @@ circuit publish_solution(manifest: SolutionManifest) -> SolutionManifest
     @attested true
     @observe metrics: [solutions_published, solution_id, tier]
 {
-    SolutionManifest {
+    let content_hash = sha3_256(concat(manifest.solution_id, manifest.version, manifest.publisher))
+    let policy_valid = manifest.lex_policy_hash != bytes(32)
+    let branding_valid = manifest.branding_hash != bytes(32)
+    if !policy_valid || !branding_valid || manifest.packages_count == 0 {
+        fail("publish requires valid lex policy, branding, and at least one package")
+    }
+    let published = SolutionManifest {
         solution_id: manifest.solution_id,
         name: manifest.name,
         version: manifest.version,
@@ -134,11 +198,14 @@ circuit publish_solution(manifest: SolutionManifest) -> SolutionManifest
         description: manifest.description,
         packages_count: manifest.packages_count,
         lex_policy_hash: manifest.lex_policy_hash,
-        branding_hash: manifest.branding_hash,
+        branding_hash: sha3_256(concat(manifest.branding_hash, content_hash)),
         pricing_model: manifest.pricing_model,
         tier: manifest.tier,
         created_at: manifest.created_at,
     }
+    store_put(solution_registry, manifest.solution_id, published)
+    emit(solution_events, published)
+    published
 }
 
 /// test golden
@@ -147,17 +214,9 @@ circuit get_solution_info(solution_id: SolutionId) -> SolutionManifest
     @precision C
     @observe metrics: [solution_lookups, solution_id]
 {
-    SolutionManifest {
-        solution_id: solution_id,
-        name: solution_id,
-        version: solution_id,
-        publisher: solution_id,
-        description: solution_id,
-        packages_count: 0,
-        lex_policy_hash: sha3_256(solution_id),
-        branding_hash: sha3_256(solution_id),
-        pricing_model: 0,
-        tier: 0,
-        created_at: current_time(),
+    let manifest = store_get(solution_registry, solution_id)
+    if manifest == nil {
+        fail("solution not found")
     }
+    manifest
 }

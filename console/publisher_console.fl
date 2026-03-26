@@ -64,16 +64,36 @@ circuit get_publisher_dashboard(publisher_id: PublisherId, period_start: u64, pe
     @rbac [publisher]
     @observe metrics: [dashboard_views, publisher_id]
 {
-    PublisherDashboard {
+    let cached = store_get(publisher_dashboards, publisher_id)
+    if cached != nil && cached.period_start == period_start && cached.period_end == period_end {
+        return cached
+    }
+    let analytics = store_scan(package_analytics, publisher_id, period_start, period_end)
+    let pkg_count = 0
+    let downloads = 0
+    let revenue = 0
+    let rating_sum = 0
+    let licenses = 0
+    for entry in analytics {
+        pkg_count = pkg_count + 1
+        downloads = downloads + entry.downloads
+        revenue = revenue + entry.revenue_micros
+        rating_sum = rating_sum + entry.error_rate_bps
+        licenses = licenses + entry.active_installs
+    }
+    let avg_rating = if pkg_count > 0 { rating_sum / pkg_count } else { 0 }
+    let dashboard = PublisherDashboard {
         publisher_id: publisher_id,
-        package_count: 0,
-        total_downloads: 0,
-        total_revenue_micros: 0,
-        avg_rating_x100: 0,
-        active_licenses: 0,
+        package_count: pkg_count,
+        total_downloads: downloads,
+        total_revenue_micros: revenue,
+        avg_rating_x100: avg_rating,
+        active_licenses: licenses,
         period_start: period_start,
         period_end: period_end,
     }
+    store_put(publisher_dashboards, publisher_id, dashboard)
+    dashboard
 }
 
 /// test golden
@@ -83,15 +103,37 @@ circuit get_package_analytics(package_id: PackageId, publisher_id: PublisherId) 
     @rbac [publisher]
     @observe metrics: [analytics_queries, package_id]
 {
+    let analytics_key = sha3_256(concat(package_id, publisher_id))
+    let stored = store_get(package_analytics, analytics_key)
+    if stored != nil {
+        return stored
+    }
+    let events = store_scan(package_analytics, package_id)
+    let downloads = 0
+    let installs = 0
+    let revenue = 0
+    let latency_sum = 0
+    let event_count = 0
+    let deps = 0
+    for evt in events {
+        downloads = downloads + evt.downloads
+        installs = installs + evt.active_installs
+        revenue = revenue + evt.revenue_micros
+        latency_sum = latency_sum + evt.avg_latency_ms
+        event_count = event_count + 1
+        deps = deps + evt.dependents_count
+    }
+    let avg_latency = if event_count > 0 { latency_sum / event_count } else { 0 }
+    let error_rate = if downloads > 0 { (event_count * 10000) / downloads } else { 0 }
     PackageAnalytics {
         package_id: package_id,
-        version: bytes(32),
-        downloads: 0,
-        active_installs: 0,
-        revenue_micros: 0,
-        error_rate_bps: 0,
-        avg_latency_ms: 0,
-        dependents_count: 0,
+        version: sha3_256(concat(package_id, publisher_id)),
+        downloads: downloads,
+        active_installs: installs,
+        revenue_micros: revenue,
+        error_rate_bps: error_rate,
+        avg_latency_ms: avg_latency,
+        dependents_count: deps,
     }
 }
 
@@ -102,13 +144,22 @@ circuit get_revenue_summary(publisher_id: PublisherId, period_start: u64, period
     @rbac [publisher]
     @observe metrics: [revenue_summary_views, publisher_id]
 {
+    let analytics = store_scan(package_analytics, publisher_id, period_start, period_end)
+    let pkg_count = 0
+    let total_revenue = 0
+    let total_licenses = 0
+    for entry in analytics {
+        pkg_count = pkg_count + 1
+        total_revenue = total_revenue + entry.revenue_micros
+        total_licenses = total_licenses + entry.active_installs
+    }
     PublisherDashboard {
         publisher_id: publisher_id,
-        package_count: 0,
+        package_count: pkg_count,
         total_downloads: 0,
-        total_revenue_micros: 0,
+        total_revenue_micros: total_revenue,
         avg_rating_x100: 0,
-        active_licenses: 0,
+        active_licenses: total_licenses,
         period_start: period_start,
         period_end: period_end,
     }
@@ -122,15 +173,32 @@ circuit initiate_deprecation(package_id: PackageId, version: bytes(32), reason: 
     @attested true
     @observe metrics: [deprecations_initiated, package_id]
 {
-    DeprecationWorkflow {
+    if sunset_at <= current_time() {
+        fail("sunset_at must be in the future")
+    }
+    let analytics_key = sha3_256(concat(package_id, version))
+    let pkg_analytics = store_get(package_analytics, analytics_key)
+    let installs = if pkg_analytics != nil { pkg_analytics.active_installs } else { 0 }
+    let workflow = DeprecationWorkflow {
         package_id: package_id,
         version: version,
         reason: reason,
         migration_guide_hash: migration_guide_hash,
         deprecated_at: current_time(),
         sunset_at: sunset_at,
-        affected_installs: 0,
+        affected_installs: installs,
     }
+    emit(package_analytics, PackageAnalytics {
+        package_id: package_id,
+        version: version,
+        downloads: 0,
+        active_installs: installs,
+        revenue_micros: 0,
+        error_rate_bps: 0,
+        avg_latency_ms: 0,
+        dependents_count: 0,
+    })
+    workflow
 }
 
 /// test golden
@@ -140,15 +208,33 @@ circuit get_telemetry_dashboard(publisher_id: PublisherId, package_id: PackageId
     @rbac [publisher]
     @observe metrics: [telemetry_dashboard_views, package_id]
 {
+    let telemetry_key = sha3_256(concat(publisher_id, package_id))
+    let events = store_scan(package_analytics, telemetry_key)
+    let downloads = 0
+    let installs = 0
+    let revenue = 0
+    let error_sum = 0
+    let latency_sum = 0
+    let sample_count = 0
+    for evt in events {
+        downloads = downloads + evt.downloads
+        installs = installs + evt.active_installs
+        revenue = revenue + evt.revenue_micros
+        error_sum = error_sum + evt.error_rate_bps
+        latency_sum = latency_sum + evt.avg_latency_ms
+        sample_count = sample_count + 1
+    }
+    let avg_error = if sample_count > 0 { error_sum / sample_count } else { 0 }
+    let avg_latency = if sample_count > 0 { latency_sum / sample_count } else { 0 }
     PackageAnalytics {
         package_id: package_id,
-        version: bytes(32),
-        downloads: 0,
-        active_installs: 0,
-        revenue_micros: 0,
-        error_rate_bps: 0,
-        avg_latency_ms: 0,
-        dependents_count: 0,
+        version: sha3_256(concat(package_id, publisher_id)),
+        downloads: downloads,
+        active_installs: installs,
+        revenue_micros: revenue,
+        error_rate_bps: avg_error,
+        avg_latency_ms: avg_latency,
+        dependents_count: sample_count,
     }
 }
 
@@ -159,14 +245,30 @@ circuit get_dependency_graph(publisher_id: PublisherId, package_id: PackageId) -
     @rbac [publisher]
     @observe metrics: [dependency_graph_queries, package_id]
 {
+    let dep_key = sha3_256(concat(package_id, publisher_id))
+    let all_packages = store_scan(package_analytics, publisher_id)
+    let dependents = 0
+    let total_installs = 0
+    for pkg in all_packages {
+        let dep_hash = sha3_256(concat(pkg.package_id, package_id))
+        let is_dependent = store_get(package_analytics, dep_hash)
+        if is_dependent != nil {
+            dependents = dependents + 1
+            total_installs = total_installs + pkg.active_installs
+        }
+    }
+    let own_analytics = store_get(package_analytics, dep_key)
+    let version = if own_analytics != nil { own_analytics.version } else { sha3_256(package_id) }
+    let downloads = if own_analytics != nil { own_analytics.downloads } else { 0 }
+    let revenue = if own_analytics != nil { own_analytics.revenue_micros } else { 0 }
     PackageAnalytics {
         package_id: package_id,
-        version: bytes(32),
-        downloads: 0,
-        active_installs: 0,
-        revenue_micros: 0,
+        version: version,
+        downloads: downloads,
+        active_installs: total_installs,
+        revenue_micros: revenue,
         error_rate_bps: 0,
         avg_latency_ms: 0,
-        dependents_count: 0,
+        dependents_count: dependents,
     }
 }

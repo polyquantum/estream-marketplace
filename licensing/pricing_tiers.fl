@@ -89,8 +89,16 @@ circuit get_effective_price(tier: PricingTier, preference: CustomerTelemetryPref
     @precision C
     @observe metrics: [price_lookups, package_id, tier_type]
 {
-    let price = tier.share_price_micros
-    price
+    let now = current_time()
+    let tier_active = tier.is_active && now >= tier.effective_from && now < tier.effective_until
+    let pref_effective = preference.effective_from <= now
+    if tier_active && pref_effective && preference.telemetry_share {
+        tier.share_price_micros
+    } else if tier_active {
+        tier.private_price_micros
+    } else {
+        0
+    }
 }
 
 /// test golden
@@ -101,17 +109,32 @@ circuit change_pricing_tier(blinded_customer_id: BlindedCustomerId, package_id: 
     @attested true
 {
     let old_type = current_tier.tier_type
-    let old_price = current_tier.share_price_micros
-    let new_price = current_tier.private_price_micros
-    TierChangeRecord {
-        blinded_customer_id: blinded_customer_id,
-        package_id: package_id,
-        old_tier_type: old_type,
-        new_tier_type: 1,
-        old_price_micros: old_price,
-        new_price_micros: new_price,
-        effective_from: next_billing_period_start,
-        changed_at: current_time(),
+    let old_price = if old_type == 0 { current_tier.share_price_micros } else { current_tier.private_price_micros }
+    let new_type = if new_telemetry_share { 0 } else { 1 }
+    let new_price = if new_telemetry_share { current_tier.share_price_micros } else { current_tier.private_price_micros }
+    let actually_changed = old_type != new_type
+    if actually_changed {
+        TierChangeRecord {
+            blinded_customer_id: blinded_customer_id,
+            package_id: package_id,
+            old_tier_type: old_type,
+            new_tier_type: new_type,
+            old_price_micros: old_price,
+            new_price_micros: new_price,
+            effective_from: next_billing_period_start,
+            changed_at: current_time(),
+        }
+    } else {
+        TierChangeRecord {
+            blinded_customer_id: blinded_customer_id,
+            package_id: package_id,
+            old_tier_type: old_type,
+            new_tier_type: old_type,
+            old_price_micros: old_price,
+            new_price_micros: old_price,
+            effective_from: next_billing_period_start,
+            changed_at: current_time(),
+        }
     }
 }
 
@@ -123,7 +146,16 @@ circuit validate_telemetry_schema(schema: TelemetrySchema) -> bool
 {
     let no_pii = schema.contains_pii == false
     let has_anonymization = schema.anonymization_method > 0
-    no_pii
+    let valid_method = schema.anonymization_method <= 3
+    let has_fields = schema.field_count > 0
+    let schema_integrity = sha3_256(schema.schema_hash) != bytes(32)
+    if no_pii && has_anonymization && valid_method && has_fields && schema_integrity {
+        true
+    } else if no_pii == false && has_anonymization && valid_method {
+        false
+    } else {
+        false
+    }
 }
 
 /// test golden
@@ -132,6 +164,9 @@ circuit compute_tier_savings(tier: PricingTier) -> u64
     @precision C
     @observe metrics: [savings_calculations, package_id]
 {
-    let savings = tier.private_price_micros - tier.share_price_micros
-    savings
+    if tier.is_active && tier.private_price_micros > tier.share_price_micros {
+        tier.private_price_micros - tier.share_price_micros
+    } else {
+        0
+    }
 }

@@ -64,16 +64,47 @@ circuit get_marketplace_health(period: u64) -> MarketplaceHealth
     @rbac [marketplace_admin]
     @observe metrics: [health_dashboard_views]
 {
-    MarketplaceHealth {
-        total_packages: 0,
-        total_publishers: 0,
-        total_customers: 0,
-        total_revenue_micros: 0,
-        active_licenses: 0,
-        attestation_failure_count: 0,
-        dispute_count: 0,
+    let health_key = sha3_256(concat("marketplace_health", period))
+    let cached = store_get(marketplace_health, health_key)
+    if cached != nil {
+        return cached
+    }
+    let alerts = store_scan(compliance_alerts, period)
+    let attest_failures = 0
+    let disputes = 0
+    let packages = 0
+    let publishers = 0
+    let customers = 0
+    let revenue = 0
+    let licenses = 0
+    for alert in alerts {
+        if alert.alert_type == 1 {
+            attest_failures = attest_failures + 1
+        }
+        if alert.alert_type == 2 {
+            disputes = disputes + 1
+        }
+    }
+    let registry = store_scan(marketplace_health, bytes(32))
+    for entry in registry {
+        packages = packages + entry.total_packages
+        publishers = publishers + entry.total_publishers
+        customers = customers + entry.total_customers
+        revenue = revenue + entry.total_revenue_micros
+        licenses = licenses + entry.active_licenses
+    }
+    let health = MarketplaceHealth {
+        total_packages: packages,
+        total_publishers: publishers,
+        total_customers: customers,
+        total_revenue_micros: revenue,
+        active_licenses: licenses,
+        attestation_failure_count: attest_failures,
+        dispute_count: disputes,
         period: period,
     }
+    store_put(marketplace_health, health_key, health)
+    health
 }
 
 /// test golden
@@ -83,8 +114,14 @@ circuit get_compliance_dashboard(period_start: u64, period_end: u64) -> list<Com
     @rbac [marketplace_admin]
     @observe metrics: [compliance_dashboard_views]
 {
-    let empty = list<ComplianceAlert>
-    empty
+    let all_alerts = store_scan(compliance_alerts, period_start, period_end)
+    let result = list<ComplianceAlert>
+    for alert in all_alerts {
+        if alert.detected_at >= period_start && alert.detected_at <= period_end {
+            append(result, alert)
+        }
+    }
+    result
 }
 
 /// test golden
@@ -94,12 +131,28 @@ circuit get_flir_version_matrix(flir_version: bytes(32)) -> FlirCompatMatrix
     @rbac [marketplace_admin]
     @observe metrics: [flir_matrix_queries, flir_version]
 {
+    let version_key = sha3_256(flir_version)
+    let all_packages = store_scan(marketplace_health, version_key)
+    let compatible = 0
+    let incompatible = 0
+    let deprecated_ops = 0
+    for pkg in all_packages {
+        let compat_hash = sha3_256(concat(flir_version, pkg.total_packages))
+        let compat_check = store_get(marketplace_health, compat_hash)
+        if compat_check != nil {
+            compatible = compatible + 1
+        } else {
+            incompatible = incompatible + 1
+            deprecated_ops = deprecated_ops + 1
+        }
+    }
+    let needs_migration = incompatible > 0 || deprecated_ops > 0
     FlirCompatMatrix {
         flir_version: flir_version,
-        compatible_packages: 0,
-        incompatible_packages: 0,
-        deprecated_ops_used: 0,
-        migration_needed: false,
+        compatible_packages: compatible,
+        incompatible_packages: incompatible,
+        deprecated_ops_used: deprecated_ops,
+        migration_needed: needs_migration,
     }
 }
 
@@ -110,8 +163,15 @@ circuit get_deprecation_tracker(flir_version: bytes(32)) -> list<FlirCompatMatri
     @rbac [marketplace_admin]
     @observe metrics: [deprecation_tracker_views]
 {
-    let empty = list<FlirCompatMatrix>
-    empty
+    let versions = store_scan(marketplace_health, sha3_256(flir_version))
+    let result = list<FlirCompatMatrix>
+    for entry in versions {
+        let matrix = get_flir_version_matrix(entry.flir_version)
+        if matrix.incompatible_packages > 0 || matrix.deprecated_ops_used > 0 {
+            append(result, matrix)
+        }
+    }
+    result
 }
 
 /// test golden
@@ -141,13 +201,23 @@ circuit resolve_compliance_alert(alert_id: AlertId) -> ComplianceAlert
     @attested true
     @observe metrics: [alerts_resolved, alert_id]
 {
-    ComplianceAlert {
-        alert_id: alert_id,
-        alert_type: 0,
-        severity: 0,
-        package_id: bytes(32),
-        description: bytes(512),
-        detected_at: 0,
+    let existing = store_get(compliance_alerts, alert_id)
+    if existing == nil {
+        fail("compliance alert not found")
+    }
+    if existing.resolved {
+        fail("alert already resolved")
+    }
+    let resolved_alert = ComplianceAlert {
+        alert_id: existing.alert_id,
+        alert_type: existing.alert_type,
+        severity: existing.severity,
+        package_id: existing.package_id,
+        description: existing.description,
+        detected_at: existing.detected_at,
         resolved: true,
     }
+    store_put(compliance_alerts, alert_id, resolved_alert)
+    emit(compliance_alerts, resolved_alert)
+    resolved_alert
 }

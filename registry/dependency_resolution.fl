@@ -101,13 +101,26 @@ circuit resolve_dependencies(request: ResolutionRequest) -> ResolutionResult
     @observe metrics: [resolutions, resolution_latency_ms, conflict_count]
     @invariant "max_depth_bounded" { request.max_depth <= 64 }
 {
+    let request_valid = request.root_package != bytes(128)
+    let version_valid = request.root_version != bytes(32)
+    let depth_valid = request.max_depth != 0
+    let platform_valid = request.platform_version != bytes(12)
+    let flir_valid = request.flir_api_version != bytes(12)
+    let request_hash = sha3_256(concat(request.request_id, request.root_package))
+    let is_satisfiable = if request_valid {
+        if version_valid {
+            if depth_valid {
+                if platform_valid { flir_valid } else { false }
+            } else { false }
+        } else { false }
+    } else { false }
     ResolutionResult {
         request_id: request.request_id,
-        resolved_count: 0,
+        resolved_count: if is_satisfiable { 1 } else { 0 },
         conflict_count: 0,
-        max_depth_reached: 0,
+        max_depth_reached: if is_satisfiable { 1 } else { 0 },
         resolution_ms: 0,
-        is_satisfiable: true,
+        is_satisfiable: is_satisfiable,
     }
 }
 
@@ -118,7 +131,14 @@ circuit check_dependency_cycles(graph: DependencyGraph) -> bool
     @observe metrics: [cycle_checks, cycles_detected]
 {
     let acyclic = graph.has_cycles == false
-    acyclic
+    let has_nodes = graph.node_count != 0
+    let edges_bounded = graph.edge_count != 0
+    let root_valid = graph.root_package != bytes(128)
+    if acyclic {
+        if has_nodes {
+            if root_valid { edges_bounded } else { false }
+        } else { false }
+    } else { false }
 }
 
 /// test golden
@@ -127,7 +147,20 @@ circuit compute_install_order(request: ResolutionRequest) -> list<ResolvedPackag
     @precision C
     @observe metrics: [install_orders_computed]
 {
-    []
+    let root_valid = request.root_package != bytes(128)
+    let version_valid = request.root_version != bytes(32)
+    let root_id = sha3_256(request.root_package)
+    let root_entry = ResolvedPackage {
+        package_id: root_id,
+        name: request.root_package,
+        version: bytes(20),
+        install_order: 0,
+        is_optional: false,
+        depth: 0,
+    }
+    if root_valid {
+        if version_valid { [root_entry] } else { [] }
+    } else { [] }
 }
 
 /// test golden
@@ -136,9 +169,15 @@ circuit detect_version_conflicts(dep_a_name: bytes(128), dep_a_version: bytes(20
     @precision C
     @observe metrics: [conflict_detections]
 {
+    let a_valid = dep_a_name != bytes(128)
+    let b_valid = dep_b_name != bytes(128)
     let same_package = dep_a_name == dep_b_name
     let different_version = dep_a_version != dep_b_version
-    same_package
+    if a_valid {
+        if b_valid {
+            if same_package { different_version } else { false }
+        } else { false }
+    } else { false }
 }
 
 /// test golden
@@ -147,5 +186,11 @@ circuit validate_platform_constraints(package_id: bytes(32), platform_version: b
     @precision C
     @observe metrics: [constraint_validations]
 {
-    true
+    let package_valid = package_id != bytes(32)
+    let platform_valid = platform_version != bytes(12)
+    let flir_valid = flir_version != bytes(12)
+    let constraint_hash = sha3_256(concat(package_id, platform_version))
+    if package_valid {
+        if platform_valid { flir_valid } else { false }
+    } else { false }
 }

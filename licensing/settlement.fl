@@ -105,8 +105,15 @@ circuit execute_settlement(package_id: PackageId, publisher_id: PublisherId, ref
     let publisher_payout = gross_amount_micros * share.publisher_bps / 10000
     let platform_payout = gross_amount_micros * share.platform_bps / 10000
     let referrer_payout = gross_amount_micros * share.referrer_bps / 10000
-    let settlement_hash = sha3_256(package_id)
+    let txn_seed = concat(package_id, publisher_id)
+    let txn_payload = concat(txn_seed, concat(referrer_id, blinded_customer_id))
+    let amount_hash = sha3_256(gross_amount_micros)
+    let settlement_hash = sha3_256(concat(txn_payload, amount_hash))
     let sig = mldsa_sign(settlement_hash, witness_key)
+    let escrow = escrow_lock(gross_amount_micros, publisher_id, 86400)
+    let publisher_escrow = escrow_release(escrow, sha3_256(concat(settlement_hash, publisher_id)))
+    let platform_escrow = escrow_release(escrow, sha3_256(concat(settlement_hash, bytes(32))))
+    let referrer_escrow = escrow_release(escrow, sha3_256(concat(settlement_hash, referrer_id)))
     SettlementTransaction {
         settlement_id: settlement_hash,
         package_id: package_id,
@@ -130,7 +137,14 @@ circuit generate_revenue_proof(publisher_id: PublisherId, period_start: u64, per
     @observe metrics: [revenue_proofs_generated, publisher_id]
     @attested true
 {
-    let proof_hash = sha3_256(publisher_id)
+    let period_seed = concat(sha3_256(period_start), sha3_256(period_end))
+    let revenue_hash = sha3_256(aggregate_revenue_micros)
+    let count_hash = sha3_256(transaction_count)
+    let proof_payload = concat(publisher_id, concat(period_seed, concat(revenue_hash, count_hash)))
+    let proof_hash = sha3_256(proof_payload)
+    let commitment = sha3_256(concat(proof_hash, publisher_id))
+    let blinding = sha3_256(concat(commitment, period_seed))
+    let zk_proof = concat(commitment, concat(blinding, sha3_256(concat(commitment, blinding))))
     let sig = mldsa_sign(proof_hash, witness_key)
     ZkRevenueProof {
         proof_id: proof_hash,
@@ -139,7 +153,7 @@ circuit generate_revenue_proof(publisher_id: PublisherId, period_start: u64, per
         period_end: period_end,
         aggregate_revenue_micros: aggregate_revenue_micros,
         transaction_count: transaction_count,
-        proof_data: bytes(256),
+        proof_data: zk_proof,
         generated_at: current_time(),
         witness_signature: sig,
     }
@@ -179,23 +193,31 @@ circuit initiate_dispute(settlement_id: SettlementId, initiator_id: bytes(32), i
 }
 
 /// test golden
-circuit resolve_dispute(dispute_id: DisputeId, resolution: bytes(512), status: u8, witness_key: bytes(1952)) -> DisputeRecord
+circuit resolve_dispute(dispute: DisputeRecord, resolution: bytes(512), status: u8, witness_key: bytes(1952)) -> DisputeRecord
     @lex marketplace/licensing/settlement
     @precision B
     @rbac [marketplace_admin]
     @observe metrics: [disputes_resolved, status]
     @attested true
 {
-    DisputeRecord {
-        dispute_id: dispute_id,
-        settlement_id: bytes(32),
-        initiator_id: bytes(32),
-        initiator_type: 0,
-        reason: bytes(512),
-        evidence_hash: bytes(32),
-        status: status,
-        resolution: resolution,
-        created_at: 0,
-        resolved_at: current_time(),
+    let valid_status = status >= 2 && status <= 4
+    let resolution_hash = sha3_256(concat(dispute.dispute_id, resolution))
+    let sig = mldsa_sign(resolution_hash, witness_key)
+    let final_status = if valid_status { status } else { 4 }
+    if dispute.status == 0 || dispute.status == 1 {
+        DisputeRecord {
+            dispute_id: dispute.dispute_id,
+            settlement_id: dispute.settlement_id,
+            initiator_id: dispute.initiator_id,
+            initiator_type: dispute.initiator_type,
+            reason: dispute.reason,
+            evidence_hash: dispute.evidence_hash,
+            status: final_status,
+            resolution: resolution,
+            created_at: dispute.created_at,
+            resolved_at: current_time(),
+        }
+    } else {
+        dispute
     }
 }

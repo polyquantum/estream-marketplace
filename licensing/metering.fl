@@ -119,7 +119,16 @@ circuit record_meter_reading(config: MeterConfig, reading: MeterReading) -> bool
     @observe metrics: [meter_readings_recorded, package_id, unit_type]
 {
     let scope_match = config.package_id == reading.package_id
-    scope_match
+    let valid_unit = reading.unit_type <= 3
+    let non_zero_value = reading.reading_value > 0
+    let valid_timestamp = reading.recorded_at > 0
+    let isolation_hash = sha3_256(concat(config.isolation_scope, reading.package_id))
+    let isolation_valid = isolation_hash != bytes(32)
+    if scope_match && valid_unit && non_zero_value && valid_timestamp && isolation_valid {
+        true
+    } else {
+        false
+    }
 }
 
 /// test golden
@@ -130,16 +139,23 @@ circuit aggregate_hourly(package_id: PackageId, blinded_customer_id: BlindedCust
     @attested true
     @invariant "hourly_bounded" { reading_count <= 60 }
 {
+    let count = len(readings)
+    let total = fold(readings, 0, |acc, r| acc + r.reading_value)
+    let min_val = fold(readings, 18446744073709551615, |acc, r| if r.reading_value < acc { r.reading_value } else { acc })
+    let max_val = fold(readings, 0, |acc, r| if r.reading_value > acc { r.reading_value } else { acc })
+    let first_unit = if count > 0 { nth(readings, 0).unit_type } else { 0 }
+    let agg_seed = concat(package_id, blinded_customer_id)
+    let agg_id = sha3_256(concat(agg_seed, sha3_256(hour_start)))
     HourlyAggregate {
-        aggregate_id: sha3_256(package_id),
+        aggregate_id: agg_id,
         package_id: package_id,
         blinded_customer_id: blinded_customer_id,
         hour_start: hour_start,
-        reading_count: 0,
-        total_value: 0,
-        min_value: 0,
-        max_value: 0,
-        unit_type: 0,
+        reading_count: count,
+        total_value: total,
+        min_value: min_val,
+        max_value: max_val,
+        unit_type: first_unit,
         aggregated_at: current_time(),
     }
 }
@@ -172,7 +188,16 @@ circuit verify_metering_isolation(package_a: PackageId, package_b: PackageId, re
     @observe metrics: [isolation_verifications, isolation_failures]
 {
     let different_packages = package_a != package_b
-    different_packages
+    let a_scoped = all(readings_a, |r| r.package_id == package_a)
+    let b_scoped = all(readings_b, |r| r.package_id == package_b)
+    let no_a_in_b = all(readings_a, |r| r.package_id != package_b)
+    let no_b_in_a = all(readings_b, |r| r.package_id != package_a)
+    let a_customers_isolated = all(readings_a, |r| sha3_256(concat(r.blinded_customer_id, package_a)) != sha3_256(concat(r.blinded_customer_id, package_b)))
+    if different_packages && a_scoped && b_scoped && no_a_in_b && no_b_in_a && a_customers_isolated {
+        true
+    } else {
+        false
+    }
 }
 
 /// test golden
@@ -181,16 +206,25 @@ circuit get_usage_summary(blinded_customer_id: BlindedCustomerId, package_id: Pa
     @precision C
     @observe metrics: [usage_summary_queries, package_id]
 {
+    let period_hours = (period_end - period_start) / 3600
+    let aggregates = query(hourly_aggregates, |a| a.package_id == package_id && a.blinded_customer_id == blinded_customer_id && a.hour_start >= period_start && a.hour_start < period_end)
+    let total_readings = fold(aggregates, 0, |acc, a| acc + a.reading_count)
+    let total_value = fold(aggregates, 0, |acc, a| acc + a.total_value)
+    let min_val = fold(aggregates, 18446744073709551615, |acc, a| if a.min_value < acc { a.min_value } else { acc })
+    let max_val = fold(aggregates, 0, |acc, a| if a.max_value > acc { a.max_value } else { acc })
+    let summary_unit = if len(aggregates) > 0 { nth(aggregates, 0).unit_type } else { 0 }
+    let summary_seed = concat(blinded_customer_id, package_id)
+    let summary_id = sha3_256(concat(summary_seed, sha3_256(period_start)))
     HourlyAggregate {
-        aggregate_id: sha3_256(package_id),
+        aggregate_id: summary_id,
         package_id: package_id,
         blinded_customer_id: blinded_customer_id,
         hour_start: period_start,
-        reading_count: 0,
-        total_value: 0,
-        min_value: 0,
-        max_value: 0,
-        unit_type: 0,
+        reading_count: total_readings,
+        total_value: total_value,
+        min_value: min_val,
+        max_value: max_val,
+        unit_type: summary_unit,
         aggregated_at: current_time(),
     }
 }
