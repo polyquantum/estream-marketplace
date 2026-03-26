@@ -2,7 +2,7 @@
 
 This repository contains **marketplace components** for the eStream platform — SmartCircuits, domain packages, and specifications that are distributed separately from the core platform.
 
-**Platform version**: v0.12.0
+**Platform version**: v0.22.0
 
 ## Directory Layout
 
@@ -19,8 +19,7 @@ This repository contains **marketplace components** for the eStream platform —
 - **`solutions/`** — Solution bundle circuits: manifest, lex boundary nesting, revenue waterfall, customer onboarding.
 - **`console/`** — Console circuits: publisher/customer/admin dashboards, developer tooling.
 - **`pricing/`** — Provider-level custom pricing circuits.
-- **`streams/`** — Graph-based marketplace registry model (marketplace_streams.fl).
-- **`runtime/`** — Rust runtime crates that implement marketplace components as native executables.
+- **`streams/`** — Graph-based marketplace registry model and Platform Graph inventory (marketplace_streams.fl, marketplace_inventory.fl).
 - **`specs/`** — Cross-cutting marketplace specifications and standards.
 - **`docs/guides/`** — Publisher, customer, and developer guides.
 
@@ -34,14 +33,20 @@ See `estream/docs/PLATFORM_MARKETPLACE_BOUNDARY.md` for the canonical boundary d
 
 ## Conventions
 
-- `.fl` is the canonical format for all circuits. FastLang v0.12.0 syntax:
-  - Annotations use `@` prefix: `@lex`, `@precision`, `@attested`, `@observe`, `@serialize`, etc.
-  - `attested` replaces `povc` for proof-of-circuit attestation
-  - `@observe true` replaces `streamsight true` for observability
-  - `@serialize` replaces `esz_emit` for verification artifact output
-  - `@golden_test` replaces `kat_vector` for known-answer test vectors
-  - Lex paths omit the `esn/` prefix (e.g., `@lex fin/pci/org/estream/trading`)
-- All `estream-component.toml` manifests specify `platform = ">= 0.12.0"`
+- `.fl` is the canonical format for all circuits. FastLang v0.22.0 syntax:
+  - **Zero hand-written Rust**: All application logic is in FL. Only `extern "rust"` for I/O boundaries
+  - **Stratum / Cortex / AI triad**: Data model (store kv/graph/series) + Rule engine (cortex) + Intelligence (AI)
+  - Annotations use `@` prefix: `@status production`, `@precision`, `@attested true`, etc.
+  - `observe metrics: [metric_list]` for explicit observability instrumentation
+  - `schema` blocks with `sign { algorithm mldsa87 }` and `attest { proof_system groth16 }` for signed data
+  - `state_machine` with `persistence wal`, `ai_anomaly_detection true`, and formal verification (`verify deadlock_free`, `verify reachable_all`, `verify terminal_convergence`)
+  - `store kv` / `store graph` / `store series` for declarative persistent storage
+  - `cortex` blocks for AI governance (`expose`, `infer on_write`, `on_anomaly alert`)
+  - `cloud` circuits for multi-provider deployment with tier progression
+  - Lex paths omit the `esn/` prefix (e.g., `lex fin/pci/org/estream/trading`)
+  - Platform crypto is exclusively PRIME: SHA-3 (KECCAK), ML-DSA-87, ML-KEM-1024
+- All `estream-component.toml` manifests specify `platform_minimum = "0.22.0"`
+- FLIR (internal IR) replaces all former ESCIR references
 - Specs co-locate with their domain when domain-specific, or live in top-level `specs/` when cross-cutting
 
 ## Relationship to estream / estream-io
@@ -51,7 +56,7 @@ This repo was carved out per `polyquantum/estream#40`. The main repos retain:
 - Marketplace API types (generated from `.fl`)
 - Platform circuits (consensus, governance, crypto, etc.)
 
-## Developer Language Story (v0.12.0)
+## Developer Language Story (v0.22.0)
 
 eStream supports **7 languages** at full parity: Rust (native), Python (PyO3), TypeScript (WASM), Go (CGo), C++ (FFI), Swift (C bridging), and FastLang (native).
 
@@ -59,7 +64,7 @@ eStream supports **7 languages** at full parity: Rust (native), Python (PyO3), T
 
 - Lead with **"7 supported languages"** — developers choose the language they already know
 - Position FastLang as **"the shortest path to silicon"** — the easiest way to design for eStream hardware
-- **FLIR (eStream Circuit Intermediate Representation) is strictly internal** — never mention it in external-facing materials, docs, pitches, or marketing. It is an implementation detail of the compiler
+- **FLIR (FastLang Intermediate Representation) is strictly internal** — never mention it in external-facing materials, docs, pitches, or marketing. It is an implementation detail of the compiler
 - Swift (not Solidity) is the 7th language
 
 ### Internal Development

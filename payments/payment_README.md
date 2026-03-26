@@ -2,7 +2,7 @@
 
 FLIR circuit definitions for offline payment protocol.
 
-**Issue**: [#351](https://github.com/toddrooke/estream-io/issues/351)  
+**Issue**: [#351](https://github.com/polyquantum/estream-marketplace/issues/351)  
 **Spec**: [SPARK_OFFLINE_PAYMENT_SPEC.md](../../specs/protocol/SPARK_OFFLINE_PAYMENT_SPEC.md)  
 **Schema**: [offline-payment.data.yaml](../../schemas/offline-payment.data.yaml)
 

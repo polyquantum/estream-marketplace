@@ -94,7 +94,7 @@ target = ["cpu"]
 # device_family = ["xcvu9p"]
 # resource_estimate = { luts = 50000, brams = 100, dsps = 0 }
 
-# Circuit lifecycle management (v0.9.1)
+# Circuit lifecycle management (v0.22.0)
 [component.lifecycle]
 # Component status: active | deprecated | sunset
 status = "active"

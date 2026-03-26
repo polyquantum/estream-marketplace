@@ -520,7 +520,7 @@ resource_estimate = { luts = 50000, brams = 100, dsps = 0 }
 
 ## 11. `[lifecycle]` Section
 
-Component lifecycle management (v0.9.1).
+Component lifecycle management (v0.22.0).
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|

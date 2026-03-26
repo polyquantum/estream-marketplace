@@ -1,7 +1,7 @@
 # Marketplace Transaction Circuit Template
-# SmartCircuit v0.9.1
+# SmartCircuit v0.22.0
 
-version: "0.9.1"
+version: "0.22.0"
 name: "{{CIRCUIT_NAME}}_marketplace"
 version: "1.0.0"
 

@@ -2,7 +2,7 @@
 
 Zero-knowledge proof circuits for the Cross-Border Payment Protocol (mBridge compatible).
 
-**Issue**: [#348](https://github.com/toddrooke/estream-io/issues/348)  
+**Issue**: [#348](https://github.com/polyquantum/estream-marketplace/issues/348)  
 **Spec**: [CROSS_BORDER_MBRIDGE_SPEC.md](../../specs/protocol/CROSS_BORDER_MBRIDGE_SPEC.md)
 
 ## Circuits

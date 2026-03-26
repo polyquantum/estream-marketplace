@@ -2,9 +2,9 @@
 
 > Marketplace reference implementation: FPGA + FLIR + Rust
 
-**Note:** As of v0.12.0, the canonical ISO 20022 message circuits (pacs008, pacs002, camt052, camt053, types) live in the `polyquantum.payments` package. This package provides the FPGA-accelerated parser implementation and FLIR codegen reference that builds on those message definitions.
+**Note:** As of v0.22.0, the canonical ISO 20022 message circuits (pacs008, pacs002, camt052, camt053, types) live in the `polyquantum.payments` package. This package provides the FPGA-accelerated parser implementation and FLIR codegen reference that builds on those message definitions.
 
-**Dependency:** `polyquantum.payments >= 0.12.0`
+**Dependency:** `polyquantum.payments >= 0.22.0`
 
 ## Overview
 

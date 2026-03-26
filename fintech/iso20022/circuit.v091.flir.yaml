@@ -1,5 +1,5 @@
 # =============================================================================
-# ISO 20022 Parser Circuit (SmartCircuit v0.9.1)
+# ISO 20022 Parser Circuit (SmartCircuit v0.22.0)
 # =============================================================================
 # Streaming ISO 20022 XML/JSON parser that converts financial messages to
 # eStream Format (ESF) with privacy tier annotations.
@@ -11,13 +11,13 @@
 #
 # Related:
 #   - FPGA: fpga/rtl/iso20022/*.v
-#   - Rust: crates/estream-iso20022/
+#   - FL: fintech/iso20022/circuits/
 #   - Spec: specs/protocol/ISO20022_FPGA_PARSER_SPEC.md
 # =============================================================================
 
 name: iso20022-parser
 version: 1
-format: v0.9.1
+format: v0.22.0
 description: |
   Hardware-accelerated ISO 20022 financial message parser with support for
   pacs.008 (Credit Transfer), pacs.002 (Status Report), camt.053 (Statement),
@@ -56,7 +56,7 @@ types:
     kind: enum
     values: [xml, json]
   
-  # Privacy tiers (matches PrivacyTier enum in Rust crate)
+  # Privacy tiers (matches PrivacyTier enum in FL circuit)
   PrivacyTier:
     kind: enum
     values: [public, restricted, private, stealth, encrypted]

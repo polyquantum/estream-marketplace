@@ -16,7 +16,7 @@ include(FetchContent)
 FetchContent_Declare(
   estream
   GIT_REPOSITORY https://github.com/polyquantum/estream-cpp.git
-  GIT_TAG v0.9.1
+  GIT_TAG v0.22.0
 )
 FetchContent_MakeAvailable(estream)
 target_link_libraries(my_target PRIVATE estream::marketplace)

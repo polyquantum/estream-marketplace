@@ -5,7 +5,7 @@
 **Status:** Draft  
 **Version:** 0.1.0  
 **Category:** IoT  
-**Target:** Component Marketplace v0.9.0
+**Target:** Component Marketplace v0.22.0
 
 ---
 

@@ -470,10 +470,10 @@ TypeScript never touches signing keys, session tokens, or signature verification
 
 ### 6.1 GitHub-Backed Registry
 
-The registry is a GitHub repository (`estream-io/registry`):
+The registry is a GitHub repository (`polyquantum/estream-marketplace-registry`):
 
 ```
-estream-io/registry/
+polyquantum/estream-marketplace-registry/
 ├── README.md
 ├── config.json
 ├── index/
@@ -510,7 +510,7 @@ estream-io/registry/
       "signature_pubkey_id": "estream-signing-key-01",
       "yanked": false,
       "estream_min_version": "0.8.0",
-      "archive_url": "https://github.com/estream-io/registry/releases/download/estream-wire-mqtt-1.0.0/package.tar.gz"
+      "archive_url": "https://github.com/polyquantum/estream-marketplace-registry/releases/download/estream-wire-mqtt-1.0.0/package.tar.gz"
     }
   ],
   "latest": "1.0.0",
@@ -1199,7 +1199,7 @@ Show detailed information for a specific component.
 # $HOME/.estream/config.toml
 
 [registry]
-default = "estream-io/registry"
+default = "polyquantum/estream-marketplace-registry"
 
 [[registry.sources]]
 name = "enterprise"
@@ -1258,7 +1258,7 @@ default_key = "$HOME/.estream/keys/signing-key.pem"
     d. Compute Merkle root of file hashes (SHA3-256)
     e. Sign Merkle root with ML-DSA-87
     f. Emit to /marketplace/publish stream
-6.  Edge node creates PR against estream-io/registry
+6.  Edge node creates PR against polyquantum/estream-marketplace-registry
 7.  CI: signature, checksum, version, tests → all pass
 8.  Auto-merge (verified publisher) or manual review
 9.  Component appears on /marketplace/index stream
@@ -1322,7 +1322,7 @@ Future marketplace wire adapters:
 
 ---
 
-## 21. Circuit Lifecycle Management (v0.9.1)
+## 21. Circuit Lifecycle Management (v0.22.0)
 
 Every marketplace component follows a predictable lifecycle that gives consumers confidence in stability and migration paths.
 

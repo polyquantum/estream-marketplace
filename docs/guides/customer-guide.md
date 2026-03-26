@@ -3,7 +3,7 @@
 > How to discover, install, license, and manage eStream Marketplace packages.
 
 **Audience:** Developers and teams consuming marketplace packages
-**Prerequisites:** eStream CLI v0.9.1+, authenticated session
+**Prerequisites:** eStream CLI v0.22.0+, authenticated session
 
 ---
 

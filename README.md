@@ -35,9 +35,6 @@ estream-marketplace/
 │   └── specs/                Industrial gateway specifications
 ├── pricing/                  Provider-level custom pricing (FastLang)
 ├── streams/                  Graph-based registry model (FastLang)
-├── runtime/
-│   ├── iso20022/             ISO 20022 Rust runtime crate
-│   └── industrial/           Industrial gateway Rust runtime crate
 ├── specs/
 │   ├── ESTREAM_MARKETPLACE_SPEC.md   Canonical v2.0.0 spec
 │   ├── standards/
@@ -98,21 +95,6 @@ Publisher and customer guides, pricing strategy, solution builder guide. Formal 
 - **Lite** (free/Apache-2.0) — 10 devices, 256 registers
 - **Standard** ($100/mo) — 50 devices, serial/RTU, FPGA acceleration
 - **Premium** ($300/mo) — 200 devices, DNP3, OPC-UA, hot standby, PoVC attestation
-
-## Runtime Crates
-
-### estream-iso20022
-
-ISO 20022 financial messaging adapter. Converts between ISO 20022 XML/JSON and eStream wire format.
-
-### estream-industrial
-
-Industrial protocol gateway supporting Modbus TCP/RTU, OPC-UA, and StreamSight telemetry.
-
-```bash
-cd runtime/iso20022 && cargo build
-cd runtime/industrial && cargo build
-```
 
 ## Relationship to Main Repo
 

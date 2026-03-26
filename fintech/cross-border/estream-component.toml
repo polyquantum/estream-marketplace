@@ -21,7 +21,7 @@ pricing = "free"
 visibility = "open"
 
 [component.estream]
-platform = ">= 0.12.0"
+platform = ">= 0.22.0"
 
 [component.schemas]
 provides = ["CrossBorderIntent", "SettlementProof", "FxQuote"]

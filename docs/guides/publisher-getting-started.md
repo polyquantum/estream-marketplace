@@ -3,7 +3,7 @@
 > End-to-end walkthrough for publishing your first domain package to the eStream Marketplace.
 
 **Audience:** Component publishers (third-party and first-party)
-**Prerequisites:** eStream CLI v0.9.1+, PRIME identity, FastLang familiarity
+**Prerequisites:** eStream CLI v0.22.0+, PRIME identity, FastLang familiarity
 
 ---
 
@@ -14,7 +14,7 @@
 ```bash
 curl -fsSL https://install.estream.io | sh
 estream --version
-# estream 0.9.1
+# estream 0.22.0
 ```
 
 Verify marketplace subcommand availability:
@@ -52,9 +52,8 @@ Ensure your workspace has:
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| eStream CLI | >= 0.9.1 | Compilation, testing, publishing |
+| eStream CLI | >= 0.22.0 | Compilation, testing, publishing |
 | FastLang | Bundled with CLI | Circuit authoring |
-| Rust toolchain | >= 1.75 | Runtime crates (if hybrid) |
 
 ---
 
@@ -164,7 +163,7 @@ pricing = "usage-based"
 visibility = "compiled"
 
 [component.estream]
-min_version = "0.9.1"
+min_version = "0.22.0"
 
 [component.dependencies]
 data-trading = "^1.0.0"
@@ -369,7 +368,7 @@ Publishing @my-org/order-validator v1.0.0...
   Phase 5: Signing with ML-DSA-87...       ✓
   Phase 6: Submitting to registry...       ✓
 
-  PR created: https://github.com/estream-io/registry/pull/42
+  PR created: https://github.com/polyquantum/estream-marketplace-registry/pull/42
   Status: Awaiting CI verification
 ```
 
