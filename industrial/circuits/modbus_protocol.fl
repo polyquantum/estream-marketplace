@@ -1,0 +1,476 @@
+/// MODBUS TCP Protocol Circuit
+/// Ports modbus.rs to pure FastLang — MBAP framing, read/write ops, exception handling
+/// TCP socket I/O is the only extern "rust" boundary
+
+use industrial_types::*
+use industrial_config::DeviceConfig
+use industrial_error::*
+
+// =============================================================================
+// Protocol Types
+// =============================================================================
+
+type MbapHeader = struct {
+    transaction_id: u16,
+    protocol_id: u16,
+    length: u16,
+    unit_id: u8,
+}
+
+type ModbusReadRequest = struct {
+    request_id: u32,
+    register_type: RegisterType,
+    address: u16,
+    quantity: u16,
+}
+
+type ModbusReadResponse = struct {
+    request_id: u32,
+    transaction_id: u16,
+    success: bool,
+    values: list<u16>,
+    exception_code: u8,
+    latency_us: u32,
+}
+
+type ModbusWriteRequest = struct {
+    request_id: u32,
+    register_type: RegisterType,
+    address: u16,
+    values: list<u16>,
+}
+
+type ModbusEvent = tagged struct {
+    tag: u8,
+    device_id: bytes(32),
+    transaction_id: u16,
+    function_code: u8,
+    exception_code: u8,
+    address: u16,
+    quantity: u16,
+    success: bool,
+    latency_us: u32,
+    timestamp_ns: u64,
+}
+
+// Tag values: 0=Request, 1=Response, 2=Exception
+circuit modbus_request_event(device_id: bytes(32), tid: u16, fc: u8, addr: u16, qty: u16, ts: u64) -> ModbusEvent
+    @status production
+    lex industrial/modbus/event_request
+    @precision A
+{
+    ModbusEvent { tag: 0, device_id: device_id, transaction_id: tid, function_code: fc, address: addr, quantity: qty, timestamp_ns: ts, .. }
+}
+
+circuit modbus_response_event(device_id: bytes(32), tid: u16, ok: bool, lat: u32, ts: u64) -> ModbusEvent
+    @status production
+    lex industrial/modbus/event_response
+    @precision A
+{
+    ModbusEvent { tag: 1, device_id: device_id, transaction_id: tid, success: ok, latency_us: lat, timestamp_ns: ts, .. }
+}
+
+circuit modbus_exception_event(device_id: bytes(32), tid: u16, fc: u8, exc: u8, ts: u64) -> ModbusEvent
+    @status production
+    lex industrial/modbus/event_exception
+    @precision A
+{
+    ModbusEvent { tag: 2, device_id: device_id, transaction_id: tid, function_code: fc, exception_code: exc, timestamp_ns: ts, .. }
+}
+
+// =============================================================================
+// Transaction ID Management
+// =============================================================================
+
+store kv transaction_counter {
+    key: bytes(32),
+    value: u16,
+    @ttl none,
+}
+
+circuit next_transaction_id(device_id: bytes(32)) -> u16
+    @status production
+    lex industrial/modbus/next_tid
+    @precision A
+    @attested true
+{
+    let current = transaction_counter.get(device_id) ?? 0;
+    let next = if current == 0xFFFF { 1 } else { current + 1 };
+    transaction_counter.put(device_id, next);
+    next
+}
+
+// =============================================================================
+// MBAP Header Build / Parse
+// =============================================================================
+
+circuit build_mbap(transaction_id: u16, unit_id: u8, pdu_length: u16) -> bytes(7)
+    @status production
+    lex industrial/modbus/build_mbap
+    @precision A
+{
+    let length = pdu_length + 1;
+    bytes [
+        (transaction_id >> 8) as u8,
+        (transaction_id & 0xFF) as u8,
+        0x00,
+        0x00,
+        (length >> 8) as u8,
+        (length & 0xFF) as u8,
+        unit_id,
+    ]
+}
+
+type ParsedMbap = struct {
+    header: MbapHeader,
+    pdu: bytes(256),
+    pdu_length: u16,
+    valid: bool,
+    error: IndustrialError,
+}
+
+circuit parse_mbap(data: bytes(512), data_length: u16) -> ParsedMbap
+    @status production
+    lex industrial/modbus/parse_mbap
+    @precision A
+{
+    if data_length < 8 {
+        return ParsedMbap {
+            valid: false,
+            error: invalid_response("Response too short"),
+            ..
+        };
+    }
+
+    let tid = ((data[0] as u16) << 8) | (data[1] as u16);
+    let protocol_id = ((data[2] as u16) << 8) | (data[3] as u16);
+    let length = ((data[4] as u16) << 8) | (data[5] as u16);
+    let uid = data[6];
+
+    if protocol_id != 0 {
+        return ParsedMbap {
+            valid: false,
+            error: invalid_response("Invalid protocol ID"),
+            ..
+        };
+    }
+
+    ParsedMbap {
+        header: MbapHeader {
+            transaction_id: tid,
+            protocol_id: protocol_id,
+            length: length,
+            unit_id: uid,
+        },
+        pdu: data[7..],
+        pdu_length: length - 1,
+        valid: true,
+        error: IndustrialError { code: 0, .. },
+    }
+}
+
+// =============================================================================
+// Read Frame Construction
+// =============================================================================
+
+circuit build_read_frame(device_id: bytes(32), unit_id: u8, req: ModbusReadRequest) -> bytes(12)
+    @status production
+    lex industrial/modbus/build_read_frame
+    @precision B
+    observe metrics: [device_id, register_type, address, quantity]
+{
+    let tid = next_transaction_id(device_id);
+    let fc = read_function_code(req.register_type);
+
+    let pdu = bytes [
+        fc,
+        (req.address >> 8) as u8,
+        (req.address & 0xFF) as u8,
+        (req.quantity >> 8) as u8,
+        (req.quantity & 0xFF) as u8,
+    ];
+
+    let mbap = build_mbap(tid, unit_id, 5);
+    concat(mbap, pdu)
+}
+
+// =============================================================================
+// Response Parsing
+// =============================================================================
+
+type ParsedReadResponse = struct {
+    response: ModbusReadResponse,
+    event: ModbusEvent,
+}
+
+circuit parse_read_response(
+    device_id: bytes(32),
+    expected_tid: u16,
+    request_id: u32,
+    raw_data: bytes(512),
+    raw_length: u16,
+    send_time_ns: u64,
+    recv_time_ns: u64
+) -> ParsedReadResponse
+    @status production
+    lex industrial/modbus/parse_read_response
+    @precision B
+    observe metrics: [device_id, expected_tid, request_id]
+{
+    let latency_us = ((recv_time_ns - send_time_ns) / 1000) as u32;
+    let parsed = parse_mbap(raw_data, raw_length);
+
+    if !parsed.valid {
+        return ParsedReadResponse {
+            response: ModbusReadResponse {
+                request_id: request_id,
+                transaction_id: 0,
+                success: false,
+                values: [],
+                exception_code: 0,
+                latency_us: latency_us,
+            },
+            event: modbus_response_event(device_id, 0, false, latency_us, recv_time_ns),
+        };
+    }
+
+    if parsed.header.transaction_id != expected_tid {
+        return ParsedReadResponse {
+            response: ModbusReadResponse {
+                request_id: request_id,
+                transaction_id: parsed.header.transaction_id,
+                success: false,
+                values: [],
+                exception_code: 0,
+                latency_us: latency_us,
+            },
+            event: modbus_response_event(device_id, parsed.header.transaction_id, false, latency_us, recv_time_ns),
+        };
+    }
+
+    let pdu = parsed.pdu;
+
+    if (pdu[0] & 0x80) != 0 {
+        let exc = pdu[1];
+        return ParsedReadResponse {
+            response: ModbusReadResponse {
+                request_id: request_id,
+                transaction_id: expected_tid,
+                success: false,
+                values: [],
+                exception_code: exc,
+                latency_us: latency_us,
+            },
+            event: modbus_exception_event(device_id, expected_tid, pdu[0] & 0x7F, exc, recv_time_ns),
+        };
+    }
+
+    let byte_count = pdu[1] as u16;
+    let value_count = byte_count / 2;
+    let values = list<u16>::new();
+    let i = 0;
+    while i < value_count {
+        let idx = 2 + i * 2;
+        let value = ((pdu[idx] as u16) << 8) | (pdu[idx + 1] as u16);
+        values.push(value);
+        i = i + 1;
+    }
+
+    ParsedReadResponse {
+        response: ModbusReadResponse {
+            request_id: request_id,
+            transaction_id: expected_tid,
+            success: true,
+            values: values,
+            exception_code: 0,
+            latency_us: latency_us,
+        },
+        event: modbus_response_event(device_id, expected_tid, true, latency_us, recv_time_ns),
+    }
+}
+
+// =============================================================================
+// Write Frame Construction
+// =============================================================================
+
+circuit build_write_single_frame(device_id: bytes(32), unit_id: u8, req: ModbusWriteRequest) -> bytes(12)
+    @status production
+    lex industrial/modbus/build_write_single
+    @precision B
+    observe metrics: [device_id, register_type, address]
+{
+    let tid = next_transaction_id(device_id);
+    let fc = match req.register_type {
+        RegisterType::Holding => 0x06,
+        RegisterType::Coil => 0x05,
+        _ => 0x00,
+    };
+
+    let value = if req.register_type == RegisterType::Coil {
+        if req.values[0] != 0 { 0xFF00 } else { 0x0000 }
+    } else {
+        req.values[0]
+    };
+
+    let pdu = bytes [
+        fc,
+        (req.address >> 8) as u8,
+        (req.address & 0xFF) as u8,
+        (value >> 8) as u8,
+        (value & 0xFF) as u8,
+    ];
+
+    let mbap = build_mbap(tid, unit_id, 5);
+    concat(mbap, pdu)
+}
+
+circuit build_write_multiple_frame(device_id: bytes(32), unit_id: u8, req: ModbusWriteRequest) -> bytes(256)
+    @status production
+    lex industrial/modbus/build_write_multiple
+    @precision B
+    observe metrics: [device_id, register_type, address]
+{
+    let tid = next_transaction_id(device_id);
+    let fc = match req.register_type {
+        RegisterType::Holding => 0x10,
+        RegisterType::Coil => 0x0F,
+        _ => 0x00,
+    };
+
+    let quantity = req.values.len() as u16;
+    let byte_count = (quantity * 2) as u8;
+
+    let pdu = bytes [fc];
+    pdu = concat(pdu, bytes [(req.address >> 8) as u8, (req.address & 0xFF) as u8]);
+    pdu = concat(pdu, bytes [(quantity >> 8) as u8, (quantity & 0xFF) as u8]);
+    pdu = concat(pdu, bytes [byte_count]);
+
+    let i = 0;
+    while i < req.values.len() {
+        let v = req.values[i];
+        pdu = concat(pdu, bytes [(v >> 8) as u8, (v & 0xFF) as u8]);
+        i = i + 1;
+    }
+
+    let mbap = build_mbap(tid, unit_id, pdu.len() as u16);
+    concat(mbap, pdu)
+}
+
+// =============================================================================
+// Connection Lifecycle State Machine
+// =============================================================================
+
+state_machine modbus_connection
+    @status production
+    lex industrial/modbus/connection_sm
+    wal true
+    observe anomaly: {
+        model cortex/industrial/connection_anomaly,
+        features: [state, consecutive_failures, last_latency_us],
+        threshold: 0.85,
+    }
+{
+    state Disconnected {
+        on Connect => Connecting,
+    }
+
+    state Connecting {
+        on Connected => Connected,
+        on Timeout => Reconnecting,
+        on Refused => Error,
+    }
+
+    state Connected {
+        on Disconnect => Disconnected,
+        on Reset => Reconnecting,
+        on Error => Error,
+    }
+
+    state Reconnecting {
+        on Connected => Connected,
+        on MaxRetries => Error,
+        on Timeout => Reconnecting,
+    }
+
+    state Error {
+        on Reset => Disconnected,
+        on Retry => Reconnecting,
+    }
+
+    verify deadlock_free;
+    verify reachable_all;
+}
+
+// =============================================================================
+// TCP Socket I/O — sole extern "rust" boundary
+// =============================================================================
+
+extern "rust" circuit tcp_send_receive(
+    ip_address: u32,
+    port: u16,
+    data: bytes(512),
+    data_length: u16,
+    timeout_ms: u32
+) -> bytes(512)
+    @status production
+    lex industrial/modbus/tcp_io
+    @precision A
+
+// =============================================================================
+// In-Flight Request Tracking
+// =============================================================================
+
+store kv inflight_requests {
+    key: u16,
+    value: struct { request_id: u32, send_time_ns: u64 },
+    @ttl 30s,
+}
+
+circuit track_inflight(tid: u16, request_id: u32, send_time_ns: u64) -> bool
+    @status production
+    lex industrial/modbus/track_inflight
+    @precision A
+{
+    inflight_requests.put(tid, { request_id: request_id, send_time_ns: send_time_ns });
+    true
+}
+
+circuit resolve_inflight(tid: u16) -> option<struct { request_id: u32, send_time_ns: u64 }>
+    @status production
+    lex industrial/modbus/resolve_inflight
+    @precision A
+{
+    let entry = inflight_requests.get(tid);
+    inflight_requests.delete(tid);
+    entry
+}
+
+// =============================================================================
+// Golden Tests
+// =============================================================================
+
+test golden mbap_build {
+    let mbap = build_mbap(1, 1, 5);
+    assert mbap[0] == 0x00;
+    assert mbap[1] == 0x01;
+    assert mbap[2] == 0x00;
+    assert mbap[3] == 0x00;
+    assert mbap[4] == 0x00;
+    assert mbap[5] == 0x06;
+    assert mbap[6] == 0x01;
+}
+
+test golden transaction_id_never_zero {
+    let device = 0x01 as bytes(32);
+    transaction_counter.put(device, 0xFFFF);
+    let tid = next_transaction_id(device);
+    assert tid == 1;
+}
+
+test golden exception_detection {
+    let data = bytes [0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x01, 0x83, 0x02];
+    let parsed = parse_mbap(data, 9);
+    assert parsed.valid == true;
+    assert (parsed.pdu[0] & 0x80) != 0;
+    assert parsed.pdu[1] == 0x02;
+}

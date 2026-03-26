@@ -23,15 +23,15 @@ estream-marketplace/
 ├── console/                  Console & Developer Experience (Epic 7)
 │   ├── publisher_console.fl      Publisher dashboard, analytics, deprecation
 │   ├── customer_console.fl       Installed packages, licenses, billing
-│   ├── admin_console.fl          Marketplace health, compliance, ESCIR matrix
+│   ├── admin_console.fl          Marketplace health, compliance, FLIR matrix
 │   └── dev_tooling.fl            Dev server, testing, linting, doc generation
 ├── fintech/
 │   ├── fix-trading/          FIX protocol trading gateway (FastLang)
 │   ├── pci/                  PCI-DSS cardholder data governance (FastLang)
-│   └── iso20022/             ISO 20022 parser circuit + test vectors (ESCIR)
+│   └── iso20022/             ISO 20022 parser circuit + test vectors (FLIR)
 ├── industrial/
-│   ├── components/           Modbus TCP sub-circuits (ESCIR)
-│   ├── gateway/              Gateway SKUs: Lite/Standard/Premium (ESCIR)
+│   ├── components/           Modbus TCP sub-circuits (FLIR)
+│   ├── gateway/              Gateway SKUs: Lite/Standard/Premium (FLIR)
 │   └── specs/                Industrial gateway specifications
 ├── pricing/                  Provider-level custom pricing (FastLang)
 ├── streams/                  Graph-based registry model (FastLang)
@@ -88,11 +88,11 @@ Publisher and customer guides, pricing strategy, solution builder guide. Formal 
 
 **PCI** — PCI-DSS cardholder data governance with field-level tokenization and sub-lex fan_out.
 
-**ISO 20022** — Full ESCIR circuit for ISO 20022 XML/JSON parsing with PoVC witness generation. Includes pacs.008 and pacs.002 test vectors.
+**ISO 20022** — Full FLIR circuit for ISO 20022 XML/JSON parsing with PoVC witness generation. Includes pacs.008 and pacs.002 test vectors.
 
 ### Industrial
 
-**Components** — Individual ESCIR sub-circuits: Modbus TCP client, poll scheduler, stream emitter, StreamSight bridge.
+**Components** — Individual FLIR sub-circuits: Modbus TCP client, poll scheduler, stream emitter, StreamSight bridge.
 
 **Gateway SKUs** — Composite gateway circuits at three tiers:
 - **Lite** (free/Apache-2.0) — 10 devices, 256 registers

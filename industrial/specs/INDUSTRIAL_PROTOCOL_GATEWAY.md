@@ -256,10 +256,10 @@ opcua:
 
 ---
 
-## ESCIR Circuit
+## FLIR Circuit
 
 ```yaml
-# circuits/marketplace/industrial-gateway.escir.yaml
+# circuits/marketplace/industrial-gateway.flir.yaml
 format: v0.8.0
 version: 1
 

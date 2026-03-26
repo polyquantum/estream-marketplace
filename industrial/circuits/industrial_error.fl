@@ -1,0 +1,347 @@
+/// Industrial Gateway Error Types
+/// Ports error.rs to pure FastLang — error enum, codes, recoverability, categories
+
+use industrial_types::*
+
+// =============================================================================
+// Error Categories
+// =============================================================================
+
+type ErrorCategory = enum u8 {
+    Connection = 1,
+    Protocol = 2,
+    Config = 3,
+    Serial = 4,
+    Gateway = 5,
+    Internal = 9,
+}
+
+// =============================================================================
+// Industrial Error — flat representation with error code + context fields
+// =============================================================================
+
+type IndustrialError = struct {
+    code: u16,
+    category: ErrorCategory,
+    address: bytes(32),
+    device_id: bytes(32),
+    reason: bytes(64),
+    function_code: u8,
+    exception_code: u8,
+    expected_u16: u16,
+    actual_u16: u16,
+    limit_name: bytes(16),
+    limit_max: u32,
+    limit_requested: u32,
+    port_name: bytes(16),
+}
+
+// =============================================================================
+// Error Code Constants
+// Error codes follow the Rust error_code() mapping:
+//   1xx = connection, 2xx = protocol, 3xx = config, 4xx = serial,
+//   5xx = gateway, 9xx = internal
+// =============================================================================
+
+circuit connection_failed(address: bytes(32), reason: bytes(64)) -> IndustrialError
+    @status production
+    lex industrial/error/connection_failed
+    @precision A
+{
+    IndustrialError { code: 100, category: ErrorCategory::Connection, address: address, reason: reason, .. }
+}
+
+circuit connection_timeout(address: bytes(32), timeout_ms: u32) -> IndustrialError
+    @status production
+    lex industrial/error/connection_timeout
+    @precision A
+{
+    IndustrialError { code: 101, category: ErrorCategory::Connection, address: address, limit_max: timeout_ms, .. }
+}
+
+circuit connection_refused(address: bytes(32)) -> IndustrialError
+    @status production
+    lex industrial/error/connection_refused
+    @precision A
+{
+    IndustrialError { code: 102, category: ErrorCategory::Connection, address: address, .. }
+}
+
+circuit connection_reset(address: bytes(32)) -> IndustrialError
+    @status production
+    lex industrial/error/connection_reset
+    @precision A
+{
+    IndustrialError { code: 103, category: ErrorCategory::Connection, address: address, .. }
+}
+
+circuit not_connected(device_id: bytes(32)) -> IndustrialError
+    @status production
+    lex industrial/error/not_connected
+    @precision A
+{
+    IndustrialError { code: 104, category: ErrorCategory::Connection, device_id: device_id, .. }
+}
+
+circuit modbus_exception(fc: u8, exc: u8) -> IndustrialError
+    @status production
+    lex industrial/error/modbus_exception
+    @precision A
+    observe metrics: [fc, exc]
+{
+    IndustrialError {
+        code: 200 + (exc as u16),
+        category: ErrorCategory::Protocol,
+        function_code: fc,
+        exception_code: exc,
+        reason: exception_message(exc),
+        ..
+    }
+}
+
+circuit exception_message(exc: u8) -> bytes(64)
+    @status production
+    lex industrial/error/exception_msg
+    @precision A
+{
+    match exc {
+        1 => "Illegal Function",
+        2 => "Illegal Data Address",
+        3 => "Illegal Data Value",
+        4 => "Slave Device Failure",
+        5 => "Acknowledge",
+        6 => "Slave Device Busy",
+        _ => "Unknown Exception",
+    }
+}
+
+circuit response_timeout(transaction_id: u32) -> IndustrialError
+    @status production
+    lex industrial/error/response_timeout
+    @precision A
+{
+    IndustrialError { code: 210, category: ErrorCategory::Protocol, limit_max: transaction_id, .. }
+}
+
+circuit invalid_response(reason: bytes(64)) -> IndustrialError
+    @status production
+    lex industrial/error/invalid_response
+    @precision A
+{
+    IndustrialError { code: 211, category: ErrorCategory::Protocol, reason: reason, .. }
+}
+
+circuit transaction_mismatch(expected: u16, actual: u16) -> IndustrialError
+    @status production
+    lex industrial/error/transaction_mismatch
+    @precision A
+{
+    IndustrialError { code: 212, category: ErrorCategory::Protocol, expected_u16: expected, actual_u16: actual, .. }
+}
+
+circuit crc_error(expected: u16, actual: u16) -> IndustrialError
+    @status production
+    lex industrial/error/crc_error
+    @precision A
+{
+    IndustrialError { code: 213, category: ErrorCategory::Protocol, expected_u16: expected, actual_u16: actual, .. }
+}
+
+circuit invalid_config(reason: bytes(64)) -> IndustrialError
+    @status production
+    lex industrial/error/invalid_config
+    @precision A
+{
+    IndustrialError { code: 300, category: ErrorCategory::Config, reason: reason, .. }
+}
+
+circuit device_not_found(device_id: bytes(32)) -> IndustrialError
+    @status production
+    lex industrial/error/device_not_found
+    @precision A
+{
+    IndustrialError { code: 301, category: ErrorCategory::Config, device_id: device_id, .. }
+}
+
+circuit register_not_found(device_id: bytes(32), name: bytes(64)) -> IndustrialError
+    @status production
+    lex industrial/error/register_not_found
+    @precision A
+{
+    IndustrialError { code: 302, category: ErrorCategory::Config, device_id: device_id, reason: name, .. }
+}
+
+circuit limit_exceeded(limit_name: bytes(16), max: u32, requested: u32) -> IndustrialError
+    @status production
+    lex industrial/error/limit_exceeded
+    @precision A
+{
+    IndustrialError { code: 303, category: ErrorCategory::Config, limit_name: limit_name, limit_max: max, limit_requested: requested, .. }
+}
+
+circuit serial_error(port: bytes(16), reason: bytes(64)) -> IndustrialError
+    @status production
+    lex industrial/error/serial
+    @precision A
+{
+    IndustrialError { code: 400, category: ErrorCategory::Serial, port_name: port, reason: reason, .. }
+}
+
+circuit framing_error(port: bytes(16)) -> IndustrialError
+    @status production
+    lex industrial/error/framing
+    @precision A
+{
+    IndustrialError { code: 401, category: ErrorCategory::Serial, port_name: port, .. }
+}
+
+circuit parity_error(port: bytes(16)) -> IndustrialError
+    @status production
+    lex industrial/error/parity
+    @precision A
+{
+    IndustrialError { code: 402, category: ErrorCategory::Serial, port_name: port, .. }
+}
+
+circuit gateway_not_running() -> IndustrialError
+    @status production
+    lex industrial/error/not_running
+    @precision A
+{
+    IndustrialError { code: 500, category: ErrorCategory::Gateway, .. }
+}
+
+circuit gateway_already_running() -> IndustrialError
+    @status production
+    lex industrial/error/already_running
+    @precision A
+{
+    IndustrialError { code: 501, category: ErrorCategory::Gateway, .. }
+}
+
+circuit shutdown_error(reason: bytes(64)) -> IndustrialError
+    @status production
+    lex industrial/error/shutdown
+    @precision A
+{
+    IndustrialError { code: 502, category: ErrorCategory::Gateway, reason: reason, .. }
+}
+
+circuit internal_error(reason: bytes(64)) -> IndustrialError
+    @status production
+    lex industrial/error/internal
+    @precision A
+{
+    IndustrialError { code: 900, category: ErrorCategory::Internal, reason: reason, .. }
+}
+
+circuit io_error(reason: bytes(64)) -> IndustrialError
+    @status production
+    lex industrial/error/io
+    @precision A
+{
+    IndustrialError { code: 901, category: ErrorCategory::Internal, reason: reason, .. }
+}
+
+circuit channel_send_error() -> IndustrialError
+    @status production
+    lex industrial/error/channel_send
+    @precision A
+{
+    IndustrialError { code: 902, category: ErrorCategory::Internal, .. }
+}
+
+circuit channel_receive_error() -> IndustrialError
+    @status production
+    lex industrial/error/channel_recv
+    @precision A
+{
+    IndustrialError { code: 903, category: ErrorCategory::Internal, .. }
+}
+
+// =============================================================================
+// Classification Circuits
+// =============================================================================
+
+circuit is_recoverable(err: IndustrialError) -> bool
+    @status production
+    lex industrial/error/is_recoverable
+    @precision A
+    observe metrics: [code]
+{
+    match err.code {
+        101 => true,
+        103 => true,
+        210 => true,
+        213 => true,
+        401 => true,
+        402 => true,
+        _ => {
+            if err.code >= 200 && err.code < 210 {
+                err.exception_code == 5 || err.exception_code == 6
+            } else {
+                false
+            }
+        }
+    }
+}
+
+circuit error_category(err: IndustrialError) -> ErrorCategory
+    @status production
+    lex industrial/error/category
+    @precision A
+{
+    err.category
+}
+
+circuit error_category_from_code(code: u16) -> ErrorCategory
+    @status production
+    lex industrial/error/category_from_code
+    @precision A
+{
+    if code >= 900 { ErrorCategory::Internal }
+    else if code >= 500 { ErrorCategory::Gateway }
+    else if code >= 400 { ErrorCategory::Serial }
+    else if code >= 300 { ErrorCategory::Config }
+    else if code >= 200 { ErrorCategory::Protocol }
+    else { ErrorCategory::Connection }
+}
+
+// =============================================================================
+// Golden Tests
+// =============================================================================
+
+test golden error_code_ranges {
+    let e = connection_timeout(0x01, 5000);
+    assert e.code == 101;
+    assert error_category(e) == ErrorCategory::Connection;
+}
+
+test golden modbus_exception_code {
+    let e = modbus_exception(0x03, 0x02);
+    assert e.code == 202;
+    assert e.exception_code == 0x02;
+}
+
+test golden recoverability {
+    let timeout_err = connection_timeout(0x01, 5000);
+    assert is_recoverable(timeout_err) == true;
+
+    let config_err = device_not_found(0x01);
+    assert is_recoverable(config_err) == false;
+
+    let modbus_ack = modbus_exception(0x03, 5);
+    assert is_recoverable(modbus_ack) == true;
+
+    let modbus_illegal = modbus_exception(0x03, 1);
+    assert is_recoverable(modbus_illegal) == false;
+}
+
+test golden category_from_code {
+    assert error_category_from_code(101) == ErrorCategory::Connection;
+    assert error_category_from_code(211) == ErrorCategory::Protocol;
+    assert error_category_from_code(300) == ErrorCategory::Config;
+    assert error_category_from_code(401) == ErrorCategory::Serial;
+    assert error_category_from_code(500) == ErrorCategory::Gateway;
+    assert error_category_from_code(901) == ErrorCategory::Internal;
+}

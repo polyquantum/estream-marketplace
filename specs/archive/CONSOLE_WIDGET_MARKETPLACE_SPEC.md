@@ -91,7 +91,7 @@ console_min_version = "0.8.0"
 supports_light_mode = true
 custom_accent = "#22C55E"                    # Optional accent color
 
-# Optional backing ESCIR circuit
+# Optional backing FLIR circuit
 backing_circuit = "circuits/impact-aggregator.circuit.yaml"
 
 # Bundle format
@@ -129,7 +129,7 @@ framework = "react"                          # react (required for now)
 │   ├── thumbnail.png                    # Preview thumbnail (400x300)
 │   └── screenshot.png                   # Full screenshot (optional)
 │
-├── circuits/                            # Optional backing ESCIR circuits
+├── circuits/                            # Optional backing FLIR circuits
 │   └── impact-aggregator.circuit.yaml
 │
 ├── schemas/                             # Optional ESF schemas
@@ -708,7 +708,7 @@ Define `estream.marketplace.widget.publish.v1` — a governance circuit that val
 
 ```yaml
 # circuits/governance/widget-publish.circuit.yaml
-escir_version: "0.8.0"
+flir_version: "0.8.0"
 name: estream.marketplace.widget.publish.v1
 version: "1.0.0"
 

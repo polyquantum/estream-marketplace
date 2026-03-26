@@ -7,7 +7,7 @@
 
 ## Overview
 
-The Component Marketplace is the "npm for verifiable circuits" - a platform for discovering, sharing, and monetizing ESCIR components.
+The Component Marketplace is the "npm for verifiable circuits" - a platform for discovering, sharing, and monetizing FLIR components.
 
 ---
 
@@ -19,7 +19,7 @@ A key design decision: **what do we show for each component?**
 
 | Approach | Pros | Cons |
 |----------|------|------|
-| **Full ESCIR Source** | Transparency, auditability, learning | IP exposure, complexity for consumers |
+| **Full FLIR Source** | Transparency, auditability, learning | IP exposure, complexity for consumers |
 | **Interface Only** | Clean API, protects IP | Black box, trust required |
 | **Tiered Visibility** | Flexibility, creator control | Complexity |
 
@@ -29,7 +29,7 @@ Components should support **multiple visibility levels**, controlled by the crea
 
 ```rust
 pub enum SourceVisibility {
-    /// Full ESCIR source visible to all
+    /// Full FLIR source visible to all
     Open,
     
     /// Only interface (ports, annotations) visible
@@ -87,7 +87,7 @@ source_hash: sha256:abc123...
 ### What's Conditionally Visible
 
 ```yaml
-# ESCIR Source (visibility: Open or LicensedFull)
+# FLIR Source (visibility: Open or LicensedFull)
 nodes:
   - id: validate_amount
     type: transform
@@ -174,7 +174,7 @@ When publishing from the visual designer, creators see:
 │  ┌─ Source Visibility ────────────────────────────────────┐  │
 │  │                                                         │  │
 │  │  ○ Open                                                │  │
-│  │    Full ESCIR source visible to everyone               │  │
+│  │    Full FLIR source visible to everyone               │  │
 │  │    Best for: Open source, reference implementations    │  │
 │  │                                                         │  │
 │  │  ● Interface Only                     [Recommended]     │  │
@@ -231,7 +231,7 @@ pub struct FilteredComponentData {
     
     /// Filtered fields - visibility controlled by audiences
     #[filter(audiences = ["public", "licensee"])]
-    pub escir_source: Filtered<ESCIR>,
+    pub flir_source: Filtered<FLIR>,
     
     #[filter(audiences = ["public", "compiled", "licensee"])]
     pub wasm_artifact: Filtered<AssetId>,
@@ -283,7 +283,7 @@ impl SourceVisibility {
 │  └─ source_hash                                             │
 │                                                             │
 │  Filtered by Audience:                                      │
-│  ├─ escir_source    [audiences: public, licensee]          │
+│  ├─ flir_source    [audiences: public, licensee]          │
 │  │   └─ Viewer has: compiled → ✗ HIDDEN                    │
 │  ├─ wasm_artifact   [audiences: public, compiled, licensee]│
 │  │   └─ Viewer has: compiled → ✓ VISIBLE                   │
@@ -409,8 +409,8 @@ pub struct ComponentStats {
 }
 
 pub struct StorageRefs {
-    /// ESCIR source (eStream native asset)
-    pub escir_asset: AssetId,
+    /// FLIR source (eStream native asset)
+    pub flir_asset: AssetId,
     
     /// Compiled WASM (if applicable)
     pub wasm_tx: Option<String>,
@@ -838,7 +838,7 @@ impl ExecutionMetering {
 
 ```rust
 /// Estimate before execution (from component metadata)
-pub fn estimate_cost(circuit: &ESCIR) -> CostEstimate {
+pub fn estimate_cost(circuit: &FLIR) -> CostEstimate {
     let mut total = Fixed64::ZERO;
     
     for component in circuit.components() {
@@ -1044,7 +1044,7 @@ pub struct PublishRequest {
     pub pricing: Pricing,
     
     /// Source code
-    pub escir_source: Vec<u8>,
+    pub flir_source: Vec<u8>,
     
     /// Optional compiled artifacts
     pub wasm_binary: Option<Vec<u8>>,
@@ -1063,14 +1063,14 @@ pub struct PublishResult {
 
 impl MarketplaceService {
     pub async fn publish(&self, req: PublishRequest, publisher: &Publisher) -> Result<PublishResult, PublishError> {
-        // 1. Validate ESCIR
-        self.validator.validate_escir(&req.escir_source)?;
+        // 1. Validate FLIR
+        self.validator.validate_flir(&req.flir_source)?;
         
         // 2. Check version increment
         self.check_version(&req.name, &req.version, publisher)?;
         
         // 3. Upload to permanent storage
-        let storage_tx = self.storage.upload(&req.escir_source).await?;
+        let storage_tx = self.storage.upload(&req.flir_source).await?;
         
         // 4. Charge publish fee
         let fee = self.calculate_publish_fee(&req);

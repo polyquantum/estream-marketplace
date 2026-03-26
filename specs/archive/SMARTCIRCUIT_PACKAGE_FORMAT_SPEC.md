@@ -25,7 +25,7 @@ This spec defines:
 
 ### 1.1 Design Principles
 
-1. **Self-contained** — A package includes everything needed to use the circuit: schemas, ESCIR definitions, tests, documentation
+1. **Self-contained** — A package includes everything needed to use the circuit: schemas, FLIR definitions, tests, documentation
 2. **Verifiable** — Every package is ML-DSA-87 signed with a Merkle root of all contents
 3. **Deterministic** — Package archives are reproducibly built for checksum verification
 4. **Governance-aware** — Circuits that require governance approval declare their category
@@ -48,7 +48,7 @@ estream-wire-fix/
 │   ├── fix-execution-report.esf.yaml
 │   └── fix-market-data.esf.yaml
 │
-├── circuits/                        # ESCIR circuit definitions (required)
+├── circuits/                        # FLIR circuit definitions (required)
 │   ├── fix-parser.circuit.yaml      # Main circuit
 │   └── fix-order-router.circuit.yaml
 │
@@ -160,11 +160,11 @@ requires = ["EStreamOrder", "EStreamFill"]
 
 ## 4. Circuit YAML Format
 
-Circuit files follow the ESCIR specification. Each circuit YAML must be a valid ESCIR document:
+Circuit files follow the FLIR specification. Each circuit YAML must be a valid FLIR document:
 
 ```yaml
 # circuits/fix-parser.circuit.yaml
-escir_version: "0.8.0"
+flir_version: "0.8.0"
 name: fix_parser
 version: "1.0.0"
 
@@ -547,7 +547,7 @@ license = "Apache-2.0"                  # Circuit definition license
 license = "BSL-1.1"                     # FPGA bitstream license (may differ)
 ```
 
-This follows the Chronicle model: open-source behavior definitions (ESCIR) with licensed hardware acceleration (FPGA bitstreams).
+This follows the Chronicle model: open-source behavior definitions (FLIR) with licensed hardware acceleration (FPGA bitstreams).
 
 ### 7.3 Bitstream Verification
 
@@ -695,7 +695,7 @@ $ estream marketplace scaffold smart-circuit my-validator
   ├── README.md                       # Template readme
   ├── LICENSE                         # Apache-2.0
   ├── circuits/
-  │   └── my-validator.circuit.yaml   # ESCIR skeleton
+  │   └── my-validator.circuit.yaml   # FLIR skeleton
   ├── schemas/
   │   └── .gitkeep
   ├── tests/
@@ -719,7 +719,7 @@ $ estream marketplace scaffold smart-circuit my-validator
 
 - [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) — Registry, manifest, CLI
 - [ESF_SCHEMA_COMPOSITION_SPEC.md](../protocol/ESF_SCHEMA_COMPOSITION_SPEC.md) — Schema dependencies
-- [ESCIR_LANGUAGE_SPEC.md](../protocol/ESCIR_LANGUAGE_SPEC.md) — Circuit YAML format
+- [FLIR_LANGUAGE_SPEC.md](../protocol/FLIR_LANGUAGE_SPEC.md) — Circuit YAML format
 - [MARKETPLACE_SPEC.md](./MARKETPLACE_SPEC.md) — Pricing, visibility, creator program
 - [WIRE_ADAPTER_TRAIT_SPEC.md](../protocol/WIRE_ADAPTER_TRAIT_SPEC.md) — Wire adapter packages
 - [COMPONENT_SYSTEM_SPEC.md](../protocol/COMPONENT_SYSTEM_SPEC.md) — Component model

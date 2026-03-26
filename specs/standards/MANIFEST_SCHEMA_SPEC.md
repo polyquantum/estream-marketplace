@@ -149,13 +149,13 @@ url = "https://github.com/my-org"
 
 ---
 
-## 4. `[escir]` Section
+## 4. `[flir]` Section
 
-ESCIR API and platform version compatibility.
+FLIR API and platform version compatibility.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `api_version` | string | **Required** | — | ESCIR API version this package targets (e.g., `"0.9.1"`) |
+| `api_version` | string | **Required** | — | FLIR API version this package targets (e.g., `"0.9.1"`) |
 | `min_platform_version` | string | **Required** | — | Minimum eStream platform version required |
 | `max_platform_version` | string | Optional | `"*"` | Maximum eStream platform version supported |
 
@@ -175,14 +175,14 @@ From `registry/package_format.fl`, `PackageStability`:
 
 | Value | Tier | Description |
 |-------|------|-------------|
-| 0 | Stable | ESCIR API is frozen; no breaking changes within the major version |
+| 0 | Stable | FLIR API is frozen; no breaking changes within the major version |
 | 1 | Preview | API may change in minor versions |
 | 2 | Experimental | API may change at any time |
 
 ### 4.3 Example
 
 ```toml
-[escir]
+[flir]
 api_version = "0.9.1"
 min_platform_version = "0.9.1"
 max_platform_version = "1.0.0"
@@ -643,7 +643,7 @@ Marketplace publishing settings.
 
 | Level | What's Visible |
 |-------|---------------|
-| `open` | Full ESCIR source visible to all |
+| `open` | Full FLIR source visible to all |
 | `interface` | Only ports, annotations, source hash |
 | `compiled` | Interface + compiled artifacts (WASM/Verilog) |
 | `licensed` | Full source visible only to licensees |
@@ -679,7 +679,7 @@ signing_key_id = "my-org-signing-key-01"
 email = "eng@my-org.com"
 url = "https://github.com/my-org"
 
-[escir]
+[flir]
 api_version = "0.9.1"
 min_platform_version = "0.9.1"
 max_platform_version = "1.0.0"

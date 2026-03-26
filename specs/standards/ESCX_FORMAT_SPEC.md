@@ -11,7 +11,7 @@
 
 ## 1. Overview
 
-The `.escx` (eStream Compiled eXtensible) format is the opaque binary package format for distributing compiled domain circuits through the eStream Marketplace. Packages are not reverse-engineerable — the compiler produces position-independent ESCIR bytecode with symbol stripping.
+The `.escx` (eStream Compiled eXtensible) format is the opaque binary package format for distributing compiled domain circuits through the eStream Marketplace. Packages are not reverse-engineerable — the compiler produces position-independent FLIR bytecode with symbol stripping.
 
 ### 1.1 Design Goals
 
@@ -104,7 +104,7 @@ Offset  Size  Type       Description
 | ID | Name | Required | Description |
 |----|------|----------|-------------|
 | `0x0001` | `manifest` | Yes | Package manifest (TOML, see §4) |
-| `0x0002` | `domain.escx` | Yes | Compiled opaque ESCIR bytecode |
+| `0x0002` | `domain.escx` | Yes | Compiled opaque FLIR bytecode |
 | `0x0003` | `lsp.escx` | No | LSP metadata for IDE integration |
 | `0x0004` | `docs` | No | Documentation bundle |
 | `0x0005` | `tests` | No | Golden test vectors |
@@ -123,8 +123,8 @@ The compiled domain artifact. This section contains:
 
 ```
 ┌──────────────────────────────────────┐
-│  ESCIR Header (32 bytes)             │
-│    - ESCIR API version (12 bytes)    │
+│  FLIR Header (32 bytes)             │
+│    - FLIR API version (12 bytes)    │
 │    - Bytecode format version (4)     │
 │    - Entry point count (4)           │
 │    - Symbol table offset (4)         │
@@ -132,7 +132,7 @@ The compiled domain artifact. This section contains:
 │    - Flags (4)                       │
 │  ────────────────────────────────────│
 │  Bytecode Segments                   │
-│    - Position-independent ESCIR ops  │
+│    - Position-independent FLIR ops  │
 │    - No absolute addresses           │
 │    - No debug symbols                │
 │  ────────────────────────────────────│
@@ -208,7 +208,7 @@ The manifest section contains a TOML document conforming to the full schema defi
 |---------|------------|
 | `[package]` | `name`, `version`, `description`, `license`, `repository` |
 | `[publisher]` | `id`, `name`, `signing_key_id` |
-| `[escir]` | `api_version`, `min_platform_version` |
+| `[flir]` | `api_version`, `min_platform_version` |
 | `[dependencies]` | Package name = version requirement pairs |
 | `[pricing]` | `license_type`, `share_price`, `private_price` |
 | `[telemetry]` | `schema_hash`, `metrics`, `aggregate_window`, `cohort_min_size` |
@@ -244,7 +244,7 @@ The attestation section contains a `PackageAttestation` record (from `registry/p
 │  ──────────────────────────────────────────  │
 │  Compilation Proof                           │
 │    compiler_version: bytes(12)               │
-│    escir_api_version: bytes(12)              │
+│    flir_api_version: bytes(12)              │
 │    source_hash: bytes(32)   [SHA3-256]       │
 │    compiled_hash: bytes(32) [SHA3-256]       │
 │  ──────────────────────────────────────────  │
@@ -371,7 +371,7 @@ The `PackageVisibility` type controls what customers can access:
 
 | Tier | Value | What's Accessible |
 |------|-------|-------------------|
-| Public | 0 | Full ESCIR source visible |
+| Public | 0 | Full FLIR source visible |
 | Unlisted | 1 | Not in search results, but full access via direct link |
 | Private | 2 | Only accessible to specific customers via license |
 | Solution-Only | 3 | Only accessible as part of a solution bundle |
@@ -398,7 +398,7 @@ The published `.escx` package must be deterministic:
 Given the same:
 - Source `.fl` files
 - Compiler version (`compiler_version` in attestation)
-- ESCIR API version (`escir_api_version`)
+- FLIR API version (`flir_api_version`)
 
 The resulting `domain.escx` section will have the identical SHA3-256 `compiled_hash`. This enables third-party verification that a published package matches its claimed source.
 

@@ -1,0 +1,397 @@
+/// Industrial Gateway Configuration
+/// Ports config.rs to pure FastLang — config structs, defaults, validation, KV persistence
+
+use industrial_types::*
+
+// =============================================================================
+// Device Configuration
+// =============================================================================
+
+type DeviceConfig = struct {
+    device_id: bytes(32),
+    name: bytes(64),
+    ip_address: u32,
+    port: u16,
+    unit_id: u8,
+    connect_timeout_ms: u32,
+    response_timeout_ms: u32,
+    retry_count: u8,
+    retry_delay_ms: u32,
+    enabled: bool,
+}
+
+circuit default_device_config() -> DeviceConfig
+    @status production
+    lex industrial/config/device_default
+    @precision A
+{
+    DeviceConfig {
+        device_id: 0x00,
+        name: 0x00,
+        ip_address: 0x7F000001,
+        port: 502,
+        unit_id: 1,
+        connect_timeout_ms: 5000,
+        response_timeout_ms: 1000,
+        retry_count: 3,
+        retry_delay_ms: 100,
+        enabled: true,
+    }
+}
+
+// =============================================================================
+// Register Configuration
+// =============================================================================
+
+type RegisterConfig = struct {
+    device_id: bytes(32),
+    name: bytes(64),
+    address: u16,
+    register_type: RegisterType,
+    data_type: DataType,
+    word_order: WordOrder,
+    scale_x1000: i64,
+    offset_x1000: i64,
+    unit: bytes(16),
+    poll_interval_ms: u32,
+    emit_on_change: bool,
+    change_threshold_x1000: u64,
+    priority: u8,
+}
+
+circuit default_register_config() -> RegisterConfig
+    @status production
+    lex industrial/config/register_default
+    @precision A
+{
+    RegisterConfig {
+        device_id: 0x00,
+        name: 0x00,
+        address: 0,
+        register_type: RegisterType::Holding,
+        data_type: DataType::UInt16,
+        word_order: WordOrder::BigEndian,
+        scale_x1000: 1000,
+        offset_x1000: 0,
+        unit: 0x00,
+        poll_interval_ms: 1000,
+        emit_on_change: true,
+        change_threshold_x1000: 0,
+        priority: 1,
+    }
+}
+
+// =============================================================================
+// Alarm Configuration
+// =============================================================================
+
+type AlarmConfig = struct {
+    alarm_id: bytes(32),
+    register_name: bytes(64),
+    name: bytes(64),
+    condition: AlarmCondition,
+    threshold_lo_x1000: i64,
+    threshold_hi_x1000: i64,
+    hysteresis_x1000: u64,
+    debounce_ms: u32,
+    severity: AlarmSeverity,
+    enabled: bool,
+}
+
+circuit default_alarm_config() -> AlarmConfig
+    @status production
+    lex industrial/config/alarm_default
+    @precision A
+{
+    AlarmConfig {
+        alarm_id: 0x00,
+        register_name: 0x00,
+        name: 0x00,
+        condition: AlarmCondition::GreaterThan,
+        threshold_lo_x1000: 0,
+        threshold_hi_x1000: 0,
+        hysteresis_x1000: 0,
+        debounce_ms: 0,
+        severity: AlarmSeverity::Warning,
+        enabled: true,
+    }
+}
+
+// =============================================================================
+// StreamSight Configuration
+// =============================================================================
+
+type StreamSightConfig = struct {
+    enabled: bool,
+    severity_filter: u8,
+    batch_interval_ms: u32,
+    batch_size: u16,
+    sampling_rate_x1000: u32,
+}
+
+circuit default_streamsight_config() -> StreamSightConfig
+    @status production
+    lex industrial/config/streamsight_default
+    @precision A
+{
+    StreamSightConfig {
+        enabled: true,
+        severity_filter: 0,
+        batch_interval_ms: 100,
+        batch_size: 32,
+        sampling_rate_x1000: 1000,
+    }
+}
+
+// =============================================================================
+// Gateway Settings
+// =============================================================================
+
+type GatewaySettings = struct {
+    max_polls_per_second: u32,
+    adaptive_scheduling: bool,
+    backoff_factor_x1000: u32,
+    max_backoff_interval_ms: u32,
+}
+
+circuit default_gateway_settings() -> GatewaySettings
+    @status production
+    lex industrial/config/settings_default
+    @precision A
+{
+    GatewaySettings {
+        max_polls_per_second: 100,
+        adaptive_scheduling: true,
+        backoff_factor_x1000: 1500,
+        max_backoff_interval_ms: 60000,
+    }
+}
+
+// =============================================================================
+// Gateway Configuration (top-level)
+// =============================================================================
+
+type GatewayConfig = struct {
+    gateway_id: bytes(32),
+    name: bytes(64),
+    device_count: u16,
+    register_count: u16,
+    alarm_count: u16,
+    streamsight: StreamSightConfig,
+    settings: GatewaySettings,
+}
+
+// =============================================================================
+// KV-Backed Config Storage
+// =============================================================================
+
+store kv gateway_config_store {
+    key: bytes(32),
+    value: GatewayConfig,
+    @ttl none,
+}
+
+store kv device_config_store {
+    key: bytes(32),
+    value: DeviceConfig,
+    @ttl none,
+}
+
+store kv register_config_store {
+    key: bytes(32),
+    value: RegisterConfig,
+    @ttl none,
+}
+
+store kv alarm_config_store {
+    key: bytes(32),
+    value: AlarmConfig,
+    @ttl none,
+}
+
+circuit save_gateway_config(config: GatewayConfig) -> bool
+    @status production
+    lex industrial/config/save
+    @precision A
+    observe metrics: [gateway_id, device_count, register_count]
+{
+    gateway_config_store.put(config.gateway_id, config);
+    true
+}
+
+circuit load_gateway_config(gateway_id: bytes(32)) -> option<GatewayConfig>
+    @status production
+    lex industrial/config/load
+    @precision A
+{
+    gateway_config_store.get(gateway_id)
+}
+
+// =============================================================================
+// Validation
+// =============================================================================
+
+type ValidationResult = struct {
+    valid: bool,
+    error_code: u16,
+    error_field: bytes(32),
+}
+
+circuit validate_gateway_config(config: GatewayConfig) -> ValidationResult
+    @status production
+    lex industrial/config/validate
+    @precision A
+    observe metrics: [gateway_id, device_count, register_count, alarm_count]
+{
+    if config.device_count > 10 {
+        return ValidationResult {
+            valid: false,
+            error_code: 303,
+            error_field: "devices",
+        };
+    }
+
+    if config.register_count > 256 {
+        return ValidationResult {
+            valid: false,
+            error_code: 303,
+            error_field: "registers",
+        };
+    }
+
+    if config.alarm_count > 64 {
+        return ValidationResult {
+            valid: false,
+            error_code: 303,
+            error_field: "alarms",
+        };
+    }
+
+    if config.settings.max_polls_per_second == 0 {
+        return ValidationResult {
+            valid: false,
+            error_code: 300,
+            error_field: "max_polls_per_second",
+        };
+    }
+
+    ValidationResult {
+        valid: true,
+        error_code: 0,
+        error_field: 0x00,
+    }
+}
+
+circuit validate_device_config(config: DeviceConfig) -> ValidationResult
+    @status production
+    lex industrial/config/validate_device
+    @precision A
+{
+    if config.port == 0 {
+        return ValidationResult {
+            valid: false,
+            error_code: 300,
+            error_field: "port",
+        };
+    }
+
+    if config.connect_timeout_ms == 0 {
+        return ValidationResult {
+            valid: false,
+            error_code: 300,
+            error_field: "connect_timeout_ms",
+        };
+    }
+
+    if config.response_timeout_ms == 0 {
+        return ValidationResult {
+            valid: false,
+            error_code: 300,
+            error_field: "response_timeout_ms",
+        };
+    }
+
+    ValidationResult {
+        valid: true,
+        error_code: 0,
+        error_field: 0x00,
+    }
+}
+
+circuit validate_register_config(config: RegisterConfig, device_exists: bool) -> ValidationResult
+    @status production
+    lex industrial/config/validate_register
+    @precision A
+{
+    if !device_exists {
+        return ValidationResult {
+            valid: false,
+            error_code: 301,
+            error_field: "device_id",
+        };
+    }
+
+    if config.poll_interval_ms == 0 {
+        return ValidationResult {
+            valid: false,
+            error_code: 300,
+            error_field: "poll_interval_ms",
+        };
+    }
+
+    if config.priority > 3 {
+        return ValidationResult {
+            valid: false,
+            error_code: 300,
+            error_field: "priority",
+        };
+    }
+
+    ValidationResult {
+        valid: true,
+        error_code: 0,
+        error_field: 0x00,
+    }
+}
+
+// =============================================================================
+// Golden Tests
+// =============================================================================
+
+test golden gateway_config_validation_passes {
+    let config = GatewayConfig {
+        gateway_id: 0x01,
+        name: "test",
+        device_count: 5,
+        register_count: 100,
+        alarm_count: 10,
+        streamsight: default_streamsight_config(),
+        settings: default_gateway_settings(),
+    };
+    let result = validate_gateway_config(config);
+    assert result.valid == true;
+}
+
+test golden gateway_config_device_limit {
+    let config = GatewayConfig {
+        gateway_id: 0x01,
+        name: "test",
+        device_count: 11,
+        register_count: 100,
+        alarm_count: 10,
+        streamsight: default_streamsight_config(),
+        settings: default_gateway_settings(),
+    };
+    let result = validate_gateway_config(config);
+    assert result.valid == false;
+    assert result.error_code == 303;
+}
+
+test golden device_config_defaults {
+    let d = default_device_config();
+    assert d.port == 502;
+    assert d.unit_id == 1;
+    assert d.connect_timeout_ms == 5000;
+    assert d.retry_count == 3;
+    assert d.enabled == true;
+}

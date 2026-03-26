@@ -1,0 +1,214 @@
+/// ESF (eStream Format) binary conversion — ported from runtime/iso20022/src/esf.rs
+/// Wire-format TLV codec for ISO 20022 messages, FPGA-aligned with schema_rom.v and tree_walker_fsm.v
+
+@status production
+lex iso20022/esf
+
+import iso20022/types { MessageType, EsfFieldType, PrivacyTier }
+
+// ─── Schema ────────────────────────────────────────────────────────────────
+
+schema EsfMessage : core v1 {
+    sign { algorithm mldsa87 }
+    attest { proof_system groth16 }
+}
+
+// ─── Types ─────────────────────────────────────────────────────────────────
+
+type EsfHeader = struct {
+    magic: u32,
+    version: u16,
+    msg_type: u16,
+    field_count: u16,
+    total_len: u32,
+    reserved: u16,
+}
+
+type EsfFieldTlv = struct {
+    field_id: u16,
+    field_type: u8,
+    length: u8,
+    data: bytes(255),
+}
+
+type SchemaFieldDef = struct {
+    xpath_hash: u32,
+    field_id: u16,
+    field_type: u8,
+    privacy_tier: u8,
+    required: u8,
+    max_length: u16,
+}
+
+// ─── Constants ─────────────────────────────────────────────────────────────
+
+const ESF_MAGIC: u32 = 0x45534600
+const ESF_VERSION: u16 = 0x0100
+const FNV_OFFSET_BASIS: u32 = 0x811C9DC5
+const FNV_PRIME: u32 = 0x01000193
+
+const PACS008_FIELD_COUNT: u16 = 19
+const PACS002_FIELD_COUNT: u16 = 5
+
+const PACS008_FIELDS: [SchemaFieldDef; 19] = [
+    SchemaFieldDef { xpath_hash: 0xA948038E, field_id: 0x0001, field_type: 0x01, privacy_tier: 0x00, required: 1, max_length: 35 },
+    SchemaFieldDef { xpath_hash: 0x3B967AB1, field_id: 0x0002, field_type: 0x0A, privacy_tier: 0x00, required: 1, max_length: 0 },
+    SchemaFieldDef { xpath_hash: 0xE7CB79E8, field_id: 0x0003, field_type: 0x04, privacy_tier: 0x00, required: 1, max_length: 0 },
+    SchemaFieldDef { xpath_hash: 0x382A59C1, field_id: 0x0004, field_type: 0x0F, privacy_tier: 0x00, required: 1, max_length: 4 },
+    SchemaFieldDef { xpath_hash: 0x809FD93B, field_id: 0x0101, field_type: 0x01, privacy_tier: 0x01, required: 0, max_length: 35 },
+    SchemaFieldDef { xpath_hash: 0xF712D6FC, field_id: 0x0102, field_type: 0x01, privacy_tier: 0x01, required: 1, max_length: 35 },
+    SchemaFieldDef { xpath_hash: 0xD4489BE1, field_id: 0x0103, field_type: 0x01, privacy_tier: 0x01, required: 0, max_length: 35 },
+    SchemaFieldDef { xpath_hash: 0xB14A84EB, field_id: 0x0201, field_type: 0x06, privacy_tier: 0x01, required: 1, max_length: 0 },
+    SchemaFieldDef { xpath_hash: 0x6B341D11, field_id: 0x0202, field_type: 0x0E, privacy_tier: 0x01, required: 1, max_length: 3 },
+    SchemaFieldDef { xpath_hash: 0xCA08B725, field_id: 0x0203, field_type: 0x0F, privacy_tier: 0x00, required: 0, max_length: 4 },
+    SchemaFieldDef { xpath_hash: 0x84D183DB, field_id: 0x0301, field_type: 0x01, privacy_tier: 0x02, required: 0, max_length: 140 },
+    SchemaFieldDef { xpath_hash: 0x40F593A3, field_id: 0x0302, field_type: 0x01, privacy_tier: 0x02, required: 0, max_length: 2 },
+    SchemaFieldDef { xpath_hash: 0x65962B70, field_id: 0x0303, field_type: 0x01, privacy_tier: 0x02, required: 0, max_length: 140 },
+    SchemaFieldDef { xpath_hash: 0xB6684A2B, field_id: 0x0401, field_type: 0x0D, privacy_tier: 0x02, required: 0, max_length: 34 },
+    SchemaFieldDef { xpath_hash: 0x564D35CC, field_id: 0x0402, field_type: 0x0C, privacy_tier: 0x01, required: 0, max_length: 11 },
+    SchemaFieldDef { xpath_hash: 0xFA39B372, field_id: 0x0403, field_type: 0x0D, privacy_tier: 0x02, required: 0, max_length: 34 },
+    SchemaFieldDef { xpath_hash: 0x578F67E5, field_id: 0x0404, field_type: 0x0C, privacy_tier: 0x01, required: 0, max_length: 11 },
+    SchemaFieldDef { xpath_hash: 0x26A6F0B2, field_id: 0x0501, field_type: 0x01, privacy_tier: 0x04, required: 0, max_length: 140 },
+    SchemaFieldDef { xpath_hash: 0xC30F1D79, field_id: 0x0502, field_type: 0x01, privacy_tier: 0x02, required: 0, max_length: 35 },
+]
+
+const PACS002_FIELDS: [SchemaFieldDef; 5] = [
+    SchemaFieldDef { xpath_hash: 0x8EADC0B9, field_id: 0x1001, field_type: 0x01, privacy_tier: 0x00, required: 1, max_length: 35 },
+    SchemaFieldDef { xpath_hash: 0x480DD7AE, field_id: 0x1002, field_type: 0x0A, privacy_tier: 0x00, required: 1, max_length: 0 },
+    SchemaFieldDef { xpath_hash: 0xD8FD11AB, field_id: 0x1101, field_type: 0x01, privacy_tier: 0x01, required: 0, max_length: 35 },
+    SchemaFieldDef { xpath_hash: 0x2DE97E84, field_id: 0x1102, field_type: 0x0F, privacy_tier: 0x00, required: 1, max_length: 4 },
+    SchemaFieldDef { xpath_hash: 0x391C062C, field_id: 0x1103, field_type: 0x0F, privacy_tier: 0x00, required: 0, max_length: 4 },
+]
+
+// ─── FNV-1a Path Hash (must match FPGA tree_walker_fsm.v) ─────────────────
+
+circuit compute_path_hash(path: bytes, path_len: u32) -> u32
+    @status production
+    lex iso20022/esf
+    @precision A
+    @attested true
+    @constant_time
+{
+    observe metrics: [path_hash_ops]
+
+    let hash: u32 = FNV_OFFSET_BASIS
+    let i: u32 = 0
+    while i < path_len {
+        hash = hash ^ (path[i] as u32)
+        hash = hash * FNV_PRIME
+        i = i + 1
+    }
+    hash
+}
+
+test golden compute_path_hash {
+    assert compute_path_hash("/Document/FIToFICstmrCdtTrf/GrpHdr/MsgId", 40) == 0xA948038E
+    assert compute_path_hash("/Document/FIToFICstmrCdtTrf/GrpHdr/CreDtTm", 42) == 0x3B967AB1
+    assert compute_path_hash("/Document/FIToFIPmtStsRpt/TxInfAndSts/TxSts", 43) == 0x2DE97E84
+}
+
+// ─── Header Construction ───────────────────────────────────────────────────
+
+circuit build_esf_header(msg_type: u16, field_count: u16, total_len: u32) -> bytes(16)
+    @status production
+    lex iso20022/esf
+    @precision A
+    @attested true
+{
+    observe metrics: [msg_type, field_count]
+
+    let buf: bytes(16) = [
+        (ESF_MAGIC) & 0xFF,
+        (ESF_MAGIC >> 8) & 0xFF,
+        (ESF_MAGIC >> 16) & 0xFF,
+        (ESF_MAGIC >> 24) & 0xFF,
+        ESF_VERSION & 0xFF,
+        (ESF_VERSION >> 8) & 0xFF,
+        msg_type & 0xFF,
+        (msg_type >> 8) & 0xFF,
+        field_count & 0xFF,
+        (field_count >> 8) & 0xFF,
+        total_len & 0xFF,
+        (total_len >> 8) & 0xFF,
+        (total_len >> 16) & 0xFF,
+        (total_len >> 24) & 0xFF,
+        0x00,
+        0x00,
+    ]
+    buf
+}
+
+// ─── TLV Field Encoding ────────────────────────────────────────────────────
+
+circuit encode_esf_field(field_id: u16, field_type: u8, data: bytes, data_len: u8) -> bytes
+    @status production
+    lex iso20022/esf
+    @precision A
+    @attested true
+{
+    observe metrics: [msg_type, field_count]
+
+    let header: bytes(4) = [
+        field_id & 0xFF,
+        (field_id >> 8) & 0xFF,
+        field_type,
+        data_len,
+    ]
+
+    let out: bytes = alloc(4 + data_len as u32)
+    copy(out, 0, header, 0, 4)
+    copy(out, 4, data, 0, data_len as u32)
+    out
+}
+
+// ─── Privacy Tier Resolution (matches schema_rom.v field_id ranges) ───────
+
+circuit lookup_privacy_tier(field_id: u16) -> u8
+    @status production
+    lex iso20022/esf
+    @precision A
+    @attested true
+{
+    observe metrics: [msg_type, field_count]
+
+    if field_id >= 0x0001 && field_id <= 0x00FF { return 0x00 }
+    if field_id >= 0x0100 && field_id <= 0x01FF { return 0x01 }
+    if field_id >= 0x0200 && field_id <= 0x02FF { return 0x01 }
+    if field_id >= 0x0300 && field_id <= 0x03FF { return 0x02 }
+    if field_id >= 0x0400 && field_id <= 0x04FF { return 0x02 }
+    if field_id >= 0x0500 && field_id <= 0x05FF { return 0x04 }
+    if field_id >= 0x1000 && field_id <= 0x10FF { return 0x00 }
+    if field_id >= 0x1100 && field_id <= 0x11FF { return 0x01 }
+    0x00
+}
+
+// ─── Header Validation ─────────────────────────────────────────────────────
+
+circuit validate_esf_header(header: bytes(16)) -> bool
+    @status production
+    lex iso20022/esf
+    @precision A
+    @attested true
+{
+    observe metrics: [msg_type, field_count]
+
+    let magic: u32 = (header[0] as u32)
+                   | ((header[1] as u32) << 8)
+                   | ((header[2] as u32) << 16)
+                   | ((header[3] as u32) << 24)
+    if magic != ESF_MAGIC { return false }
+
+    let version: u16 = (header[4] as u16) | ((header[5] as u16) << 8)
+    if version < ESF_VERSION { return false }
+
+    let field_count: u16 = (header[8] as u16) | ((header[9] as u16) << 8)
+    if field_count == 0 { return false }
+
+    let total_len: u32 = (header[10] as u32)
+                       | ((header[11] as u32) << 8)
+                       | ((header[12] as u32) << 16)
+                       | ((header[13] as u32) << 24)
+    if total_len < 16 { return false }
+
+    true
+}

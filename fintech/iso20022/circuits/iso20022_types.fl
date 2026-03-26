@@ -1,0 +1,499 @@
+/// ISO 20022 common types — ported from runtime/iso20022/src/types.rs and lib.rs
+/// Wire-format-compatible struct and enum definitions for FPGA/Rust/WASM targets.
+
+@status production
+lex iso20022/types
+
+// ─── Enums ──────────────────────────────────────────────────────────────────
+
+type TransactionStatus = enum {
+    ACSC = 0x01,
+    ACSP = 0x02,
+    PDNG = 0x03,
+    RJCT = 0x04,
+    ACTC = 0x05,
+    ACCP = 0x06,
+}
+
+type ChargeBearer = enum {
+    DEBT = 0x01,
+    CRED = 0x02,
+    SHAR = 0x03,
+    SLEV = 0x04,
+}
+
+type MessageType = enum {
+    Pacs008 = 0x0008,
+    Pacs002 = 0x0002,
+    Camt053 = 0x0053,
+    Camt052 = 0x0052,
+}
+
+type PrivacyTier = enum {
+    Public     = 0x00,
+    Restricted = 0x01,
+    Private    = 0x02,
+    Stealth    = 0x03,
+    Encrypted  = 0x04,
+}
+
+type EsfFieldType = enum {
+    None     = 0x00,
+    String   = 0x01,
+    U8       = 0x02,
+    U16      = 0x03,
+    U32      = 0x04,
+    U64      = 0x05,
+    U128     = 0x06,
+    I64      = 0x07,
+    Bytes    = 0x08,
+    Date     = 0x09,
+    DateTime = 0x0A,
+    Decimal  = 0x0B,
+    Bic      = 0x0C,
+    Iban     = 0x0D,
+    Currency = 0x0E,
+    Enum     = 0x0F,
+}
+
+// ─── Structs ────────────────────────────────────────────────────────────────
+
+type Amount = struct {
+    cents: u64,
+    currency: bytes(3),
+}
+
+type Bic = struct {
+    value: bytes(11),
+    len: u8,
+}
+
+type Iban = struct {
+    value: bytes(34),
+    len: u8,
+}
+
+type PostalAddress = struct {
+    street_name: bytes(70),
+    street_name_len: u8,
+    building_number: bytes(16),
+    building_number_len: u8,
+    post_code: bytes(16),
+    post_code_len: u8,
+    town_name: bytes(35),
+    town_name_len: u8,
+    country: bytes(2),
+}
+
+type ContactDetails = struct {
+    phone_number: bytes(35),
+    phone_number_len: u8,
+    email_address: bytes(256),
+    email_address_len: u8,
+}
+
+type PartyIdentification = struct {
+    name: bytes(140),
+    name_len: u8,
+    postal_address: PostalAddress,
+    contact_details: ContactDetails,
+    has_postal_address: u8,
+    has_contact_details: u8,
+}
+
+type AccountId = struct {
+    tag: u8,
+    iban: Iban,
+    other: bytes(34),
+    other_len: u8,
+}
+
+type FinancialInstitutionId = struct {
+    bic: Bic,
+    has_bic: u8,
+    clearing_system_member_id: bytes(35),
+    clearing_system_member_id_len: u8,
+    name: bytes(140),
+    name_len: u8,
+}
+
+type PaymentId = struct {
+    instruction_id: bytes(35),
+    instruction_id_len: u8,
+    end_to_end_id: bytes(35),
+    end_to_end_id_len: u8,
+    transaction_id: bytes(35),
+    transaction_id_len: u8,
+    uetr: bytes(36),
+    uetr_len: u8,
+}
+
+type RemittanceInfo = struct {
+    unstructured: bytes(140),
+    unstructured_len: u8,
+    structured: StructuredRemittanceInfo,
+    has_structured: u8,
+}
+
+type StructuredRemittanceInfo = struct {
+    creditor_reference: bytes(35),
+    creditor_reference_len: u8,
+    referred_document: ReferredDocument,
+    has_referred_document: u8,
+}
+
+type ReferredDocument = struct {
+    document_type: bytes(35),
+    document_type_len: u8,
+    number: bytes(35),
+    number_len: u8,
+    date: u64,
+    has_date: u8,
+}
+
+// ─── Validation Circuits ────────────────────────────────────────────────────
+
+circuit validate_bic(bic: Bic) -> u8
+    @status production
+    lex iso20022/types
+    @precision C
+    @attested true
+{
+    observe metrics: [bic_validations]
+
+    @invariant {
+        bic.len == 8 || bic.len == 11
+    }
+
+    if bic.len != 8 && bic.len != 11 {
+        return 0
+    }
+
+    let i = 0
+    while i < bic.len {
+        let ch = bic.value[i]
+        let is_upper = ch >= 0x41 && ch <= 0x5A
+        let is_digit = ch >= 0x30 && ch <= 0x39
+        if !is_upper && !is_digit {
+            return 0
+        }
+        i = i + 1
+    }
+
+    1
+}
+
+circuit validate_iban(iban: Iban) -> u8
+    @status production
+    lex iso20022/types
+    @precision C
+    @attested true
+{
+    observe metrics: [iban_validations]
+
+    @invariant {
+        iban.len >= 15 && iban.len <= 34
+    }
+
+    if iban.len < 15 || iban.len > 34 {
+        return 0
+    }
+
+    let country_a = iban.value[0]
+    let country_b = iban.value[1]
+    if country_a < 0x41 || country_a > 0x5A {
+        return 0
+    }
+    if country_b < 0x41 || country_b > 0x5A {
+        return 0
+    }
+
+    let check_a = iban.value[2]
+    let check_b = iban.value[3]
+    if check_a < 0x30 || check_a > 0x39 {
+        return 0
+    }
+    if check_b < 0x30 || check_b > 0x39 {
+        return 0
+    }
+
+    let i = 4
+    while i < iban.len {
+        let ch = iban.value[i]
+        let is_upper = ch >= 0x41 && ch <= 0x5A
+        let is_digit = ch >= 0x30 && ch <= 0x39
+        if !is_upper && !is_digit {
+            return 0
+        }
+        i = i + 1
+    }
+
+    1
+}
+
+circuit validate_amount(amount: Amount) -> u8
+    @status production
+    lex iso20022/types
+    @precision C
+    @attested true
+{
+    observe metrics: [amount_validations]
+
+    if amount.cents == 0 {
+        return 0
+    }
+
+    let c0 = amount.currency[0]
+    let c1 = amount.currency[1]
+    let c2 = amount.currency[2]
+    let all_alpha = c0 >= 0x41 && c0 <= 0x5A
+                 && c1 >= 0x41 && c1 <= 0x5A
+                 && c2 >= 0x41 && c2 <= 0x5A
+    if !all_alpha {
+        return 0
+    }
+
+    1
+}
+
+circuit validate_payment_id(pid: PaymentId) -> u8
+    @status production
+    lex iso20022/types
+    @precision C
+    @attested true
+{
+    observe metrics: [payment_id_validations]
+
+    @invariant {
+        pid.end_to_end_id_len > 0 && pid.end_to_end_id_len <= 35
+    }
+
+    if pid.end_to_end_id_len == 0 || pid.end_to_end_id_len > 35 {
+        return 0
+    }
+    if pid.instruction_id_len > 35 {
+        return 0
+    }
+    if pid.transaction_id_len > 35 {
+        return 0
+    }
+    if pid.uetr_len != 0 && pid.uetr_len != 36 {
+        return 0
+    }
+
+    1
+}
+
+circuit validate_country_code(code: bytes(2)) -> u8
+    @status production
+    lex iso20022/types
+    @precision C
+    @attested true
+{
+    observe metrics: [country_validations]
+
+    let a = code[0]
+    let b = code[1]
+    let valid = a >= 0x41 && a <= 0x5A && b >= 0x41 && b <= 0x5A
+    if valid { 1 } else { 0 }
+}
+
+circuit validate_currency(currency: bytes(3)) -> u8
+    @status production
+    lex iso20022/types
+    @precision C
+    @attested true
+{
+    observe metrics: [currency_validations]
+
+    let a = currency[0]
+    let b = currency[1]
+    let c = currency[2]
+    let valid = a >= 0x41 && a <= 0x5A
+             && b >= 0x41 && b <= 0x5A
+             && c >= 0x41 && c <= 0x5A
+    if valid { 1 } else { 0 }
+}
+
+// ─── Accessor Circuits ──────────────────────────────────────────────────────
+
+circuit amount_to_cents(value: u64, scale: u8) -> u64
+    @status production
+    lex iso20022/types
+    @precision C
+{
+    if scale == 0 { return value * 100 }
+    if scale == 1 { return value * 10 }
+    if scale == 2 { return value }
+    if scale == 3 { return value / 10 }
+    value / 100
+}
+
+circuit amount_from_cents(cents: u64, currency: bytes(3)) -> Amount
+    @status production
+    lex iso20022/types
+    @precision C
+{
+    Amount { cents: cents, currency: currency }
+}
+
+circuit bic_institution_code(bic: Bic) -> bytes(4)
+    @status production
+    lex iso20022/types
+    @precision C
+{
+    let result: bytes(4) = [bic.value[0], bic.value[1], bic.value[2], bic.value[3]]
+    result
+}
+
+circuit bic_country_code(bic: Bic) -> bytes(2)
+    @status production
+    lex iso20022/types
+    @precision C
+{
+    let result: bytes(2) = [bic.value[4], bic.value[5]]
+    result
+}
+
+circuit bic_location_code(bic: Bic) -> bytes(2)
+    @status production
+    lex iso20022/types
+    @precision C
+{
+    let result: bytes(2) = [bic.value[6], bic.value[7]]
+    result
+}
+
+circuit bic_branch_code(bic: Bic) -> bytes(3)
+    @status production
+    lex iso20022/types
+    @precision C
+{
+    if bic.len != 11 {
+        return [0x00, 0x00, 0x00]
+    }
+    let result: bytes(3) = [bic.value[8], bic.value[9], bic.value[10]]
+    result
+}
+
+circuit iban_country_code(iban: Iban) -> bytes(2)
+    @status production
+    lex iso20022/types
+    @precision C
+{
+    let result: bytes(2) = [iban.value[0], iban.value[1]]
+    result
+}
+
+circuit iban_check_digits(iban: Iban) -> bytes(2)
+    @status production
+    lex iso20022/types
+    @precision C
+{
+    let result: bytes(2) = [iban.value[2], iban.value[3]]
+    result
+}
+
+// ─── Lookup Circuits ────────────────────────────────────────────────────────
+
+circuit transaction_status_code(status: u8) -> bytes(4)
+    @status production
+    lex iso20022/types
+    @precision C
+    @attested true
+{
+    observe metrics: [status_lookups]
+
+    if status == 0x01 { return [0x41, 0x43, 0x53, 0x43] }
+    if status == 0x02 { return [0x41, 0x43, 0x53, 0x50] }
+    if status == 0x03 { return [0x50, 0x44, 0x4E, 0x47] }
+    if status == 0x04 { return [0x52, 0x4A, 0x43, 0x54] }
+    if status == 0x05 { return [0x41, 0x43, 0x54, 0x43] }
+    if status == 0x06 { return [0x41, 0x43, 0x43, 0x50] }
+    [0x00, 0x00, 0x00, 0x00]
+}
+
+circuit transaction_status_from_code(code: bytes(4)) -> u8
+    @status production
+    lex iso20022/types
+    @precision C
+    @attested true
+{
+    observe metrics: [status_reverse_lookups]
+
+    if code[0] == 0x41 && code[1] == 0x43 {
+        if code[2] == 0x53 && code[3] == 0x43 { return 0x01 }
+        if code[2] == 0x53 && code[3] == 0x50 { return 0x02 }
+        if code[2] == 0x54 && code[3] == 0x43 { return 0x05 }
+        if code[2] == 0x43 && code[3] == 0x50 { return 0x06 }
+    }
+    if code[0] == 0x50 && code[1] == 0x44 && code[2] == 0x4E && code[3] == 0x47 {
+        return 0x03
+    }
+    if code[0] == 0x52 && code[1] == 0x4A && code[2] == 0x43 && code[3] == 0x54 {
+        return 0x04
+    }
+    0x00
+}
+
+circuit charge_bearer_code(bearer: u8) -> bytes(4)
+    @status production
+    lex iso20022/types
+    @precision C
+    @attested true
+{
+    observe metrics: [bearer_lookups]
+
+    if bearer == 0x01 { return [0x44, 0x45, 0x42, 0x54] }
+    if bearer == 0x02 { return [0x43, 0x52, 0x45, 0x44] }
+    if bearer == 0x03 { return [0x53, 0x48, 0x41, 0x52] }
+    if bearer == 0x04 { return [0x53, 0x4C, 0x45, 0x56] }
+    [0x00, 0x00, 0x00, 0x00]
+}
+
+circuit charge_bearer_from_code(code: bytes(4)) -> u8
+    @status production
+    lex iso20022/types
+    @precision C
+    @attested true
+{
+    observe metrics: [bearer_reverse_lookups]
+
+    if code[0] == 0x44 && code[1] == 0x45 && code[2] == 0x42 && code[3] == 0x54 {
+        return 0x01
+    }
+    if code[0] == 0x43 && code[1] == 0x52 && code[2] == 0x45 && code[3] == 0x44 {
+        return 0x02
+    }
+    if code[0] == 0x53 && code[1] == 0x48 && code[2] == 0x41 && code[3] == 0x52 {
+        return 0x03
+    }
+    if code[0] == 0x53 && code[1] == 0x4C && code[2] == 0x45 && code[3] == 0x56 {
+        return 0x04
+    }
+    0x00
+}
+
+circuit message_type_identifier(msg_type: u16) -> bytes(16)
+    @status production
+    lex iso20022/types
+    @precision C
+{
+    if msg_type == 0x0008 { return "pacs.008.001.08\0" }
+    if msg_type == 0x0002 { return "pacs.002.001.10\0" }
+    if msg_type == 0x0053 { return "camt.053.001.08\0" }
+    if msg_type == 0x0052 { return "camt.052.001.08\0" }
+    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+}
+
+circuit message_type_root_element(msg_type: u16) -> bytes(20)
+    @status production
+    lex iso20022/types
+    @precision C
+{
+    if msg_type == 0x0008 { return "FIToFICstmrCdtTrf\0\0\0" }
+    if msg_type == 0x0002 { return "FIToFIPmtStsRpt\0\0\0\0\0" }
+    if msg_type == 0x0053 { return "BkToCstmrStmt\0\0\0\0\0\0\0" }
+    if msg_type == 0x0052 { return "BkToCstmrAcctRpt\0\0\0\0" }
+    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+}

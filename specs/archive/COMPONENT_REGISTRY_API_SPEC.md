@@ -581,7 +581,7 @@ $ estream marketplace scaffold wire-adapter estream-wire-amqp
 
 ### 6.1 Trait Integration
 
-The `GitHubRegistry` implements the existing `Registry` trait from `crates/estream-escir/src/composition/registry.rs`:
+The `GitHubRegistry` implements the existing `Registry` trait from `crates/estream-flir/src/composition/registry.rs`:
 
 ```rust
 /// GitHub-backed remote component registry.
@@ -703,7 +703,7 @@ Before signing and submitting, the CLI validates:
 3. **Version increment** — Must be higher than any published version
 4. **Schema validation** — All declared `provides` schemas exist in `schemas/`
 5. **Dependency resolution** — All `requires` schemas are available from declared dependencies
-6. **Circuit validation** — All declared circuits parse as valid ESCIR
+6. **Circuit validation** — All declared circuits parse as valid FLIR
 7. **Test vectors** — If `tests/golden/` exists, all test vectors must pass
 8. **File size limits** — Package archive must be < 50 MB (configurable)
 

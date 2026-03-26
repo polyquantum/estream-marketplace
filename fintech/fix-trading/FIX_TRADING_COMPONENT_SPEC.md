@@ -1,6 +1,6 @@
 # FIX Trading Marketplace Component Specification
 
-> SmartCircuit-native FIX protocol adapter expressed as FastLang marketplace components with ESCIR compilation, tiered SKUs, and composite gateway packaging.
+> SmartCircuit-native FIX protocol adapter expressed as FastLang marketplace components with FLIR compilation, tiered SKUs, and composite gateway packaging.
 
 **Status:** Draft  
 **Version:** 1.0.0  
@@ -19,7 +19,7 @@
 6. [FIX Trading Gateway Composite](#6-fix-trading-gateway-composite)
 7. [Marketplace SKUs](#7-marketplace-skus)
 8. [FastLang Circuit Design](#8-fastlang-circuit-design)
-9. [ESCIR Circuit Definitions](#9-escir-circuit-definitions)
+9. [FLIR Circuit Definitions](#9-flir-circuit-definitions)
 10. [Configuration](#10-configuration)
 11. [Performance Targets](#11-performance-targets)
 12. [Testing Strategy](#12-testing-strategy)
@@ -35,7 +35,7 @@ The FIX Trading Marketplace Component provides FIX protocol (4.2/4.4/5.0) integr
 ### 1.1 Design Principles
 
 - **Not a monolithic crate** — decomposed into schema pack, wire adapter, and composite gateway
-- **FastLang-first** — all protocol logic expressed as FastLang circuits, compiled via ESCIR
+- **FastLang-first** — all protocol logic expressed as FastLang circuits, compiled via FLIR
 - **Dual-target** — same circuits run on CPU (Rust/WASM) or FPGA (synthesized Verilog)
 - **PoVC-attested** — every FIX message translation carries witness attestation
 - **Lex-governed** — session management, compliance, and audit under lex governance
@@ -49,8 +49,8 @@ The FIX Trading Marketplace Component provides FIX protocol (4.2/4.4/5.0) integr
 ├──────────────────────┬──────────────────────┬───────────────────────────┤
 │  ISO 20022           │  Industrial Gateway  │  FIX Trading (this spec) │
 │  ──────────────────  │  ──────────────────  │  ─────────────────────── │
-│  ESCIR circuit       │  ESCIR circuits (3)  │  FastLang circuits       │
-│  Rust crate          │  Rust crate          │  ESCIR + Rust crate      │
+│  FLIR circuit       │  FLIR circuits (3)  │  FastLang circuits       │
+│  Rust crate          │  Rust crate          │  FLIR + Rust crate      │
 │  FPGA RTL (19 files) │  FPGA RTL (optional) │  FPGA RTL (Premium SKU)  │
 │  Spec + benchmarks   │  3-tier SKUs         │  3-tier SKUs             │
 │  No FastLang yet     │  FastLang (Modbus)   │  FastLang-first design   │
@@ -103,7 +103,7 @@ The FIX Trading Marketplace Component provides FIX protocol (4.2/4.4/5.0) integr
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
 │  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │               eStream Platform (lex streams, PoVC, ESCIR)        │  │
+│  │               eStream Platform (lex streams, PoVC, FLIR)        │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -225,7 +225,7 @@ data-trading = "^1.0.0"
 
 [component.include]
 fastlang = ["circuits/*.fl"]
-escir = ["circuits/*.escir.yaml"]
+flir = ["circuits/*.flir.yaml"]
 crate = "crates/estream-wire-fix/"
 
 [component.wire_adapter]
@@ -254,7 +254,7 @@ estream-wire-fix = "^1.0.0"
 
 [component.include]
 fastlang = ["circuits/*.fl"]
-escir = ["circuits/*.escir.yaml"]
+flir = ["circuits/*.flir.yaml"]
 ```
 
 ---
@@ -414,18 +414,18 @@ Following the [Industrial Protocol Gateway](./INDUSTRIAL_PROTOCOL_GATEWAY_v0.9.1
 | **Max msg/sec** | 10K | 100K | 1M+ |
 | **Session persistence** | In-memory | Lex state | Lex state + FPGA |
 | **Gap recovery** | Basic (ResendRequest) | Full (+ SequenceReset) | Full + FPGA-accelerated |
-| **FPGA acceleration** | No | No | Yes (ESCIR → Verilog) |
+| **FPGA acceleration** | No | No | Yes (FLIR → Verilog) |
 | **Compliance circuits** | No | Basic (OFAC) | Full (OFAC + position limits + regulatory reporting) |
 | **StreamSight telemetry** | Inline (`observe` verbs) | Full (+ `monitor` alerts) | Full + adaptive levels + custom dashboards |
 | **Support** | Community | Email | Dedicated |
 
-### 7.2 ESCIR Circuit Files
+### 7.2 FLIR Circuit Files
 
-| SKU | ESCIR File | Location |
+| SKU | FLIR File | Location |
 |-----|-----------|----------|
-| Lite | `fix-trading-lite.escir.yaml` | `circuits/marketplace/` |
-| Standard | `fix-trading-standard.escir.yaml` | `circuits/marketplace/` |
-| Premium | `fix-trading-premium.escir.yaml` | `circuits/marketplace/` |
+| Lite | `fix-trading-lite.flir.yaml` | `circuits/marketplace/` |
+| Standard | `fix-trading-standard.flir.yaml` | `circuits/marketplace/` |
+| Premium | `fix-trading-premium.flir.yaml` | `circuits/marketplace/` |
 
 ---
 
@@ -517,7 +517,7 @@ data EStreamFill : app v1 {
 
 ---
 
-## 9. ESCIR Circuit Definitions
+## 9. FLIR Circuit Definitions
 
 ### 9.1 Lite SKU Structure
 
@@ -681,7 +681,7 @@ fix_trading_gateway:
 | Session management | FSM property tests | `crates/estream-wire-fix/src/session/` |
 | Data translation | Round-trip tests | `crates/estream-wire-fix/src/translator/` |
 | Composite gateway | Journey tests | `crates/estream-test/` (`JourneyCategory::Marketplace`) |
-| ESCIR circuits | Differential golden | ESCIR test framework |
+| FLIR circuits | Differential golden | FLIR test framework |
 
 ### 12.2 FIX Compliance Test Vectors
 
@@ -703,9 +703,9 @@ Standard FIX test messages for each MsgType:
 ## 13. Implementation Roadmap
 
 ```
-Phase 1: FastLang Circuits + ESCIR (2 weeks)
+Phase 1: FastLang Circuits + FLIR (2 weeks)
     ├── FastLang: fix_wire_adapter.fl, trading_schemas.fl, fix_trading_gateway.fl
-    ├── ESCIR: fix-trading-lite.escir.yaml
+    ├── FLIR: fix-trading-lite.flir.yaml
     └── Golden tests for all circuits
 
 Phase 2: Rust Crate — estream-wire-fix (3 weeks)
@@ -718,13 +718,13 @@ Phase 2: Rust Crate — estream-wire-fix (3 weeks)
 Phase 3: Composite Gateway + Standard SKU (2 weeks)
     ├── fix-trading-gateway composite wiring
     ├── Compliance circuits (OFAC, position limits)
-    ├── fix-trading-standard.escir.yaml
+    ├── fix-trading-standard.flir.yaml
     └── Journey tests in estream-test
 
 Phase 4: Premium SKU + FPGA (4 weeks)
     ├── FPGA RTL: FIX parser pipeline
     ├── FPGA RTL: session state CAM
-    ├── fix-trading-premium.escir.yaml
+    ├── fix-trading-premium.flir.yaml
     ├── Simulation + benchmarks
     └── Marketplace publish (all 3 SKUs)
 ```
@@ -767,7 +767,7 @@ adapter fix_adapter v1 {
 **Compiler benefits:**
 - Auto-generate `WireAdapter` trait implementations from the declaration
 - Validate bidirectional mappings at compile time (every ingress type has a corresponding data schema)
-- Generate ESCIR with proper session state management annotations
+- Generate FLIR with proper session state management annotations
 - Type-check that ingress/egress functions return the declared data types
 
 ### A.2 `component` Declaration
@@ -805,7 +805,7 @@ component estream_wire_fix v1 {
 **Compiler benefits:**
 - Generate `estream-component.toml` manifests from FastLang source
 - Validate schema provides/requires at compile time against actual circuit signatures
-- Enforce tier limits in ESCIR generation (e.g., lite SKU cannot reference premium-only circuits)
+- Enforce tier limits in FLIR generation (e.g., lite SKU cannot reference premium-only circuits)
 
 ### A.3 `composite` Declaration
 
@@ -826,11 +826,11 @@ composite fix_trading_gateway v1 {
 **Compiler benefits:**
 - Validate that all `install` dependencies are satisfiable
 - Type-check `connect` wiring across component boundaries
-- Generate composite ESCIR from sub-component ESCIR definitions
+- Generate composite FLIR from sub-component FLIR definitions
 
 ### A.4 Recommendation
 
-These three constructs should be evaluated as FastLang language extensions in a future ESCIR SDK version. For this spec, the same semantics are expressed using:
+These three constructs should be evaluated as FastLang language extensions in a future FLIR SDK version. For this spec, the same semantics are expressed using:
 
 - **`adapter`** → multiple `circuit` declarations + `state_machine` for session FSM
 - **`component`** → `estream-component.toml` manifest file

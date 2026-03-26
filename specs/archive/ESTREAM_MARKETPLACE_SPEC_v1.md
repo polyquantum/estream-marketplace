@@ -20,7 +20,7 @@ Chronicle Software proved that open-sourcing high-performance middleware (Queue,
 Chronicle Queue and Chronicle Map are Java libraries that ultimately hit the JVM ceiling: GC pauses, OS scheduling jitter, heap management, and no path to hardware acceleration. eStream transcends this by making queue and map operations SmartCircuit executions that:
 
 1. **Run natively on lex streams and lex state** — persistence, ordering, replication, and witness attestation come from the platform, not from library code
-2. **Are dual-target compiled via ESCIR** — the same circuit definition runs on CPU (Rust/WASM) or FPGA (synthesized Verilog)
+2. **Are dual-target compiled via FLIR** — the same circuit definition runs on CPU (Rust/WASM) or FPGA (synthesized Verilog)
 3. **Achieve orders-of-magnitude speedup on FPGA** — queue append becomes a hardware pipeline (ESF serialize → PRIME signer → lex store write → ack) with deterministic nanosecond latency and zero OS overhead
 
 | Chronicle (OSS) | eStream Native | Execution Model |
@@ -108,7 +108,7 @@ And three pre-existing specifications:
 │  ║                                                              ║           │
 │  ║  ┌─────────────────┐  ┌──────────────────────────────┐      ║           │
 │  ║  │  CPU Target      │  │  FPGA Target                 │      ║           │
-│  ║  │  Rust / WASM     │  │  ESCIR → Verilog → Bitstream │      ║           │
+│  ║  │  Rust / WASM     │  │  FLIR → Verilog → Bitstream │      ║           │
 │  ║  │  (competitive)   │  │  (orders of magnitude faster) │      ║           │
 │  ║  └─────────────────┘  └──────────────────────────────┘      ║           │
 │  ╚══════════════════════════════════════════════════════════════╝           │
@@ -162,7 +162,7 @@ External Protocol                  eStream Platform                      Consume
       │  ┌──────────────────┼──────────────┼───────────────────────┐      │
       │  │  EXECUTION TARGET│              │                       │      │
       │  │  ┌───────────────┴──┐  ┌────────┴────────────────┐     │      │
-      │  │  │ CPU (Rust/WASM)  │  │ FPGA (ESCIR→Verilog)    │     │      │
+      │  │  │ CPU (Rust/WASM)  │  │ FPGA (FLIR→Verilog)    │     │      │
       │  │  │ ~100ns append    │  │ ~10ns append             │     │      │
       │  │  │ ~400μs signed    │  │ ~400ns signed (PRIME)    │     │      │
       │  │  └──────────────────┘  └─────────────────────────┘     │      │
@@ -183,10 +183,10 @@ Phase 1 is fully specified by the upstream specs. Implementation creates:
 | Deliverable | Spec | Crate/Location |
 |-------------|------|----------------|
 | `estream-component.toml` manifest | [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) §2 | Parsed in `estream-cli` |
-| `GitHubRegistry` | [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) §6 | `crates/estream-escir/src/composition/github.rs` |
+| `GitHubRegistry` | [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) §6 | `crates/estream-flir/src/composition/github.rs` |
 | CLI commands | [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) §5 | `crates/estream-cli/src/commands/marketplace.rs` |
 | ML-DSA-87 signing | [COMPONENT_REGISTRY_API_SPEC.md](./COMPONENT_REGISTRY_API_SPEC.md) §4 | `crates/estream-kernel/src/pq/sign.rs` (existing) |
-| ESF schema resolution | [ESF_SCHEMA_COMPOSITION_SPEC.md](../protocol/ESF_SCHEMA_COMPOSITION_SPEC.md) | `crates/estream-escir/src/esf.rs` (extend) |
+| ESF schema resolution | [ESF_SCHEMA_COMPOSITION_SPEC.md](../protocol/ESF_SCHEMA_COMPOSITION_SPEC.md) | `crates/estream-flir/src/esf.rs` (extend) |
 | Package format | [SMARTCIRCUIT_PACKAGE_FORMAT_SPEC.md](./SMARTCIRCUIT_PACKAGE_FORMAT_SPEC.md) | `crates/estream-cli/src/commands/marketplace.rs` |
 
 ### 3.1 Implementation Checklist
@@ -213,7 +213,7 @@ Phase 1 is fully specified by the upstream specs. Implementation creates:
 > The Stream Architecture Spec v0.8.1 defines:
 > - **Typed stream patterns**: event, state, signal, curated, log, media, transaction, mpc_session (§2)
 > - **Growing context pipelines**: Multi-stage widening ESF schemas (§3)
-> - **ESCIR pattern annotations**: stream_pattern, topology, governance, sla (§4)
+> - **FLIR pattern annotations**: stream_pattern, topology, governance, sla (§4)
 > - **Stream operators**: filter, transform, aggregate, throttle, join, materialize, pipeline (§13)
 > - **Audience filters**: Crypto-enforced field visibility with governance auto-generation (§14)
 > - **Adaptive observation**: StreamSight dynamic telemetry L0-L3 (§15)
@@ -770,13 +770,13 @@ Phase 1: Marketplace Infrastructure (3 weeks)
     ├──▶ Phase 2a: WireAdapter trait + estream-wire-mqtt (2 weeks)
     │
     ├──▶ Phase 2b: Queue Stream Circuits + SDK (4 weeks)
-    │       ├── ESCIR circuits: queue-append, queue-compact, queue-replicate
+    │       ├── FLIR circuits: queue-append, queue-compact, queue-replicate
     │       ├── CPU ComputeCircuit implementations
     │       ├── estream-queue SDK crate (thin circuit invocation layer)
     │       └── FPGA synthesis + PRIME signer integration
     │
     ├──▶ Phase 2c: State Map Circuits + SDK (4 weeks)
-    │       ├── ESCIR circuits: map-put, map-cas, map-gc, map-sync
+    │       ├── FLIR circuits: map-put, map-cas, map-gc, map-sync
     │       ├── CPU ComputeCircuit implementations
     │       ├── estream-map SDK crate (direct reads + circuit mutations)
     │       └── FPGA synthesis + ML-KEM hardware integration
@@ -797,14 +797,14 @@ Phase 1: Marketplace Infrastructure (3 weeks)
 
 | Deliverable | Type | Phase | Dependencies |
 |-------------|------|-------|-------------|
-| `circuits/queue/append/` | ESCIR circuit | 2b | Lex streams, PRIME signer |
-| `circuits/queue/compact/` | ESCIR circuit | 2b | Lex streams |
-| `circuits/queue/replicate/` | ESCIR circuit | 2b | VRF Scatter |
+| `circuits/queue/append/` | FLIR circuit | 2b | Lex streams, PRIME signer |
+| `circuits/queue/compact/` | FLIR circuit | 2b | Lex streams |
+| `circuits/queue/replicate/` | FLIR circuit | 2b | VRF Scatter |
 | `crates/estream-queue/` | SDK crate | 2b | `estream-kernel` (ComputeCircuit, LexStream) |
-| `circuits/map/put/` | ESCIR circuit | 2c | Lex state, ML-KEM |
-| `circuits/map/cas/` | ESCIR circuit | 2c | Lex state |
-| `circuits/map/gc/` | ESCIR circuit | 2c | Lex state |
-| `circuits/map/sync/` | ESCIR circuit | 2c | VRF Scatter |
+| `circuits/map/put/` | FLIR circuit | 2c | Lex state, ML-KEM |
+| `circuits/map/cas/` | FLIR circuit | 2c | Lex state |
+| `circuits/map/gc/` | FLIR circuit | 2c | Lex state |
+| `circuits/map/sync/` | FLIR circuit | 2c | VRF Scatter |
 | `crates/estream-map/` | SDK crate | 2c | `estream-kernel` (ComputeCircuit, LexState) |
 | `crates/estream-wire-mqtt/` | Adapter crate | 2a | `estream-kernel` (WireAdapter trait) |
 | `crates/estream-wire-fix/` | Adapter crate | 4 | WireAdapter, `esf-trading` |

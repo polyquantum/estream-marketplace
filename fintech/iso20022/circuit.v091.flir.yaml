@@ -4,9 +4,9 @@
 # Streaming ISO 20022 XML/JSON parser that converts financial messages to
 # eStream Format (ESF) with privacy tier annotations.
 #
-# This is the ESCIR representation of the FPGA parser, enabling:
-#   - Rust code generation for software fallback
-#   - Bit-identical behavior between Rust and FPGA
+# This is the FLIR representation of the FPGA parser, enabling:
+#   - FL code generation for software fallback
+#   - Bit-identical behavior between FL and FPGA
 #   - Single source of truth for parsing logic
 #
 # Related:

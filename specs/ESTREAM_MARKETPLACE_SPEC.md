@@ -113,7 +113,7 @@ Components support **tiered visibility**, controlled by the creator:
 
 ```rust
 pub enum SourceVisibility {
-    Open,          // Full ESCIR source visible to all
+    Open,          // Full FLIR source visible to all
     Interface,     // Only ports, annotations, source hash visible
     Compiled,      // Interface + compiled artifacts (WASM/Verilog)
     LicensedFull,  // Full source visible only to licensees
@@ -131,7 +131,7 @@ pub struct FilteredComponentData {
     pub source_hash: [u8; 32],              // always visible
 
     #[filter(audiences = ["public", "licensee"])]
-    pub escir_source: Filtered<ESCIR>,
+    pub flir_source: Filtered<FLIR>,
 
     #[filter(audiences = ["public", "compiled", "licensee"])]
     pub wasm_artifact: Filtered<AssetId>,
@@ -245,7 +245,7 @@ my-component/
 │   └── *.data.yaml                # data schema definitions
 ├── circuits/
 │   ├── *.fl                       # FastLang circuit definitions
-│   └── *.circuit.yaml             # ESCIR circuit definitions
+│   └── *.circuit.yaml             # FLIR circuit definitions
 ├── src/
 │   └── lib.rs                     # Rust implementation (wire adapters)
 ├── tests/
@@ -784,7 +784,7 @@ Payments happen in real-time, in parallel with execution. Metering runs as a par
 ### 8.5 Cost Estimation
 
 ```rust
-pub fn estimate_cost(circuit: &ESCIR) -> CostEstimate {
+pub fn estimate_cost(circuit: &FLIR) -> CostEstimate {
     let mut total = Fixed64::ZERO;
     for component in circuit.components() {
         total += component.estimated_cost_per_exec();
@@ -1225,7 +1225,7 @@ default_key = "$HOME/.estream/keys/signing-key.pem"
 3. Version increment (higher than any published version)
 4. Schema validation (all `provides` schemas exist)
 5. Dependency resolution (all `requires` available)
-6. Circuit validation (all circuits parse as valid ESCIR)
+6. Circuit validation (all circuits parse as valid FLIR)
 7. Test vectors pass (if `tests/golden/` exists)
 8. File size limit (< 50 MB)
 

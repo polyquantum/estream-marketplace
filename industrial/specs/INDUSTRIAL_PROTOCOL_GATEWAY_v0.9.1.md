@@ -1605,7 +1605,7 @@ pub struct ModbusSlaveSimulator {
 ## Appendix A: Related Specifications
 
 - [Component Marketplace Spec](./MARKETPLACE_SPEC.md)
-- [SmartCircuit Language Spec](../protocol/ESCIR_LANGUAGE_SPEC.md)
+- [SmartCircuit Language Spec](../protocol/FLIR_LANGUAGE_SPEC.md)
 - [Data Schema Spec](../protocol/ESF_SCHEMA_SPEC.md)
 - [StreamSight Spec](../protocol/STREAMSIGHT_SPEC.md)
 - [ISO 20022 Parser Component](../../fpga/rtl/iso20022/COMPONENT_MARKETPLACE.md)

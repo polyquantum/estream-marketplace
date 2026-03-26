@@ -1,0 +1,508 @@
+/// Stream Emitter Circuit
+/// Ports emitter/mod.rs to pure FastLang — value conversion, change detection, alarm evaluation
+
+use industrial_types::*
+use industrial_config::{RegisterConfig, AlarmConfig}
+
+// =============================================================================
+// Emitter Types
+// =============================================================================
+
+type EmitterConfig = struct {
+    gateway_id: bytes(32),
+    emit_on_change_only: bool,
+    change_threshold_x1000: u64,
+    batch_enabled: bool,
+    batch_size: u16,
+    batch_timeout_ms: u32,
+}
+
+type StreamEvent = struct {
+    event_id: u64,
+    device_id: bytes(32),
+    name: bytes(64),
+    value_x1000: i64,
+    unit: bytes(16),
+    quality: Quality,
+    source_timestamp_ns: u64,
+    server_timestamp_ns: u64,
+    topic: bytes(128),
+}
+
+type AlarmEventOutput = struct {
+    alarm_id: bytes(32),
+    name: bytes(64),
+    state: AlarmState,
+    severity: AlarmSeverity,
+    current_value_x1000: i64,
+    threshold_value_x1000: i64,
+    message: bytes(128),
+    timestamp_ns: u64,
+}
+
+// =============================================================================
+// Persistent State
+// =============================================================================
+
+store kv last_values {
+    key: bytes(48),
+    value: i64,
+    @ttl none,
+}
+
+store kv alarm_tracking {
+    key: bytes(32),
+    value: struct {
+        state: AlarmState,
+        active_since_ns: u64,
+        debounce_until_ns: u64,
+    },
+    @ttl none,
+}
+
+store kv event_id_counter {
+    key: bytes(4),
+    value: u64,
+    @ttl none,
+}
+
+store series telemetry_ts {
+    schema: StreamEvent,
+    retention: 90d,
+    merkle_chain: true,
+    lattice_imprint: true,
+}
+
+store series alarm_ts {
+    schema: AlarmEventOutput,
+    retention: 365d,
+    merkle_chain: true,
+    lattice_imprint: true,
+}
+
+// =============================================================================
+// Value Conversion
+// =============================================================================
+
+circuit convert_raw_u16(raw: u16, data_type: DataType) -> RegisterValue
+    @status production
+    lex industrial/emitter/convert_raw
+    @precision B
+{
+    match data_type {
+        DataType::UInt16 => RegisterValue { tag: DataType::UInt16, u16_val: raw, .. },
+        DataType::Int16 => RegisterValue { tag: DataType::Int16, i16_val: raw as i16, .. },
+        DataType::Boolean => RegisterValue { tag: DataType::Boolean, bool_val: raw != 0, .. },
+        _ => RegisterValue { tag: DataType::UInt16, u16_val: raw, .. },
+    }
+}
+
+circuit scale_value(raw: u16, data_type: DataType, scale_x1000: i64, offset_x1000: i64) -> i64
+    @status production
+    lex industrial/emitter/scale_value
+    @precision B
+    observe metrics: [data_type, scale_x1000, offset_x1000]
+{
+    let rv = convert_raw_u16(raw, data_type);
+    let base = register_value_as_f64(rv);
+    let base_x1000 = (base * 1000.0) as i64;
+    (base_x1000 * scale_x1000) / 1_000_000 + offset_x1000
+}
+
+// =============================================================================
+// Change Detection
+// =============================================================================
+
+circuit make_register_key(device_id: bytes(32), address: u16) -> bytes(48)
+    @status production
+    lex industrial/emitter/make_key
+    @precision A
+{
+    concat(device_id, bytes [(address >> 8) as u8, (address & 0xFF) as u8])
+}
+
+circuit detect_change(
+    device_id: bytes(32),
+    address: u16,
+    new_value_x1000: i64,
+    emit_on_change: bool,
+    change_threshold_x1000: u64
+) -> bool
+    @status production
+    lex industrial/emitter/detect_change
+    @precision B
+    observe metrics: [device_id, address]
+{
+    if !emit_on_change {
+        return true;
+    }
+
+    let key = make_register_key(device_id, address);
+    let last = last_values.get(key);
+
+    match last {
+        none => true,
+        some(prev) => {
+            let delta = if new_value_x1000 > prev {
+                (new_value_x1000 - prev) as u64
+            } else {
+                (prev - new_value_x1000) as u64
+            };
+            delta > change_threshold_x1000
+        },
+    }
+}
+
+circuit update_last_value(device_id: bytes(32), address: u16, value_x1000: i64) -> bool
+    @status production
+    lex industrial/emitter/update_last
+    @precision A
+{
+    let key = make_register_key(device_id, address);
+    last_values.put(key, value_x1000);
+    true
+}
+
+// =============================================================================
+// LEX Topic Generation
+// =============================================================================
+
+circuit generate_topic(gateway_id: bytes(32), device_id: bytes(32), name: bytes(64)) -> bytes(128)
+    @status production
+    lex industrial/emitter/generate_topic
+    @precision A
+{
+    concat("lex://estream/sys/industrial/", hex(gateway_id[0..8]), "/device/", device_id, "/", name)
+}
+
+// =============================================================================
+// Event Emission
+// =============================================================================
+
+circuit next_event_id() -> u64
+    @status production
+    lex industrial/emitter/next_event_id
+    @precision A
+{
+    let current = event_id_counter.get("eid") ?? 0;
+    let next = current + 1;
+    event_id_counter.put("eid", next);
+    next
+}
+
+circuit emit_stream_event(
+    gateway_id: bytes(32),
+    device_id: bytes(32),
+    reg: RegisterConfig,
+    raw_value: u16,
+    quality: Quality,
+    source_timestamp_ns: u64,
+    server_timestamp_ns: u64
+) -> option<StreamEvent>
+    @status production
+    lex industrial/emitter/emit_event
+    @precision B
+    observe metrics: [device_id, address, quality]
+{
+    let scaled = scale_value(raw_value, reg.data_type, reg.scale_x1000, reg.offset_x1000);
+
+    let changed = detect_change(
+        device_id,
+        reg.address,
+        scaled,
+        reg.emit_on_change,
+        reg.change_threshold_x1000
+    );
+
+    if !changed {
+        return none;
+    }
+
+    update_last_value(device_id, reg.address, scaled);
+
+    let event = StreamEvent {
+        event_id: next_event_id(),
+        device_id: device_id,
+        name: reg.name,
+        value_x1000: scaled,
+        unit: reg.unit,
+        quality: quality,
+        source_timestamp_ns: source_timestamp_ns,
+        server_timestamp_ns: server_timestamp_ns,
+        topic: generate_topic(gateway_id, device_id, reg.name),
+    };
+
+    telemetry_ts.append(event);
+    some(event)
+}
+
+// =============================================================================
+// Alarm Evaluation — 8 conditions with hysteresis and debounce
+// =============================================================================
+
+circuit evaluate_condition(
+    value_x1000: i64,
+    condition: AlarmCondition,
+    threshold_hi_x1000: i64,
+    threshold_lo_x1000: i64,
+    hysteresis_x1000: u64,
+    currently_active: bool
+) -> bool
+    @status production
+    lex industrial/emitter/eval_condition
+    @precision B
+{
+    let hi = if currently_active {
+        threshold_hi_x1000 - (hysteresis_x1000 as i64)
+    } else {
+        threshold_hi_x1000
+    };
+
+    let lo = if currently_active {
+        threshold_lo_x1000 + (hysteresis_x1000 as i64)
+    } else {
+        threshold_lo_x1000
+    };
+
+    match condition {
+        AlarmCondition::GreaterThan => value_x1000 > hi,
+        AlarmCondition::LessThan => value_x1000 < lo,
+        AlarmCondition::Equal => value_x1000 == threshold_hi_x1000,
+        AlarmCondition::NotEqual => value_x1000 != threshold_hi_x1000,
+        AlarmCondition::GreaterOrEqual => value_x1000 >= hi,
+        AlarmCondition::LessOrEqual => value_x1000 <= lo,
+        AlarmCondition::Between => value_x1000 >= lo && value_x1000 <= hi,
+        AlarmCondition::Outside => value_x1000 < lo || value_x1000 > hi,
+    }
+}
+
+circuit condition_symbol(cond: AlarmCondition) -> bytes(8)
+    @status production
+    lex industrial/emitter/condition_symbol
+    @precision A
+{
+    match cond {
+        AlarmCondition::GreaterThan => ">",
+        AlarmCondition::LessThan => "<",
+        AlarmCondition::Equal => "==",
+        AlarmCondition::NotEqual => "!=",
+        AlarmCondition::GreaterOrEqual => ">=",
+        AlarmCondition::LessOrEqual => "<=",
+        AlarmCondition::Between => "between",
+        AlarmCondition::Outside => "outside",
+    }
+}
+
+circuit evaluate_alarm(
+    alarm: AlarmConfig,
+    value_x1000: i64,
+    timestamp_ns: u64
+) -> option<AlarmEventOutput>
+    @status production
+    lex industrial/emitter/eval_alarm
+    @precision B
+    @attested true
+    observe metrics: [alarm_id, condition, severity]
+{
+    if !alarm.enabled {
+        return none;
+    }
+
+    let tracking = alarm_tracking.get(alarm.alarm_id) ?? {
+        state: AlarmState::Normal,
+        active_since_ns: 0,
+        debounce_until_ns: 0,
+    };
+
+    if timestamp_ns < tracking.debounce_until_ns {
+        return none;
+    }
+
+    let currently_active = tracking.state == AlarmState::Active;
+    let condition_met = evaluate_condition(
+        value_x1000,
+        alarm.condition,
+        alarm.threshold_hi_x1000,
+        alarm.threshold_lo_x1000,
+        alarm.hysteresis_x1000,
+        currently_active
+    );
+
+    let new_state = if condition_met { AlarmState::Active } else { AlarmState::Normal };
+
+    if new_state == tracking.state {
+        return none;
+    }
+
+    let new_debounce = if alarm.debounce_ms > 0 {
+        timestamp_ns + ((alarm.debounce_ms as u64) * 1_000_000)
+    } else {
+        0
+    };
+
+    let new_active_since = if new_state == AlarmState::Active {
+        timestamp_ns
+    } else {
+        0
+    };
+
+    alarm_tracking.put(alarm.alarm_id, {
+        state: new_state,
+        active_since_ns: new_active_since,
+        debounce_until_ns: new_debounce,
+    });
+
+    let threshold = match alarm.condition {
+        AlarmCondition::LessThan => alarm.threshold_lo_x1000,
+        AlarmCondition::LessOrEqual => alarm.threshold_lo_x1000,
+        _ => alarm.threshold_hi_x1000,
+    };
+
+    let message = if new_state == AlarmState::Active {
+        concat(alarm.name, " triggered: ", value_x1000, " ", condition_symbol(alarm.condition), " ", threshold)
+    } else {
+        concat(alarm.name, " cleared")
+    };
+
+    let event = AlarmEventOutput {
+        alarm_id: alarm.alarm_id,
+        name: alarm.name,
+        state: new_state,
+        severity: alarm.severity,
+        current_value_x1000: value_x1000,
+        threshold_value_x1000: threshold,
+        message: message,
+        timestamp_ns: timestamp_ns,
+    };
+
+    alarm_ts.append(event);
+    some(event)
+}
+
+// =============================================================================
+// Batch Processing
+// =============================================================================
+
+circuit process_register_batch(
+    gateway_id: bytes(32),
+    device_id: bytes(32),
+    start_address: u16,
+    raw_values: list<u16>,
+    quality: Quality,
+    registers: list<RegisterConfig>,
+    alarms: list<AlarmConfig>,
+    source_timestamp_ns: u64,
+    server_timestamp_ns: u64
+) -> struct { events: list<StreamEvent>, alarm_events: list<AlarmEventOutput> }
+    @status production
+    lex industrial/emitter/process_batch
+    @precision B
+    observe metrics: [device_id, start_address, quality]
+{
+    let events = list<StreamEvent>::new();
+    let alarm_events = list<AlarmEventOutput>::new();
+
+    let i = 0;
+    while i < raw_values.len() {
+        let address = start_address + (i as u16);
+
+        let j = 0;
+        while j < registers.len() {
+            let reg = registers[j];
+            if reg.device_id == device_id && reg.address == address {
+                let event = emit_stream_event(
+                    gateway_id, device_id, reg, raw_values[i],
+                    quality, source_timestamp_ns, server_timestamp_ns
+                );
+                match event {
+                    some(e) => {
+                        events.push(e);
+
+                        let k = 0;
+                        while k < alarms.len() {
+                            let alarm = alarms[k];
+                            if alarm.register_name == reg.name {
+                                let scaled = scale_value(raw_values[i], reg.data_type, reg.scale_x1000, reg.offset_x1000);
+                                let alarm_event = evaluate_alarm(alarm, scaled, server_timestamp_ns);
+                                match alarm_event {
+                                    some(ae) => alarm_events.push(ae),
+                                    none => {},
+                                }
+                            }
+                            k = k + 1;
+                        }
+                    },
+                    none => {},
+                }
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    { events: events, alarm_events: alarm_events }
+}
+
+// =============================================================================
+// Golden Tests
+// =============================================================================
+
+test golden change_detection_first_value {
+    assert detect_change(0x01, 100, 5000, true, 100) == true;
+}
+
+test golden change_detection_within_threshold {
+    let key = make_register_key(0x01, 200);
+    last_values.put(key, 5000);
+    assert detect_change(0x01, 200, 5050, true, 100) == false;
+}
+
+test golden change_detection_exceeds_threshold {
+    let key = make_register_key(0x01, 300);
+    last_values.put(key, 5000);
+    assert detect_change(0x01, 300, 5200, true, 100) == true;
+}
+
+test golden alarm_greater_than_triggers {
+    alarm_tracking.delete(0x01);
+    let alarm = AlarmConfig {
+        alarm_id: 0x01,
+        register_name: "temperature",
+        name: "High Temp",
+        condition: AlarmCondition::GreaterThan,
+        threshold_hi_x1000: 80000,
+        threshold_lo_x1000: 0,
+        hysteresis_x1000: 0,
+        debounce_ms: 0,
+        severity: AlarmSeverity::Warning,
+        enabled: true,
+    };
+    let result = evaluate_alarm(alarm, 85000, 1000);
+    assert result != none;
+}
+
+test golden alarm_hysteresis_prevents_flutter {
+    alarm_tracking.put(0x02, {
+        state: AlarmState::Active,
+        active_since_ns: 0,
+        debounce_until_ns: 0,
+    });
+    let cond = evaluate_condition(79500, AlarmCondition::GreaterThan, 80000, 0, 1000, true);
+    assert cond == true;
+}
+
+test golden scaling_with_offset {
+    let result = scale_value(250, DataType::UInt16, 100, 5000);
+    assert result == 30000;
+}
+
+test golden all_eight_conditions {
+    assert evaluate_condition(90000, AlarmCondition::GreaterThan, 80000, 0, 0, false) == true;
+    assert evaluate_condition(70000, AlarmCondition::LessThan, 0, 80000, 0, false) == true;
+    assert evaluate_condition(80000, AlarmCondition::Equal, 80000, 0, 0, false) == true;
+    assert evaluate_condition(70000, AlarmCondition::NotEqual, 80000, 0, 0, false) == true;
+    assert evaluate_condition(80000, AlarmCondition::GreaterOrEqual, 80000, 0, 0, false) == true;
+    assert evaluate_condition(80000, AlarmCondition::LessOrEqual, 0, 80000, 0, false) == true;
+    assert evaluate_condition(75000, AlarmCondition::Between, 80000, 70000, 0, false) == true;
+    assert evaluate_condition(90000, AlarmCondition::Outside, 80000, 70000, 0, false) == true;
+}

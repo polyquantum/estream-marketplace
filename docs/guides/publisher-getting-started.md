@@ -227,7 +227,7 @@ estream marketplace test
 This runs:
 
 1. **Manifest validation** — checks all required fields and schema correctness
-2. **Circuit compilation** — compiles `.fl` files to ESCIR
+2. **Circuit compilation** — compiles `.fl` files to FLIR
 3. **Golden test vectors** — runs all `/// test golden` circuits against `tests/golden/` vectors
 4. **Dependency resolution** — verifies all declared dependencies are available
 
@@ -295,14 +295,14 @@ estream domain compile
 
 This produces:
 
-1. **ESCIR bytecode** — position-independent, symbol-stripped, not reverse-engineerable
+1. **FLIR bytecode** — position-independent, symbol-stripped, not reverse-engineerable
 2. **LSP metadata** — for IDE integration (autocompletion, hover docs)
 3. **PoVC attestation** — proof that the compiler faithfully compiled your source
 
 ```
 Compiling @my-org/order-validator v1.0.0...
   ✓ FastLang parse                      12ms
-  ✓ ESCIR codegen                       45ms
+  ✓ FLIR codegen                       45ms
   ✓ Symbol stripping                     3ms
   ✓ PoVC witness generation             89ms
   ✓ Package attestation (ML-DSA-87)     15ms
@@ -316,7 +316,7 @@ Every compiled package includes a PoVC (Proof of Verifiable Computation) witness
 
 - The package was compiled by an authentic eStream compiler
 - The source hash matches the compiled artifact hash
-- The compiler version and ESCIR API version are recorded
+- The compiler version and FLIR API version are recorded
 
 The attestation is signed with ML-DSA-87 by the compiler's PRIME identity. See `registry/package_format.fl` for the `PackageAttestation` type.
 

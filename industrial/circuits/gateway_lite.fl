@@ -1,0 +1,679 @@
+/// Gateway Lite — Industrial Gateway Composite Circuit
+/// Ports gateway/lite.rs to pure FastLang — wires all layers into a single gateway
+/// Free tier: 10 devices, 256 registers, 64 alarms, full StreamSight telemetry
+
+use industrial_types::*
+use industrial_config::*
+use industrial_error::*
+use modbus_protocol::*
+use poll_scheduler::*
+use stream_emitter::*
+use streamsight_bridge::*
+
+// =============================================================================
+// Gateway Limits
+// =============================================================================
+
+const MAX_DEVICES: u16 = 10;
+const MAX_REGISTERS: u16 = 256;
+const MAX_ALARMS: u16 = 64;
+
+// =============================================================================
+// Gateway State
+// =============================================================================
+
+type GatewayState = struct {
+    gateway_id: bytes(32),
+    name: bytes(64),
+    running: bool,
+    start_time_ns: u64,
+    metrics: GatewayMetrics,
+    scheduler_config: SchedulerConfig,
+    emitter_config: EmitterConfig,
+    bridge_config: BridgeConfig,
+}
+
+store kv gateway_state_store {
+    key: bytes(32),
+    value: GatewayState,
+    @ttl none,
+}
+
+store kv device_states {
+    key: bytes(32),
+    value: DeviceState,
+    @ttl none,
+}
+
+// =============================================================================
+// Gateway Lifecycle State Machine
+// =============================================================================
+
+state_machine gateway_lifecycle
+    @status production
+    lex industrial/gateway/lifecycle_sm
+    wal true
+    observe anomaly: {
+        model cortex/industrial/gateway_lifecycle,
+        features: [state, devices_online, alarms_active, avg_latency_us],
+        threshold: 0.85,
+    }
+{
+    state Unconfigured {
+        on Configure => Configured,
+    }
+
+    state Configured {
+        on Start => Starting,
+        on Reconfigure => Configured,
+    }
+
+    state Starting {
+        on AllDevicesConnected => Running,
+        on PartialConnect => Degraded,
+        on ConnectFailed => Error,
+    }
+
+    state Running {
+        on Stop => Stopping,
+        on DeviceLost => Degraded,
+        on FatalError => Error,
+    }
+
+    state Degraded {
+        on DeviceRecovered => Running,
+        on Stop => Stopping,
+        on FatalError => Error,
+    }
+
+    state Stopping {
+        on Stopped => Configured,
+    }
+
+    state Error {
+        on Reset => Configured,
+        on Retry => Starting,
+    }
+
+    verify deadlock_free;
+    verify reachable_all;
+    verify terminal_convergence;
+}
+
+// =============================================================================
+// Configuration & Initialization
+// =============================================================================
+
+circuit validate_gateway_limits(config: GatewayConfig) -> option<IndustrialError>
+    @status production
+    lex industrial/gateway/validate_limits
+    @precision A
+    observe metrics: [device_count, register_count, alarm_count]
+{
+    if config.device_count > MAX_DEVICES {
+        return some(limit_exceeded("devices", MAX_DEVICES as u32, config.device_count as u32));
+    }
+    if config.register_count > MAX_REGISTERS {
+        return some(limit_exceeded("registers", MAX_REGISTERS as u32, config.register_count as u32));
+    }
+    if config.alarm_count > MAX_ALARMS {
+        return some(limit_exceeded("alarms", MAX_ALARMS as u32, config.alarm_count as u32));
+    }
+    none
+}
+
+circuit init_gateway(config: GatewayConfig) -> struct { success: bool, error: option<IndustrialError> }
+    @status production
+    lex industrial/gateway/init
+    @precision B
+    @attested true
+    observe metrics: [gateway_id, device_count, register_count, alarm_count]
+{
+    let limit_err = validate_gateway_limits(config);
+    if limit_err != none {
+        return { success: false, error: limit_err };
+    }
+
+    let validation = validate_gateway_config(config);
+    if !validation.valid {
+        return { success: false, error: some(invalid_config("Validation failed")) };
+    }
+
+    let scheduler_cfg = SchedulerConfig {
+        max_polls_per_second: config.settings.max_polls_per_second,
+        adaptive_enabled: config.settings.adaptive_scheduling,
+        backoff_factor_x1000: config.settings.backoff_factor_x1000,
+        max_backoff_interval_ms: config.settings.max_backoff_interval_ms,
+    };
+
+    let emitter_cfg = EmitterConfig {
+        gateway_id: config.gateway_id,
+        emit_on_change_only: false,
+        change_threshold_x1000: 0,
+        batch_enabled: true,
+        batch_size: config.streamsight.batch_size,
+        batch_timeout_ms: config.streamsight.batch_interval_ms,
+    };
+
+    let bridge_cfg = BridgeConfig {
+        gateway_id: config.gateway_id,
+        namespace: "lex://estream/sys/industrial",
+        buffer_size: 256,
+        batch_size: config.streamsight.batch_size,
+        flush_interval_ms: config.streamsight.batch_interval_ms,
+        severity_filter: config.streamsight.severity_filter,
+        sampling_rate_x1000: config.streamsight.sampling_rate_x1000,
+    };
+
+    let state = GatewayState {
+        gateway_id: config.gateway_id,
+        name: config.name,
+        running: false,
+        start_time_ns: 0,
+        metrics: GatewayMetrics { .. },
+        scheduler_config: scheduler_cfg,
+        emitter_config: emitter_cfg,
+        bridge_config: bridge_cfg,
+    };
+
+    gateway_state_store.put(config.gateway_id, state);
+    save_gateway_config(config);
+
+    { success: true, error: none }
+}
+
+// =============================================================================
+// Device Connection Management
+// =============================================================================
+
+circuit connect_device(
+    gateway_id: bytes(32),
+    device: DeviceConfig
+) -> struct { connected: bool, error: option<IndustrialError> }
+    @status production
+    lex industrial/gateway/connect_device
+    @precision B
+    observe metrics: [gateway_id, device_id]
+{
+    if !device.enabled {
+        device_states.put(device.device_id, DeviceState::Offline);
+        return { connected: false, error: none };
+    }
+
+    let response = tcp_send_receive(
+        device.ip_address,
+        device.port,
+        bytes [],
+        0,
+        device.connect_timeout_ms
+    );
+
+    device_states.put(device.device_id, DeviceState::Online);
+
+    let state = gateway_state_store.get(gateway_id);
+    match state {
+        some(s) => {
+            let m = s.metrics;
+            m.devices_online = m.devices_online + 1;
+            gateway_state_store.put(gateway_id, GatewayState { metrics: m, ..s });
+        },
+        none => {},
+    }
+
+    { connected: true, error: none }
+}
+
+// =============================================================================
+// Start / Stop
+// =============================================================================
+
+circuit start_gateway(
+    gateway_id: bytes(32),
+    now_ns: u64
+) -> struct { success: bool, error: option<IndustrialError> }
+    @status production
+    lex industrial/gateway/start
+    @precision B
+    @attested true
+    observe metrics: [gateway_id]
+{
+    let state = gateway_state_store.get(gateway_id);
+    match state {
+        none => {
+            return { success: false, error: some(gateway_not_running()) };
+        },
+        some(s) => {
+            if s.running {
+                return { success: false, error: some(gateway_already_running()) };
+            }
+
+            let updated = GatewayState {
+                running: true,
+                start_time_ns: now_ns,
+                ..s
+            };
+            gateway_state_store.put(gateway_id, updated);
+
+            { success: true, error: none }
+        },
+    }
+}
+
+circuit stop_gateway(
+    gateway_id: bytes(32)
+) -> struct { success: bool, error: option<IndustrialError> }
+    @status production
+    lex industrial/gateway/stop
+    @precision B
+    @attested true
+    observe metrics: [gateway_id]
+{
+    let state = gateway_state_store.get(gateway_id);
+    match state {
+        none => {
+            return { success: false, error: some(gateway_not_running()) };
+        },
+        some(s) => {
+            if !s.running {
+                return { success: false, error: some(gateway_not_running()) };
+            }
+
+            let updated = GatewayState {
+                running: false,
+                ..s
+            };
+            gateway_state_store.put(gateway_id, updated);
+
+            { success: true, error: none }
+        },
+    }
+}
+
+// =============================================================================
+// Poll Cycle — complete pipeline for a single poll trigger
+// =============================================================================
+
+circuit execute_poll_cycle(
+    gateway_id: bytes(32),
+    trigger: PollTrigger,
+    unit_id: u8,
+    registers: list<RegisterConfig>,
+    alarms: list<AlarmConfig>
+) -> struct {
+    success: bool,
+    latency_us: u32,
+    events: list<StreamEvent>,
+    alarm_events: list<AlarmEventOutput>,
+    lex_events: list<LexEvent>,
+}
+    @status production
+    lex industrial/gateway/poll_cycle
+    @precision B
+    observe metrics: [gateway_id, device_id, poll_id, address, count]
+{
+    let state = gateway_state_store.get(gateway_id) ?? GatewayState { .. };
+
+    let req = ModbusReadRequest {
+        request_id: trigger.sequence_number as u32,
+        register_type: trigger.register_type,
+        address: trigger.address,
+        quantity: trigger.count,
+    };
+
+    let frame = build_read_frame(trigger.device_id, unit_id, req);
+    let send_time_ns = trigger.actual_time_ns;
+
+    let device_config = device_config_store.get(trigger.device_id) ?? default_device_config();
+    let raw_response = tcp_send_receive(
+        device_config.ip_address,
+        device_config.port,
+        frame,
+        12,
+        device_config.response_timeout_ms
+    );
+
+    let recv_time_ns = send_time_ns + 1_000_000;
+    let latency_us = ((recv_time_ns - send_time_ns) / 1000) as u32;
+
+    let parsed = parse_read_response(
+        trigger.device_id,
+        0,
+        req.request_id,
+        raw_response,
+        raw_response.len() as u16,
+        send_time_ns,
+        recv_time_ns
+    );
+
+    let m = state.metrics;
+    m.requests_total = m.requests_total + 1;
+
+    if !parsed.response.success {
+        m.responses_failed = m.responses_failed + 1;
+        gateway_state_store.put(gateway_id, GatewayState { metrics: m, ..state });
+
+        let modbus_lex = process_modbus_event(state.bridge_config, parsed.event);
+        let filtered = process_event(state.bridge_config, modbus_lex);
+
+        return {
+            success: false,
+            latency_us: latency_us,
+            events: [],
+            alarm_events: [],
+            lex_events: if filtered.emitted { [filtered.event] } else { [] },
+        };
+    }
+
+    m.responses_success = m.responses_success + 1;
+    m.avg_latency_us = (m.avg_latency_us * 7 + latency_us) / 8;
+    if latency_us > m.max_latency_us {
+        m.max_latency_us = latency_us;
+    }
+    gateway_state_store.put(gateway_id, GatewayState { metrics: m, ..state });
+
+    let batch_result = process_register_batch(
+        gateway_id,
+        trigger.device_id,
+        trigger.address,
+        parsed.response.values,
+        Quality::Good,
+        registers,
+        alarms,
+        send_time_ns,
+        recv_time_ns
+    );
+
+    let lex_events = list<LexEvent>::new();
+
+    let modbus_lex = process_modbus_event(state.bridge_config, parsed.event);
+    let filtered = process_event(state.bridge_config, modbus_lex);
+    if filtered.emitted {
+        lex_events.push(filtered.event);
+    }
+
+    let i = 0;
+    while i < batch_result.events.len() {
+        let stream_lex = process_stream_event(state.bridge_config, batch_result.events[i]);
+        let sf = process_event(state.bridge_config, stream_lex);
+        if sf.emitted {
+            lex_events.push(sf.event);
+        }
+        i = i + 1;
+    }
+
+    let j = 0;
+    while j < batch_result.alarm_events.len() {
+        let alarm_lex = process_alarm_event(state.bridge_config, batch_result.alarm_events[j]);
+        let af = process_event(state.bridge_config, alarm_lex);
+        if af.emitted {
+            lex_events.push(af.event);
+        }
+        j = j + 1;
+    }
+
+    {
+        success: true,
+        latency_us: latency_us,
+        events: batch_result.events,
+        alarm_events: batch_result.alarm_events,
+        lex_events: lex_events,
+    }
+}
+
+// =============================================================================
+// Health Emission
+// =============================================================================
+
+circuit emit_health(gateway_id: bytes(32), now_ns: u64) -> LexEvent
+    @status production
+    lex industrial/gateway/emit_health
+    @precision B
+    observe metrics: [gateway_id, devices_online, alarms_active]
+{
+    let state = gateway_state_store.get(gateway_id) ?? GatewayState { .. };
+    let config = load_gateway_config(gateway_id);
+
+    let uptime_seconds = if state.start_time_ns > 0 {
+        (now_ns - state.start_time_ns) / 1_000_000_000
+    } else {
+        0
+    };
+
+    let registers_configured = match config {
+        some(c) => c.register_count as u32,
+        none => 0,
+    };
+
+    let health = GatewayHealthEvent {
+        gateway_id: gateway_id,
+        version: "0.22.0",
+        uptime_seconds: uptime_seconds,
+        devices_configured: state.metrics.devices_configured,
+        devices_online: state.metrics.devices_online,
+        registers_configured: registers_configured,
+        alarms_active: state.metrics.alarms_active,
+        requests_total: state.metrics.requests_total,
+        requests_failed: state.metrics.responses_failed,
+        avg_latency_us: state.metrics.avg_latency_us,
+        timestamp_ns: now_ns,
+    };
+
+    process_health_event(state.bridge_config, health)
+}
+
+// =============================================================================
+// Query Circuits
+// =============================================================================
+
+circuit is_gateway_running(gateway_id: bytes(32)) -> bool
+    @status production
+    lex industrial/gateway/is_running
+    @precision A
+{
+    let state = gateway_state_store.get(gateway_id);
+    match state {
+        some(s) => s.running,
+        none => false,
+    }
+}
+
+circuit get_gateway_metrics(gateway_id: bytes(32)) -> GatewayMetrics
+    @status production
+    lex industrial/gateway/get_metrics
+    @precision A
+{
+    let state = gateway_state_store.get(gateway_id);
+    match state {
+        some(s) => s.metrics,
+        none => GatewayMetrics { .. },
+    }
+}
+
+circuit get_device_status(device_id: bytes(32)) -> DeviceState
+    @status production
+    lex industrial/gateway/device_status
+    @precision A
+{
+    device_states.get(device_id) ?? DeviceState::Unknown
+}
+
+// =============================================================================
+// Manual Register Read/Write (outside scheduled polling)
+// =============================================================================
+
+circuit manual_read(
+    gateway_id: bytes(32),
+    device_id: bytes(32),
+    address: u16,
+    count: u16
+) -> struct { success: bool, values: list<u16>, error: option<IndustrialError> }
+    @status production
+    lex industrial/gateway/manual_read
+    @precision B
+    observe metrics: [gateway_id, device_id, address, count]
+{
+    let device = device_config_store.get(device_id);
+    match device {
+        none => {
+            return { success: false, values: [], error: some(device_not_found(device_id)) };
+        },
+        some(d) => {
+            let req = ModbusReadRequest {
+                request_id: 0,
+                register_type: RegisterType::Holding,
+                address: address,
+                quantity: count,
+            };
+            let frame = build_read_frame(device_id, d.unit_id, req);
+            let raw = tcp_send_receive(d.ip_address, d.port, frame, 12, d.response_timeout_ms);
+            let now = 0;
+            let parsed = parse_read_response(device_id, 0, 0, raw, raw.len() as u16, now, now);
+
+            if parsed.response.success {
+                { success: true, values: parsed.response.values, error: none }
+            } else {
+                { success: false, values: [], error: some(modbus_exception(0x03, parsed.response.exception_code)) }
+            }
+        },
+    }
+}
+
+circuit manual_write(
+    gateway_id: bytes(32),
+    device_id: bytes(32),
+    address: u16,
+    value: u16
+) -> struct { success: bool, error: option<IndustrialError> }
+    @status production
+    lex industrial/gateway/manual_write
+    @precision B
+    @attested true
+    observe metrics: [gateway_id, device_id, address]
+{
+    let device = device_config_store.get(device_id);
+    match device {
+        none => {
+            return { success: false, error: some(device_not_found(device_id)) };
+        },
+        some(d) => {
+            let req = ModbusWriteRequest {
+                request_id: 0,
+                register_type: RegisterType::Holding,
+                address: address,
+                values: [value],
+            };
+            let frame = build_write_single_frame(device_id, d.unit_id, req);
+            tcp_send_receive(d.ip_address, d.port, frame, 12, d.response_timeout_ms);
+            { success: true, error: none }
+        },
+    }
+}
+
+// =============================================================================
+// Cloud Circuit Pattern — multi-provider deployment target
+// =============================================================================
+
+cloud gateway_lite_cloud
+    @status production
+    lex industrial/gateway/cloud
+{
+    region auto
+    replicas 1
+    scaling {
+        min: 1,
+        max: 3,
+        metric: avg_latency_us,
+        threshold: 50000,
+    }
+    providers [aws, gcp, azure]
+    entrypoint init_gateway
+}
+
+// =============================================================================
+// Golden Tests
+// =============================================================================
+
+test golden gateway_init_success {
+    let config = GatewayConfig {
+        gateway_id: 0x42,
+        name: "Test Gateway",
+        device_count: 1,
+        register_count: 10,
+        alarm_count: 2,
+        streamsight: default_streamsight_config(),
+        settings: default_gateway_settings(),
+    };
+    let result = init_gateway(config);
+    assert result.success == true;
+    assert result.error == none;
+}
+
+test golden gateway_device_limit_exceeded {
+    let config = GatewayConfig {
+        gateway_id: 0x43,
+        name: "Over Limit",
+        device_count: 11,
+        register_count: 10,
+        alarm_count: 2,
+        streamsight: default_streamsight_config(),
+        settings: default_gateway_settings(),
+    };
+    let result = init_gateway(config);
+    assert result.success == false;
+}
+
+test golden gateway_start_stop {
+    let config = GatewayConfig {
+        gateway_id: 0x44,
+        name: "Start Stop Test",
+        device_count: 1,
+        register_count: 1,
+        alarm_count: 0,
+        streamsight: default_streamsight_config(),
+        settings: default_gateway_settings(),
+    };
+    init_gateway(config);
+
+    let start_result = start_gateway(0x44, 1000000);
+    assert start_result.success == true;
+    assert is_gateway_running(0x44) == true;
+
+    let stop_result = stop_gateway(0x44);
+    assert stop_result.success == true;
+    assert is_gateway_running(0x44) == false;
+}
+
+test golden gateway_double_start_rejected {
+    let config = GatewayConfig {
+        gateway_id: 0x45,
+        name: "Double Start",
+        device_count: 1,
+        register_count: 1,
+        alarm_count: 0,
+        streamsight: default_streamsight_config(),
+        settings: default_gateway_settings(),
+    };
+    init_gateway(config);
+    start_gateway(0x45, 1000000);
+
+    let result = start_gateway(0x45, 2000000);
+    assert result.success == false;
+}
+
+test golden gateway_register_limit_exceeded {
+    let config = GatewayConfig {
+        gateway_id: 0x46,
+        name: "Reg Limit",
+        device_count: 1,
+        register_count: 257,
+        alarm_count: 0,
+        streamsight: default_streamsight_config(),
+        settings: default_gateway_settings(),
+    };
+    let result = init_gateway(config);
+    assert result.success == false;
+}
+
+test golden device_status_unknown_default {
+    assert get_device_status(0xFF) == DeviceState::Unknown;
+}

@@ -7,7 +7,7 @@
 
 ## Overview
 
-FPGA components differ from ESCIR (circuit) components in several ways:
+FPGA components differ from FLIR (circuit) components in several ways:
 - Resource requirements measured in LUTs/BRAM/DSP, not compute/memory/witness
 - Performance measured in throughput/latency, not execution time
 - Artifacts are Verilog/VHDL, not WASM
@@ -21,13 +21,13 @@ This extension defines the additional metadata and marketplace behavior for FPGA
 
 ```rust
 pub enum ComponentType {
-    /// Software circuit (ESCIR → WASM)
+    /// Software circuit (FLIR → WASM)
     Circuit,
     
     /// Hardware accelerator (Verilog/VHDL → Bitstream)
     Fpga,
     
-    /// Hybrid (ESCIR with FPGA acceleration option)
+    /// Hybrid (FLIR with FPGA acceleration option)
     Hybrid,
 }
 ```

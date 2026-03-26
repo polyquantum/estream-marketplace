@@ -1,0 +1,156 @@
+/// ISO 20022 error types — ported from runtime/iso20022/src/error.rs
+/// Wire-format-compatible error enums and classification circuits.
+
+@status production
+lex iso20022/error
+
+// ─── Error Enum (17 variants, matches Rust Error) ───────────────────────────
+
+type Error = enum {
+    XmlSyntax              = 0x01,
+    UnknownElement         = 0x02,
+    SchemaValidation       = 0x03,
+    MissingField           = 0x04,
+    InvalidFieldValue      = 0x05,
+    FieldOverflow          = 0x06,
+    DepthOverflow          = 0x07,
+    TagMismatch            = 0x08,
+    InvalidEncoding        = 0x09,
+    InvalidAmount          = 0x0A,
+    InvalidDate            = 0x0B,
+    InvalidBic             = 0x0C,
+    InvalidIban            = 0x0D,
+    InvalidCurrency        = 0x0E,
+    UnsupportedMessageType = 0x0F,
+    EsfConversion          = 0x10,
+    FpgaError              = 0x11,
+}
+
+// ─── ErrorCode Enum (FPGA-aligned, E3xxx series) ────────────────────────────
+
+type ErrorCode = enum {
+    ParseError      = 0xE301,
+    SchemaError     = 0xE302,
+    FieldError      = 0xE303,
+    ValidationError = 0xE304,
+    ConversionError = 0xE305,
+    HardwareError   = 0xE306,
+}
+
+// ─── Error Category Constants ───────────────────────────────────────────────
+
+type ErrorCategory = enum {
+    Parse      = 0x01,
+    Schema     = 0x02,
+    Field      = 0x03,
+    Validation = 0x04,
+    Conversion = 0x05,
+    Hardware   = 0x06,
+}
+
+// ─── Mapping Circuits ───────────────────────────────────────────────────────
+
+circuit error_to_code(err: u8) -> u16
+    @status production
+    lex iso20022/error
+    @precision A
+    @attested true
+{
+    observe metrics: [error_code]
+
+    if err == 0x01 { return 0xE301 }
+    if err == 0x02 { return 0xE301 }
+    if err == 0x03 { return 0xE302 }
+    if err == 0x04 { return 0xE303 }
+    if err == 0x05 { return 0xE303 }
+    if err == 0x06 { return 0xE303 }
+    if err == 0x07 { return 0xE301 }
+    if err == 0x08 { return 0xE301 }
+    if err == 0x09 { return 0xE301 }
+    if err == 0x0A { return 0xE304 }
+    if err == 0x0B { return 0xE304 }
+    if err == 0x0C { return 0xE304 }
+    if err == 0x0D { return 0xE304 }
+    if err == 0x0E { return 0xE304 }
+    if err == 0x0F { return 0xE302 }
+    if err == 0x10 { return 0xE305 }
+    if err == 0x11 { return 0xE306 }
+
+    0xE302
+}
+
+circuit error_category(code: u16) -> u8
+    @status production
+    lex iso20022/error
+    @precision A
+    @attested true
+{
+    observe metrics: [error_code]
+
+    if code == 0xE301 { return 0x01 }
+    if code == 0xE302 { return 0x02 }
+    if code == 0xE303 { return 0x03 }
+    if code == 0xE304 { return 0x04 }
+    if code == 0xE305 { return 0x05 }
+    if code == 0xE306 { return 0x06 }
+
+    0x00
+}
+
+circuit is_recoverable(code: u16) -> bool
+    @status production
+    lex iso20022/error
+    @precision A
+    @attested true
+{
+    observe metrics: [error_code]
+
+    if code == 0xE301 { return false }
+    if code == 0xE302 { return false }
+    if code == 0xE303 { return true }
+    if code == 0xE304 { return true }
+    if code == 0xE305 { return true }
+    if code == 0xE306 { return false }
+
+    false
+}
+
+// ─── FPGA Error Code Mapping (Rust ErrorCode ↔ FL ErrorCode) ────────────────
+
+circuit fpga_code_to_error_code(fpga: u16) -> u16
+    @status production
+    lex iso20022/error
+    @precision A
+    @attested true
+{
+    observe metrics: [error_code]
+
+    if fpga == 0x3001 { return 0xE301 }
+    if fpga == 0x3002 { return 0xE301 }
+    if fpga == 0x3003 { return 0xE302 }
+    if fpga == 0x3004 { return 0xE303 }
+    if fpga == 0x3005 { return 0xE301 }
+    if fpga == 0x3006 { return 0xE301 }
+    if fpga == 0x3007 { return 0xE301 }
+    if fpga == 0x3008 { return 0xE306 }
+
+    0xE302
+}
+
+circuit error_code_to_fpga(code: u16) -> u16
+    @status production
+    lex iso20022/error
+    @precision A
+    @attested true
+{
+    observe metrics: [error_code]
+
+    if code == 0xE301 { return 0x3001 }
+    if code == 0xE302 { return 0x3003 }
+    if code == 0xE303 { return 0x3004 }
+    if code == 0xE304 { return 0x3003 }
+    if code == 0xE305 { return 0x3003 }
+    if code == 0xE306 { return 0x3008 }
+
+    0x3003
+}

@@ -1,0 +1,446 @@
+/// StreamSight Bridge Circuit
+/// Ports streamsight/mod.rs to pure FastLang — LEX event routing, severity filtering,
+/// probabilistic sampling, batch buffering, cortex anomaly annotations
+
+use industrial_types::*
+use modbus_protocol::ModbusEvent
+use stream_emitter::{StreamEvent, AlarmEventOutput}
+
+// =============================================================================
+// Bridge Types
+// =============================================================================
+
+type BridgeConfig = struct {
+    gateway_id: bytes(32),
+    namespace: bytes(64),
+    buffer_size: u16,
+    batch_size: u16,
+    flush_interval_ms: u32,
+    severity_filter: u8,
+    sampling_rate_x1000: u32,
+}
+
+type Severity = enum u8 {
+    Debug = 0,
+    Info = 1,
+    Warning = 2,
+    Error = 3,
+}
+
+type LexEvent = struct {
+    topic: bytes(128),
+    payload: bytes(512),
+    severity: u8,
+    timestamp_ns: u64,
+    sequence_number: u64,
+}
+
+type BridgeMetrics = struct {
+    events_received: u64,
+    events_emitted: u64,
+    events_filtered: u64,
+    events_sampled_out: u64,
+    batches_sent: u64,
+    bytes_sent: u64,
+}
+
+type TcpEvent = tagged struct {
+    tag: u8,
+    old_state: ConnectionState,
+    new_state: ConnectionState,
+    request_id: u32,
+    bytes_count: u32,
+    latency_us: u32,
+    error_code: u16,
+    message: bytes(64),
+    timestamp_ns: u64,
+}
+
+type GatewayHealthEvent = struct {
+    gateway_id: bytes(32),
+    version: bytes(16),
+    uptime_seconds: u64,
+    devices_configured: u16,
+    devices_online: u16,
+    registers_configured: u32,
+    alarms_active: u16,
+    requests_total: u64,
+    requests_failed: u64,
+    avg_latency_us: u32,
+    timestamp_ns: u64,
+}
+
+// =============================================================================
+// Persistent State
+// =============================================================================
+
+store kv bridge_metrics_store {
+    key: bytes(4),
+    value: BridgeMetrics,
+    @ttl none,
+}
+
+store kv bridge_sequence {
+    key: bytes(4),
+    value: u64,
+    @ttl none,
+}
+
+store kv sampling_seed {
+    key: bytes(4),
+    value: u32,
+    @ttl none,
+}
+
+// =============================================================================
+// Sequence Management
+// =============================================================================
+
+circuit next_sequence() -> u64
+    @status production
+    lex industrial/streamsight/next_seq
+    @precision A
+{
+    let current = bridge_sequence.get("seq") ?? 0;
+    let next = current + 1;
+    bridge_sequence.put("seq", next);
+    next
+}
+
+// =============================================================================
+// Topic Generation
+// =============================================================================
+
+circuit gateway_id_hex(gateway_id: bytes(32)) -> bytes(32)
+    @status production
+    lex industrial/streamsight/gw_hex
+    @precision A
+{
+    hex(gateway_id[0..16])
+}
+
+circuit connection_topic(namespace: bytes(64), gw_hex: bytes(32)) -> bytes(128)
+    @status production
+    lex industrial/streamsight/topic_conn
+    @precision A
+{
+    concat(namespace, "/", gw_hex, "/connection")
+}
+
+circuit modbus_topic(namespace: bytes(64), gw_hex: bytes(32)) -> bytes(128)
+    @status production
+    lex industrial/streamsight/topic_modbus
+    @precision A
+{
+    concat(namespace, "/", gw_hex, "/protocol/modbus")
+}
+
+circuit telemetry_topic(namespace: bytes(64), gw_hex: bytes(32), device_id: bytes(32)) -> bytes(128)
+    @status production
+    lex industrial/streamsight/topic_telemetry
+    @precision A
+{
+    concat(namespace, "/", gw_hex, "/device/", device_id, "/telemetry")
+}
+
+circuit alarm_topic(namespace: bytes(64), gw_hex: bytes(32)) -> bytes(128)
+    @status production
+    lex industrial/streamsight/topic_alarm
+    @precision A
+{
+    concat(namespace, "/", gw_hex, "/alarm")
+}
+
+circuit health_topic(namespace: bytes(64), gw_hex: bytes(32)) -> bytes(128)
+    @status production
+    lex industrial/streamsight/topic_health
+    @precision A
+{
+    concat(namespace, "/", gw_hex, "/health")
+}
+
+// =============================================================================
+// Severity Filtering
+// =============================================================================
+
+circuit severity_passes_filter(severity: Severity, filter: u8) -> bool
+    @status production
+    lex industrial/streamsight/severity_filter
+    @precision A
+{
+    (severity as u8) >= filter
+}
+
+// =============================================================================
+// Probabilistic Sampling (deterministic hash-based for reproducibility)
+// =============================================================================
+
+circuit should_sample(severity: Severity, sampling_rate_x1000: u32, sequence: u64) -> bool
+    @status production
+    lex industrial/streamsight/sampling
+    @precision A
+{
+    if severity != Severity::Debug {
+        return true;
+    }
+    if sampling_rate_x1000 >= 1000 {
+        return true;
+    }
+    let hash = (sequence * 2654435761) & 0xFFFFFFFF;
+    let threshold = (sampling_rate_x1000 as u64) * 4294967;
+    hash < threshold
+}
+
+// =============================================================================
+// Event Processing — route to LEX topics with severity
+// =============================================================================
+
+circuit process_tcp_event(config: BridgeConfig, event: TcpEvent) -> LexEvent
+    @status production
+    lex industrial/streamsight/process_tcp
+    @precision B
+    observe metrics: [tag]
+{
+    let gw_hex = gateway_id_hex(config.gateway_id);
+    let topic = connection_topic(config.namespace, gw_hex);
+
+    let severity = match event.tag {
+        0 => Severity::Info,
+        1 => Severity::Debug,
+        2 => Severity::Debug,
+        3 => Severity::Warning,
+        _ => Severity::Debug,
+    };
+
+    LexEvent {
+        topic: topic,
+        payload: serialize(event),
+        severity: severity as u8,
+        timestamp_ns: event.timestamp_ns,
+        sequence_number: next_sequence(),
+    }
+}
+
+circuit process_modbus_event(config: BridgeConfig, event: ModbusEvent) -> LexEvent
+    @status production
+    lex industrial/streamsight/process_modbus
+    @precision B
+    observe metrics: [tag, device_id]
+{
+    let gw_hex = gateway_id_hex(config.gateway_id);
+    let topic = modbus_topic(config.namespace, gw_hex);
+
+    let severity = match event.tag {
+        0 => Severity::Debug,
+        1 => Severity::Debug,
+        2 => Severity::Warning,
+        _ => Severity::Debug,
+    };
+
+    LexEvent {
+        topic: topic,
+        payload: serialize(event),
+        severity: severity as u8,
+        timestamp_ns: event.timestamp_ns,
+        sequence_number: next_sequence(),
+    }
+}
+
+circuit process_stream_event(config: BridgeConfig, event: StreamEvent) -> LexEvent
+    @status production
+    lex industrial/streamsight/process_stream
+    @precision B
+    observe metrics: [device_id, name, quality]
+{
+    let gw_hex = gateway_id_hex(config.gateway_id);
+    let topic = telemetry_topic(config.namespace, gw_hex, event.device_id);
+
+    LexEvent {
+        topic: topic,
+        payload: serialize(event),
+        severity: Severity::Debug as u8,
+        timestamp_ns: event.server_timestamp_ns,
+        sequence_number: next_sequence(),
+    }
+}
+
+circuit process_alarm_event(config: BridgeConfig, event: AlarmEventOutput) -> LexEvent
+    @status production
+    lex industrial/streamsight/process_alarm
+    @precision B
+    @attested true
+    observe metrics: [alarm_id, state, severity]
+{
+    let gw_hex = gateway_id_hex(config.gateway_id);
+    let topic = alarm_topic(config.namespace, gw_hex);
+
+    let severity = match event.severity {
+        AlarmSeverity::Info => Severity::Info,
+        AlarmSeverity::Warning => Severity::Warning,
+        AlarmSeverity::Critical => Severity::Error,
+    };
+
+    LexEvent {
+        topic: topic,
+        payload: serialize(event),
+        severity: severity as u8,
+        timestamp_ns: event.timestamp_ns,
+        sequence_number: next_sequence(),
+    }
+}
+
+circuit process_health_event(config: BridgeConfig, event: GatewayHealthEvent) -> LexEvent
+    @status production
+    lex industrial/streamsight/process_health
+    @precision B
+    observe metrics: [devices_online, alarms_active, avg_latency_us]
+{
+    let gw_hex = gateway_id_hex(config.gateway_id);
+    let topic = health_topic(config.namespace, gw_hex);
+
+    LexEvent {
+        topic: topic,
+        payload: serialize(event),
+        severity: Severity::Info as u8,
+        timestamp_ns: event.timestamp_ns,
+        sequence_number: next_sequence(),
+    }
+}
+
+// =============================================================================
+// Unified Event Pipeline with filtering, sampling, and metrics
+// =============================================================================
+
+type ProcessResult = struct {
+    emitted: bool,
+    event: LexEvent,
+    reason: bytes(16),
+}
+
+circuit process_event(
+    config: BridgeConfig,
+    lex_event: LexEvent
+) -> ProcessResult
+    @status production
+    lex industrial/streamsight/process_event
+    @precision B
+    observe metrics: [severity, emitted]
+    cortex {
+        model cortex/industrial/telemetry_anomaly,
+        features: [severity, events_received, events_filtered, events_sampled_out],
+        action: annotate,
+    }
+{
+    let metrics = bridge_metrics_store.get("m") ?? BridgeMetrics { .. };
+    metrics.events_received = metrics.events_received + 1;
+
+    let sev = match lex_event.severity {
+        0 => Severity::Debug,
+        1 => Severity::Info,
+        2 => Severity::Warning,
+        3 => Severity::Error,
+        _ => Severity::Debug,
+    };
+
+    if !severity_passes_filter(sev, config.severity_filter) {
+        metrics.events_filtered = metrics.events_filtered + 1;
+        bridge_metrics_store.put("m", metrics);
+        return ProcessResult { emitted: false, event: lex_event, reason: "filtered" };
+    }
+
+    if !should_sample(sev, config.sampling_rate_x1000, lex_event.sequence_number) {
+        metrics.events_sampled_out = metrics.events_sampled_out + 1;
+        bridge_metrics_store.put("m", metrics);
+        return ProcessResult { emitted: false, event: lex_event, reason: "sampled_out" };
+    }
+
+    metrics.events_emitted = metrics.events_emitted + 1;
+    bridge_metrics_store.put("m", metrics);
+    ProcessResult { emitted: true, event: lex_event, reason: "" }
+}
+
+// =============================================================================
+// Batch Buffering
+// =============================================================================
+
+circuit should_flush(buffer_count: u16, batch_size: u16) -> bool
+    @status production
+    lex industrial/streamsight/should_flush
+    @precision A
+{
+    buffer_count >= batch_size
+}
+
+circuit update_flush_metrics(event_count: u16, total_bytes: u64) -> BridgeMetrics
+    @status production
+    lex industrial/streamsight/flush_metrics
+    @precision A
+{
+    let metrics = bridge_metrics_store.get("m") ?? BridgeMetrics { .. };
+    metrics.batches_sent = metrics.batches_sent + 1;
+    metrics.bytes_sent = metrics.bytes_sent + total_bytes;
+    bridge_metrics_store.put("m", metrics);
+    metrics
+}
+
+circuit get_bridge_metrics() -> BridgeMetrics
+    @status production
+    lex industrial/streamsight/get_metrics
+    @precision A
+{
+    bridge_metrics_store.get("m") ?? BridgeMetrics { .. }
+}
+
+// =============================================================================
+// Golden Tests
+// =============================================================================
+
+test golden severity_filtering {
+    assert severity_passes_filter(Severity::Debug, 0) == true;
+    assert severity_passes_filter(Severity::Debug, 1) == false;
+    assert severity_passes_filter(Severity::Warning, 2) == true;
+    assert severity_passes_filter(Severity::Error, 3) == true;
+}
+
+test golden sampling_always_passes_non_debug {
+    assert should_sample(Severity::Info, 500, 1) == true;
+    assert should_sample(Severity::Warning, 0, 1) == true;
+    assert should_sample(Severity::Error, 0, 1) == true;
+}
+
+test golden sampling_full_rate_passes_debug {
+    assert should_sample(Severity::Debug, 1000, 42) == true;
+}
+
+test golden flush_threshold {
+    assert should_flush(31, 32) == false;
+    assert should_flush(32, 32) == true;
+    assert should_flush(33, 32) == true;
+}
+
+test golden health_event_routing {
+    let config = BridgeConfig {
+        gateway_id: 0x01,
+        namespace: "lex://estream/sys/industrial",
+        buffer_size: 256,
+        batch_size: 32,
+        flush_interval_ms: 100,
+        severity_filter: 0,
+        sampling_rate_x1000: 1000,
+    };
+    let health = GatewayHealthEvent {
+        gateway_id: 0x01,
+        version: "0.22.0",
+        uptime_seconds: 3600,
+        devices_configured: 5,
+        devices_online: 4,
+        registers_configured: 100,
+        alarms_active: 1,
+        requests_total: 10000,
+        requests_failed: 10,
+        avg_latency_us: 500,
+        timestamp_ns: 1000000,
+    };
+    let event = process_health_event(config, health);
+    assert event.severity == 1;
+}

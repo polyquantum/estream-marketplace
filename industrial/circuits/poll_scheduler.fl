@@ -1,0 +1,436 @@
+/// Poll Scheduler Circuit
+/// Ports scheduler/mod.rs to pure FastLang — priority scheduling, adaptive backoff, rate limiting
+
+use industrial_types::*
+use industrial_config::RegisterConfig
+
+// =============================================================================
+// Scheduler Types
+// =============================================================================
+
+type SchedulerConfig = struct {
+    max_polls_per_second: u32,
+    adaptive_enabled: bool,
+    backoff_factor_x1000: u32,
+    max_backoff_interval_ms: u32,
+}
+
+type PollItem = struct {
+    poll_id: u32,
+    device_id: bytes(32),
+    name: bytes(64),
+    register_type: RegisterType,
+    address: u16,
+    count: u16,
+    base_interval_ms: u32,
+    current_interval_ms: u32,
+    priority: u8,
+    enabled: bool,
+}
+
+type PollStatus = struct {
+    current_interval_ms: u32,
+    last_poll_ns: u64,
+    next_poll_ns: u64,
+    polls_total: u64,
+    polls_success: u64,
+    polls_failed: u64,
+    avg_latency_us: u32,
+    consecutive_failures: u16,
+}
+
+type PollTrigger = struct {
+    poll_id: u32,
+    device_id: bytes(32),
+    register_type: RegisterType,
+    address: u16,
+    count: u16,
+    sequence_number: u64,
+    scheduled_time_ns: u64,
+    actual_time_ns: u64,
+}
+
+type PollComplete = struct {
+    poll_id: u32,
+    sequence_number: u64,
+    success: bool,
+    latency_us: u32,
+}
+
+type ScheduleEntry = struct {
+    next_time_ns: u64,
+    priority: u8,
+    poll_id: u32,
+}
+
+// =============================================================================
+// Persistent State
+// =============================================================================
+
+store kv poll_items {
+    key: u32,
+    value: PollItem,
+    @ttl none,
+}
+
+store kv poll_status_store {
+    key: u32,
+    value: PollStatus,
+    @ttl none,
+}
+
+store kv scheduler_sequence {
+    key: bytes(4),
+    value: u64,
+    @ttl none,
+}
+
+store kv poll_id_counter {
+    key: bytes(4),
+    value: u32,
+    @ttl none,
+}
+
+// =============================================================================
+// Poll Item Management
+// =============================================================================
+
+circuit next_poll_id() -> u32
+    @status production
+    lex industrial/scheduler/next_poll_id
+    @precision A
+{
+    let current = poll_id_counter.get("pid") ?? 0;
+    let next = current + 1;
+    poll_id_counter.put("pid", next);
+    next
+}
+
+circuit register_to_poll_item(config: RegisterConfig) -> PollItem
+    @status production
+    lex industrial/scheduler/register_to_poll
+    @precision B
+    observe metrics: [device_id, address, priority]
+{
+    PollItem {
+        poll_id: next_poll_id(),
+        device_id: config.device_id,
+        name: config.name,
+        register_type: config.register_type,
+        address: config.address,
+        count: word_count(config.data_type),
+        base_interval_ms: config.poll_interval_ms,
+        current_interval_ms: config.poll_interval_ms,
+        priority: config.priority,
+        enabled: true,
+    }
+}
+
+circuit add_poll(item: PollItem, now_ns: u64) -> bool
+    @status production
+    lex industrial/scheduler/add_poll
+    @precision A
+    observe metrics: [poll_id, device_id, priority]
+{
+    poll_items.put(item.poll_id, item);
+    poll_status_store.put(item.poll_id, PollStatus {
+        current_interval_ms: item.current_interval_ms,
+        last_poll_ns: 0,
+        next_poll_ns: now_ns,
+        polls_total: 0,
+        polls_success: 0,
+        polls_failed: 0,
+        avg_latency_us: 0,
+        consecutive_failures: 0,
+    });
+    true
+}
+
+circuit remove_poll(poll_id: u32) -> bool
+    @status production
+    lex industrial/scheduler/remove_poll
+    @precision A
+{
+    poll_items.delete(poll_id);
+    poll_status_store.delete(poll_id);
+    true
+}
+
+circuit set_poll_enabled(poll_id: u32, enabled: bool) -> bool
+    @status production
+    lex industrial/scheduler/set_enabled
+    @precision A
+{
+    let item = poll_items.get(poll_id);
+    match item {
+        some(i) => {
+            let updated = PollItem { enabled: enabled, ..i };
+            poll_items.put(poll_id, updated);
+            true
+        },
+        none => false,
+    }
+}
+
+// =============================================================================
+// Schedule Entry Comparison (for priority heap)
+// earliest time first, then highest priority
+// =============================================================================
+
+circuit schedule_entry_less_than(a: ScheduleEntry, b: ScheduleEntry) -> bool
+    @status production
+    lex industrial/scheduler/entry_compare
+    @precision A
+{
+    if a.next_time_ns != b.next_time_ns {
+        a.next_time_ns < b.next_time_ns
+    } else {
+        a.priority > b.priority
+    }
+}
+
+// =============================================================================
+// Core Scheduling Logic
+// =============================================================================
+
+circuit should_trigger(entry: ScheduleEntry, now_ns: u64) -> bool
+    @status production
+    lex industrial/scheduler/should_trigger
+    @precision A
+{
+    entry.next_time_ns <= now_ns
+}
+
+circuit rate_limit_ok(last_poll_ns: u64, now_ns: u64, max_polls_per_second: u32) -> bool
+    @status production
+    lex industrial/scheduler/rate_limit
+    @precision A
+{
+    if max_polls_per_second == 0 { return true; }
+    let min_interval_ns = 1_000_000_000 / (max_polls_per_second as u64);
+    (now_ns - last_poll_ns) >= min_interval_ns
+}
+
+circuit create_trigger(item: PollItem, scheduled_ns: u64, actual_ns: u64) -> PollTrigger
+    @status production
+    lex industrial/scheduler/create_trigger
+    @precision B
+    observe metrics: [poll_id, device_id, address]
+{
+    let seq = scheduler_sequence.get("seq") ?? 0;
+    let next_seq = seq + 1;
+    scheduler_sequence.put("seq", next_seq);
+
+    PollTrigger {
+        poll_id: item.poll_id,
+        device_id: item.device_id,
+        register_type: item.register_type,
+        address: item.address,
+        count: item.count,
+        sequence_number: next_seq,
+        scheduled_time_ns: scheduled_ns,
+        actual_time_ns: actual_ns,
+    }
+}
+
+// =============================================================================
+// Adaptive Backoff / Recovery
+// =============================================================================
+
+circuit poll_complete(
+    complete: PollComplete,
+    config: SchedulerConfig
+) -> PollStatus
+    @status production
+    lex industrial/scheduler/poll_complete
+    @precision B
+    observe metrics: [poll_id, success, latency_us, consecutive_failures]
+{
+    let status = poll_status_store.get(complete.poll_id) ?? PollStatus { .. };
+    let item = poll_items.get(complete.poll_id) ?? PollItem { .. };
+
+    let new_total = status.polls_total + 1;
+    let new_success = status.polls_success;
+    let new_failed = status.polls_failed;
+    let new_consecutive = status.consecutive_failures;
+    let new_interval = status.current_interval_ms;
+
+    if complete.success {
+        new_success = new_success + 1;
+        new_consecutive = 0;
+
+        if config.adaptive_enabled {
+            new_interval = item.base_interval_ms;
+        }
+    } else {
+        new_failed = new_failed + 1;
+        new_consecutive = new_consecutive + 1;
+
+        if config.adaptive_enabled {
+            let backed_off = (new_interval as u64) * (config.backoff_factor_x1000 as u64) / 1000;
+            new_interval = min(backed_off as u32, config.max_backoff_interval_ms);
+        }
+    }
+
+    let new_avg_latency = (status.avg_latency_us * 7 + complete.latency_us) / 8;
+
+    let updated_item = PollItem { current_interval_ms: new_interval, ..item };
+    poll_items.put(complete.poll_id, updated_item);
+
+    let new_status = PollStatus {
+        current_interval_ms: new_interval,
+        last_poll_ns: status.last_poll_ns,
+        next_poll_ns: status.last_poll_ns + ((new_interval as u64) * 1_000_000),
+        polls_total: new_total,
+        polls_success: new_success,
+        polls_failed: new_failed,
+        avg_latency_us: new_avg_latency,
+        consecutive_failures: new_consecutive,
+    };
+
+    poll_status_store.put(complete.poll_id, new_status);
+    new_status
+}
+
+circuit reschedule(poll_id: u32, actual_time_ns: u64) -> ScheduleEntry
+    @status production
+    lex industrial/scheduler/reschedule
+    @precision A
+{
+    let item = poll_items.get(poll_id) ?? PollItem { .. };
+    let next_time = actual_time_ns + ((item.current_interval_ms as u64) * 1_000_000);
+
+    let status = poll_status_store.get(poll_id);
+    match status {
+        some(s) => {
+            let updated = PollStatus { last_poll_ns: actual_time_ns, next_poll_ns: next_time, ..s };
+            poll_status_store.put(poll_id, updated);
+        },
+        none => {},
+    }
+
+    ScheduleEntry {
+        next_time_ns: next_time,
+        priority: item.priority,
+        poll_id: poll_id,
+    }
+}
+
+circuit get_poll_status(poll_id: u32) -> option<PollStatus>
+    @status production
+    lex industrial/scheduler/get_status
+    @precision A
+{
+    poll_status_store.get(poll_id)
+}
+
+// =============================================================================
+// Scheduler Lifecycle State Machine
+// =============================================================================
+
+state_machine scheduler_lifecycle
+    @status production
+    lex industrial/scheduler/lifecycle_sm
+    wal true
+    observe anomaly: {
+        model cortex/industrial/scheduler_anomaly,
+        features: [state, polls_per_second, backoff_count],
+        threshold: 0.80,
+    }
+{
+    state Idle {
+        on Start => Running,
+    }
+
+    state Running {
+        on Stop => Stopping,
+        on Error => Degraded,
+    }
+
+    state Degraded {
+        on Recover => Running,
+        on Stop => Stopping,
+    }
+
+    state Stopping {
+        on Stopped => Idle,
+    }
+
+    verify deadlock_free;
+    verify reachable_all;
+    verify terminal_convergence;
+}
+
+// =============================================================================
+// Golden Tests
+// =============================================================================
+
+test golden schedule_entry_ordering {
+    let e1 = ScheduleEntry { next_time_ns: 100, priority: 1, poll_id: 1 };
+    let e2 = ScheduleEntry { next_time_ns: 200, priority: 1, poll_id: 2 };
+    let e3 = ScheduleEntry { next_time_ns: 100, priority: 2, poll_id: 3 };
+
+    assert schedule_entry_less_than(e1, e2) == true;
+    assert schedule_entry_less_than(e3, e1) == true;
+}
+
+test golden adaptive_backoff {
+    let config = SchedulerConfig {
+        max_polls_per_second: 100,
+        adaptive_enabled: true,
+        backoff_factor_x1000: 1500,
+        max_backoff_interval_ms: 60000,
+    };
+    let item = PollItem {
+        poll_id: 99,
+        base_interval_ms: 1000,
+        current_interval_ms: 1000,
+        priority: 1,
+        enabled: true,
+        ..
+    };
+    add_poll(item, 0);
+
+    let result = poll_complete(PollComplete {
+        poll_id: 99,
+        sequence_number: 1,
+        success: false,
+        latency_us: 5000,
+    }, config);
+
+    assert result.consecutive_failures == 1;
+    assert result.current_interval_ms == 1500;
+}
+
+test golden rate_limiting {
+    assert rate_limit_ok(0, 10_000_000, 100) == true;
+    assert rate_limit_ok(0, 5_000_000, 100) == false;
+}
+
+test golden success_resets_interval {
+    let config = SchedulerConfig {
+        max_polls_per_second: 100,
+        adaptive_enabled: true,
+        backoff_factor_x1000: 1500,
+        max_backoff_interval_ms: 60000,
+    };
+    let item = PollItem {
+        poll_id: 100,
+        base_interval_ms: 1000,
+        current_interval_ms: 3000,
+        priority: 1,
+        enabled: true,
+        ..
+    };
+    add_poll(item, 0);
+
+    let result = poll_complete(PollComplete {
+        poll_id: 100,
+        sequence_number: 1,
+        success: true,
+        latency_us: 500,
+    }, config);
+
+    assert result.current_interval_ms == 1000;
+    assert result.consecutive_failures == 0;
+}
