@@ -1,53 +1,55 @@
-// Journey: Modbus Decode to Telemetry DAG
-// Tests the industrial IoT flow: decode register → validate CRC → emit telemetry
+journey modbus_telemetry "Decode Modbus register, validate CRC, emit telemetry reading"
+    @status production
 
-journey "modbus_telemetry" {
-    description "Decode Modbus register, validate CRC, emit telemetry reading"
-    package "polyquantum.industrial"
-    platform ">= 0.12.0"
-
-    import industrial.circuits.modbus_decode {
-        decode_modbus_register, validate_modbus_crc,
-        ModbusRegister, DecodedReading
-    }
-    import industrial.circuits.telemetry_emit { emit_telemetry_point }
-
-    step "create_temperature_register" {
-        let reg = ModbusRegister {
-            device_id: sha3_256("sensor-temp-01")[0:16],
-            register_addr: 40001,
-            raw_value: 2350,
-            data_type_code: 1,
-            scale_factor_x1000: 100,
-            unit_code: 1,
-        }
-        assert reg.register_addr == 40001
-        assert reg.raw_value == 2350
-    }
-
-    step "validate_crc" {
-        let crc_ok = validate_modbus_crc(sha3_256("payload"), 0xA5B3)
-        assert crc_ok == true
-    }
-
-    step "decode_register" {
-        let reading = decode_modbus_register(reg, 1742000000000)
-        assert reading.register_addr == 40001
-        assert reading.decoded_value == 235
-        assert reading.unit_code == 1
-        assert reading.quality_flag == 0
-    }
-
-    step "create_pressure_register" {
-        let pressure_reg = ModbusRegister {
-            device_id: sha3_256("sensor-press-01")[0:16],
-            register_addr: 40010,
-            raw_value: 101325,
-            data_type_code: 2,
-            scale_factor_x1000: 1000,
-            unit_code: 3,
-        }
-        let pressure = decode_modbus_register(pressure_reg, 1742000000000)
-        assert pressure.decoded_value == 101325
-    }
+party sensor_gateway {
+    role: device_gateway
+    key: bytes(2592)
 }
+
+fixture temp_register {
+    device_id: bytes(16) = sha3_256("sensor-temp-01")[0:16]
+    register_addr: 40001
+    raw_value: 2350
+    data_type_code: 1
+    scale_factor_x1000: 100
+    unit_code: 1
+}
+
+fixture pressure_register {
+    device_id: bytes(16) = sha3_256("sensor-press-01")[0:16]
+    register_addr: 40010
+    raw_value: 101325
+    data_type_code: 2
+    scale_factor_x1000: 1000
+    unit_code: 3
+}
+
+step create_temperature_register {
+    actor: sensor_gateway
+    action: create_register(temp_register)
+    expect: result.register_addr == 40001
+    expect: result.raw_value == 2350
+}
+
+step validate_crc {
+    actor: sensor_gateway
+    action: validate_modbus_crc(sha3_256("payload"), 0xA5B3)
+    expect: result == true
+}
+
+step decode_temperature {
+    actor: sensor_gateway
+    action: decode_modbus_register(temp_register, 1742000000000)
+    expect: result.register_addr == 40001
+    expect: result.decoded_value == 235
+    expect: result.unit_code == 1
+    expect: result.quality_flag == 0
+}
+
+step decode_pressure {
+    actor: sensor_gateway
+    action: decode_modbus_register(pressure_register, 1742000000000)
+    expect: result.decoded_value == 101325
+}
+
+observe metrics: [step_count, latency_ms, register_decode_count]

@@ -1,0 +1,30 @@
+journey package_lifecycle "End-to-end package publish lifecycle"
+    @status production
+
+party publisher {
+    role: publisher
+    key: bytes(2592)
+}
+
+party reviewer {
+    role: marketplace_admin
+    key: bytes(2592)
+}
+
+fixture valid_package {
+    package_id: bytes(32) = sha3_256("test-package-v1")
+    name: "test-package"
+    version: 1
+}
+
+step submit_package {
+    actor: publisher
+    action: register_package(valid_package.package_id, valid_package.name, valid_package.version, publisher.key)
+    expect: result != false
+}
+
+step review_and_approve {
+    actor: reviewer
+    action: verify_package_attestation(valid_package.package_id, valid_package.version, publisher.key)
+    expect: result == true
+}

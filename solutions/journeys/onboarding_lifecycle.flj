@@ -1,0 +1,23 @@
+journey onboarding_lifecycle "Customer onboarding and provisioning"
+    @status production
+
+party customer {
+    role: customer
+    id: bytes(32)
+}
+
+party admin {
+    role: solution_admin
+    key: bytes(2592)
+}
+
+fixture solution {
+    solution_id: bytes(32) = sha3_256("enterprise-suite")
+    tier: 2
+}
+
+step provision {
+    actor: admin
+    action: provision_solution(solution.solution_id, customer.id, solution.tier)
+    expect: result != bytes(32)
+}

@@ -1,0 +1,36 @@
+journey metering_lifecycle "Metering session from start to settlement"
+    @status production
+
+party customer {
+    role: customer
+    blinded_id: bytes(32)
+}
+
+party publisher {
+    role: publisher
+    key: bytes(2592)
+}
+
+fixture metering_config {
+    package_id: bytes(32) = sha3_256("metered-package")
+    tier_id: 1
+    rate_micros: 100
+}
+
+step record_usage {
+    actor: customer
+    action: record_meter_reading(metering_config.package_id, customer.blinded_id, 60, 1000000, 0)
+    expect: result == true
+}
+
+step aggregate_hourly {
+    actor: system
+    action: aggregate_hourly(metering_config.package_id, customer.blinded_id, 0, [])
+    expect: result.count > 0
+}
+
+step settle {
+    actor: system
+    action: execute_settlement(metering_config.package_id, publisher.key, customer.blinded_id, bytes(32), 1000, 850, 100, 50)
+    expect: result.settlement_hash != bytes(32)
+}

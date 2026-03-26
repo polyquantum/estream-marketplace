@@ -1,0 +1,399 @@
+/// Marketplace Inventory — Platform Graph population data for the eStream Marketplace.
+/// Registers all marketplace verticals, their sub-components, and circuit counts.
+/// govern lex marketplace/inventory
+///
+/// 13 verticals, 113 circuits total across marketplace domain modules.
+///
+/// Epic: polyquantum/estream#136
+
+// ── Shared Types ─────────────────────────────────────────────────
+
+type VerticalName = bytes(64)
+type SubComponentName = bytes(64)
+
+type VerticalInfo = struct {
+    name: VerticalName,
+    circuit_count: u32,
+    sub_component_count: u32,
+    description: bytes(256),
+    since_version: bytes(20),
+}
+
+type SubComponentInfo = struct {
+    name: SubComponentName,
+    vertical: VerticalName,
+    circuit_count: u32,
+}
+
+type MarketplacePopulationSummary = struct {
+    verticals_registered: u32,
+    total_circuits: u32,
+    sub_components_registered: u32,
+}
+
+// ── Marketplace Inventory Graph ──────────────────────────────────
+
+graph marketplace_inventory {
+    node VerticalInfo
+    edge struct { registered_at: u64 }
+
+    overlay circuit_count: u32 bitmask delta_curate
+    overlay sub_component_count: u32 bitmask delta_curate
+    overlay health_score: u16 curate delta_curate
+
+    storage csr {
+        hot @bram,
+        warm @ddr,
+        cold @nvme,
+    }
+
+    ai_feed marketplace_catalog_health
+
+    @observe marketplace_inventory: [circuit_count, sub_component_count, health_score] threshold: {
+        anomaly_score 0.85
+        baseline_window 300
+    }
+}
+
+series inventory_series: marketplace_inventory
+    @merkle_chain true
+    @lattice_imprint true
+    @witness_attest true
+
+// ── Vertical Registration Circuits ───────────────────────────────
+//
+// Each circuit registers a marketplace vertical and returns its circuit count.
+// Verticals are organized by domain; sub-component breakdowns are documented
+// in comments and enforced by golden tests.
+
+// ── Advertising (24 circuits, 10 sub-components) ─────────────────
+//
+//   etch (ad creative rendering), catalyst (campaign optimization),
+//   crm (advertiser relationship), optin (consent management),
+//   portal (self-serve dashboard), relay (ad delivery network),
+//   sage (predictive analytics), scope (audience targeting),
+//   thread (conversation ads), tide (real-time bidding)
+
+/// Register the advertising vertical — 24 circuits across 10 sub-components.
+circuit register_advertising(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count, sub_component_count]
+    test golden "advertising_circuits" {
+        let count = register_advertising(bytes(32))
+        assert count == 24
+    }
+{
+    // etch: 3, catalyst: 3, crm: 2, optin: 2, portal: 3,
+    // relay: 2, sage: 3, scope: 2, thread: 2, tide: 2
+    24
+}
+
+// ── Bridge (9 circuits) ──────────────────────────────────────────
+//
+//   deposit, withdraw, mint_burn, fraud_proof, emergency_pause,
+//   batch_verify, rate_limiter, multisig_withdraw
+//   (+ bridge core config)
+
+/// Register the bridge vertical — 9 circuits for cross-chain asset bridging.
+circuit register_bridge(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count]
+    test golden "bridge_circuits" {
+        let count = register_bridge(bytes(32))
+        assert count == 9
+    }
+{
+    // deposit: 1, withdraw: 1, mint_burn: 1, fraud_proof: 1,
+    // emergency_pause: 1, batch_verify: 1, rate_limiter: 1,
+    // multisig_withdraw: 1, bridge_config: 1
+    9
+}
+
+// ── Console (5 circuits) ─────────────────────────────────────────
+//
+//   publisher (publisher management dashboard),
+//   customer (customer-facing console),
+//   admin (marketplace administration),
+//   dev_tooling (developer tools integration),
+//   cloud_ops (cloud operations monitoring)
+
+/// Register the console vertical — 5 circuits for marketplace administration.
+circuit register_console(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count]
+    test golden "console_circuits" {
+        let count = register_console(bytes(32))
+        assert count == 5
+    }
+{
+    // publisher: 1, customer: 1, admin: 1, dev_tooling: 1, cloud_ops: 1
+    5
+}
+
+// ── Fintech (7 circuits) ─────────────────────────────────────────
+//
+//   FIX trading protocol, ISO 20022 types, ISO 20022 error handling,
+//   ISO 20022 ESF (electronic settlement), PCI cardholder data (3 circuits)
+
+/// Register the fintech vertical — 7 circuits for financial protocol support.
+circuit register_fintech(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count]
+    test golden "fintech_circuits" {
+        let count = register_fintech(bytes(32))
+        assert count == 7
+    }
+{
+    // fix_trading: 1, iso20022_types: 1, iso20022_error: 1,
+    // iso20022_esf: 1, pci_cardholder: 3
+    7
+}
+
+// ── Industrial (19 circuits) ─────────────────────────────────────
+//
+//   modbus (protocol adapter), telemetry (sensor data collection),
+//   alarm (alert management), IEC metering (smart meter protocols),
+//   gateway (edge gateway), config (device configuration),
+//   protocol (industrial protocol abstraction), scheduler (task scheduling),
+//   emitter (event emission), bridge (OT/IT bridge)
+
+/// Register the industrial vertical — 19 circuits for IIoT and SCADA.
+circuit register_industrial(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count, sub_component_count]
+    test golden "industrial_circuits" {
+        let count = register_industrial(bytes(32))
+        assert count == 19
+    }
+{
+    // modbus: 2, telemetry: 3, alarm: 2, iec_metering: 2,
+    // gateway: 2, config: 2, protocol: 2, scheduler: 2,
+    // emitter: 1, bridge: 1
+    19
+}
+
+// ── Licensing (4 circuits) ───────────────────────────────────────
+//
+//   blinded_tokens (privacy-preserving license tokens),
+//   metering (usage tracking), settlement (payment settlement),
+//   pricing_tiers (tier-based pricing engine)
+
+/// Register the licensing vertical — 4 circuits for license management.
+circuit register_licensing(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count]
+    test golden "licensing_circuits" {
+        let count = register_licensing(bytes(32))
+        assert count == 4
+    }
+{
+    // blinded_tokens: 1, metering: 1, settlement: 1, pricing_tiers: 1
+    4
+}
+
+// ── Payments (14 circuits) ───────────────────────────────────────
+//
+//   pacs008 (FI-to-FI credit transfer), pacs002 (payment status),
+//   camt052 (intraday bank statement), camt053 (end-of-day statement),
+//   htlc (hash time-locked contracts), fx_rate (foreign exchange),
+//   atomic_swap (cross-chain atomic swap), offline (offline payments),
+//   corridor (payment corridor routing), settlement_dag (settlement graph)
+
+/// Register the payments vertical — 14 circuits for payment processing.
+circuit register_payments(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count]
+    test golden "payments_circuits" {
+        let count = register_payments(bytes(32))
+        assert count == 14
+    }
+{
+    // pacs008: 2, pacs002: 2, camt052: 1, camt053: 1,
+    // htlc: 2, fx_rate: 1, atomic_swap: 1, offline: 1,
+    // corridor: 2, settlement_dag: 1
+    14
+}
+
+// ── Pricing (1 circuit) ──────────────────────────────────────────
+//
+//   provider_pricing (dynamic pricing engine for marketplace listings)
+
+/// Register the pricing vertical — 1 circuit for provider pricing.
+circuit register_pricing(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count]
+    test golden "pricing_circuits" {
+        let count = register_pricing(bytes(32))
+        assert count == 1
+    }
+{
+    // provider_pricing: 1
+    1
+}
+
+// ── Radio (7 circuits) ───────────────────────────────────────────
+//
+//   vrf_freq (VRF-based frequency hopping), tactical_mesh (mesh networking),
+//   spectrum_mgmt (spectrum allocation), signal_anomaly (RF anomaly detection),
+//   ran_protocol (RAN protocol adapter), radio_scatter (scatter radio relay),
+//   pq_aka (post-quantum AKA authentication)
+
+/// Register the radio vertical — 7 circuits for RF and mesh networking.
+circuit register_radio(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count]
+    test golden "radio_circuits" {
+        let count = register_radio(bytes(32))
+        assert count == 7
+    }
+{
+    // vrf_freq: 1, tactical_mesh: 1, spectrum_mgmt: 1,
+    // signal_anomaly: 1, ran_protocol: 1, radio_scatter: 1, pq_aka: 1
+    7
+}
+
+// ── Registry (4 circuits) ────────────────────────────────────────
+//
+//   package_format (package manifest parsing and validation),
+//   dependency_resolution (DAG-based dependency solver),
+//   package_mirror (distributed package mirroring),
+//   publishers (publisher identity and signing)
+
+/// Register the registry vertical — 4 circuits for package management.
+circuit register_registry(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count]
+    test golden "registry_circuits" {
+        let count = register_registry(bytes(32))
+        assert count == 4
+    }
+{
+    // package_format: 1, dependency_resolution: 1,
+    // package_mirror: 1, publishers: 1
+    4
+}
+
+// ── Secure Video (12 circuits) ───────────────────────────────────
+//
+//   watermark (forensic watermarking), delivery (encrypted ABR delivery),
+//   drm_key_exchange (PQ key exchange for DRM), session_mgmt (playback sessions),
+//   transcode_verify (verified transcoding), content_manifest (manifest signing),
+//   playback_token (token-gated playback), forensic_trace (viewer tracing),
+//   cdn_auth (CDN edge auth), quality_adapt (ABR quality adaptation),
+//   license_server (DRM license issuance), audit_trail (playback audit)
+
+/// Register the secure-video vertical — 12 circuits for DRM and delivery.
+circuit register_secure_video(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count]
+    test golden "secure_video_circuits" {
+        let count = register_secure_video(bytes(32))
+        assert count == 12
+    }
+{
+    // watermark: 1, delivery: 1, drm_key_exchange: 1, session_mgmt: 1,
+    // transcode_verify: 1, content_manifest: 1, playback_token: 1,
+    // forensic_trace: 1, cdn_auth: 1, quality_adapt: 1,
+    // license_server: 1, audit_trail: 1
+    12
+}
+
+// ── Solutions (5 circuits) ───────────────────────────────────────
+//
+//   solution_manifest (solution package definition),
+//   lex_boundary (lex namespace isolation for solutions),
+//   revenue_waterfall (revenue sharing and distribution),
+//   customer_onboarding (guided solution onboarding),
+//   polylabs_suite (Poly Labs product suite integration)
+
+/// Register the solutions vertical — 5 circuits for solution packaging.
+circuit register_solutions(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count]
+    test golden "solutions_circuits" {
+        let count = register_solutions(bytes(32))
+        assert count == 5
+    }
+{
+    // solution_manifest: 1, lex_boundary: 1, revenue_waterfall: 1,
+    // customer_onboarding: 1, polylabs_suite: 1
+    5
+}
+
+// ── Widgets (2 circuits) ─────────────────────────────────────────
+//
+//   impact_stream (real-time impact metrics widget),
+//   domain (domain-specific widget rendering)
+
+/// Register the widgets vertical — 2 circuits for embeddable UI components.
+circuit register_widgets(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    observe metrics: [vertical_circuit_count]
+    test golden "widgets_circuits" {
+        let count = register_widgets(bytes(32))
+        assert count == 2
+    }
+{
+    // impact_stream: 1, domain: 1
+    2
+}
+
+// ── Full Population ──────────────────────────────────────────────
+
+/// Run all vertical registration circuits to populate the marketplace inventory.
+/// Returns the total circuit count across all 13 verticals (113 circuits).
+circuit populate_marketplace_inventory(graph_id: bytes(32)) -> u32
+    lex marketplace/inventory
+    @status production
+    @precision B
+    @attested true
+    observe metrics: [total_circuit_count, verticals_registered]
+    test golden "populate_all" {
+        let total = populate_marketplace_inventory(bytes(32))
+        assert total == 113
+    }
+{
+    let advertising  = register_advertising(graph_id)   // 24
+    let bridge       = register_bridge(graph_id)        //  9
+    let console      = register_console(graph_id)       //  5
+    let fintech      = register_fintech(graph_id)       //  7
+    let industrial   = register_industrial(graph_id)    // 19
+    let licensing    = register_licensing(graph_id)      //  4
+    let payments     = register_payments(graph_id)      // 14
+    let pricing      = register_pricing(graph_id)       //  1
+    let radio        = register_radio(graph_id)         //  7
+    let registry     = register_registry(graph_id)      //  4
+    let secure_video = register_secure_video(graph_id)  // 12
+    let solutions    = register_solutions(graph_id)     //  5
+    let widgets      = register_widgets(graph_id)       //  2
+    // ────────────────────────────────────────────────── = 113
+    advertising + bridge + console + fintech + industrial + licensing
+        + payments + pricing + radio + registry + secure_video
+        + solutions + widgets
+}

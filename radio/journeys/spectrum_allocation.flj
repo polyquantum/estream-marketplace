@@ -1,49 +1,65 @@
-// Journey: Dynamic Spectrum Allocation
-// Tests the spectrum management flow: validate block → check utilization → interference check → aperture sizing
+journey spectrum_allocation "Validate spectrum block, check utilization, assess interference, compute aperture"
+    @status production
 
-journey "spectrum_allocation" {
-    description "Validate spectrum block, check utilization, assess interference, compute aperture"
-    package "polyquantum.radio"
-    platform ">= 0.12.0"
-
-    import radio.circuits.spectrum_mgmt {
-        validate_spectrum_block, spectrum_utilization_pct,
-        interference_margin_db, should_exclude_band,
-        optimal_aperture_width_mhz
-    }
-
-    step "validate_5g_n78_band" {
-        let valid = validate_spectrum_block(3300000000, 3800000000, 30)
-        assert valid == true
-    }
-
-    step "reject_invalid_band" {
-        let invalid = validate_spectrum_block(5000000000, 3000000000, 30)
-        assert invalid == false
-    }
-
-    step "check_utilization" {
-        let util = spectrum_utilization_pct(500000000, 350000000)
-        assert util == 70
-    }
-
-    step "check_interference_margin" {
-        let margin = interference_margin_db(20, -10, 15)
-        assert margin == 15
-    }
-
-    step "exclude_noisy_band" {
-        let exclude = should_exclude_band(-5, 95, 0)
-        assert exclude == true
-    }
-
-    step "keep_clean_band" {
-        let keep = should_exclude_band(20, 40, 0)
-        assert keep == false
-    }
-
-    step "compute_aperture" {
-        let width = optimal_aperture_width_mhz(10, 20000, 5000)
-        assert width == 750
-    }
+party spectrum_manager {
+    role: operator
+    key: bytes(2592)
 }
+
+fixture n78_band {
+    start_hz: 3300000000
+    end_hz: 3800000000
+    guard_mhz: 30
+    bandwidth_hz: 500000000
+    used_hz: 350000000
+}
+
+fixture interference {
+    snr_db: 20
+    noise_floor_db: -10
+    desired_margin_db: 15
+}
+
+step validate_5g_n78_band {
+    actor: spectrum_manager
+    action: validate_spectrum_block(n78_band.start_hz, n78_band.end_hz, n78_band.guard_mhz)
+    expect: result == true
+}
+
+step reject_invalid_band {
+    actor: spectrum_manager
+    action: validate_spectrum_block(5000000000, 3000000000, 30)
+    expect: result == false
+}
+
+step check_utilization {
+    actor: spectrum_manager
+    action: spectrum_utilization_pct(n78_band.bandwidth_hz, n78_band.used_hz)
+    expect: result == 70
+}
+
+step check_interference_margin {
+    actor: spectrum_manager
+    action: interference_margin_db(interference.snr_db, interference.noise_floor_db, interference.desired_margin_db)
+    expect: result == 15
+}
+
+step exclude_noisy_band {
+    actor: spectrum_manager
+    action: should_exclude_band(-5, 95, 0)
+    expect: result == true
+}
+
+step keep_clean_band {
+    actor: spectrum_manager
+    action: should_exclude_band(20, 40, 0)
+    expect: result == false
+}
+
+step compute_aperture {
+    actor: spectrum_manager
+    action: optimal_aperture_width_mhz(10, 20000, 5000)
+    expect: result == 750
+}
+
+observe metrics: [step_count, latency_ms, spectrum_utilization]

@@ -1,0 +1,18 @@
+journey cloud_deploy "Multi-provider marketplace deployment"
+    @status production
+
+party publisher {
+    role: publisher
+    key: bytes(2592)
+}
+
+fixture component {
+    package_id: bytes(32) = sha3_256("deployable-component")
+    artifact: bytes(1024)
+}
+
+step publish {
+    actor: publisher
+    action: publish_component(component.package_id, component.artifact, publisher.key)
+    expect: result != bytes(32)
+}

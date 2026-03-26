@@ -1,48 +1,53 @@
-// Journey: ISO 20022 Payment Flow
-// Tests the end-to-end pacs.008 credit transfer lifecycle:
-//   parse message → hash → verify attestation
+journey iso20022_payment_flow "Credit transfer via pacs.008: create, hash, and verify"
+    @status production
 
-journey "iso20022_payment_flow" {
-    description "Credit transfer via pacs.008: create, hash, and verify"
-    package "polyquantum.fintech"
-    platform ">= 0.12.0"
-
-    import fintech.iso20022.circuits.pacs008 { pacs008_hash }
-    import fintech.iso20022.circuits.types { Amount, PaymentId }
-
-    step "create_pacs008_message" {
-        let msg = Pacs008Data {
-            msg_type: 0x0008,
-            message_id: sha3_256("MSG-2026-001"),
-            creation_timestamp: 1742000000,
-            num_transactions: 1,
-            total_settlement_cents: 100000,
-            settlement_method: 1,
-            instruction_id: sha3_256("INSTR-001"),
-            end_to_end_id: sha3_256("E2E-001"),
-            amount_cents: 100000,
-            currency: "EUR",
-            charge_bearer: 0,
-            debtor_name: "Acme Corp",
-            debtor_account: "DE89370400440532013000",
-            debtor_agent_bic: "COBADEFFXXX",
-            creditor_name: "Widget Inc",
-            creditor_account: "GB29NWBK60161331926819",
-            creditor_agent_bic: "NWBKGB2LXXX",
-            remittance_info: "Invoice 2026-Q1-42",
-        }
-        assert msg.msg_type == 0x0008
-        assert msg.num_transactions == 1
-    }
-
-    step "hash_and_attest" {
-        let hash = pacs008_hash(msg)
-        assert hash != 0
-        assert len(hash) == 32
-    }
-
-    step "verify_deterministic" {
-        let hash2 = pacs008_hash(msg)
-        assert hash == hash2
-    }
+party debtor {
+    role: payer
+    name: "Acme Corp"
+    account: "DE89370400440532013000"
+    agent_bic: "COBADEFFXXX"
 }
+
+party creditor {
+    role: payee
+    name: "Widget Inc"
+    account: "GB29NWBK60161331926819"
+    agent_bic: "NWBKGB2LXXX"
+}
+
+fixture credit_transfer {
+    msg_type: 0x0008
+    message_id: bytes(32) = sha3_256("MSG-2026-001")
+    creation_timestamp: 1742000000
+    num_transactions: 1
+    total_settlement_cents: 100000
+    settlement_method: 1
+    instruction_id: bytes(32) = sha3_256("INSTR-001")
+    end_to_end_id: bytes(32) = sha3_256("E2E-001")
+    amount_cents: 100000
+    currency: "EUR"
+    charge_bearer: 0
+    remittance_info: "Invoice 2026-Q1-42"
+}
+
+step create_pacs008_message {
+    actor: debtor
+    action: create_pacs008(credit_transfer, debtor, creditor)
+    expect: result.msg_type == 0x0008
+    expect: result.num_transactions == 1
+}
+
+step hash_and_attest {
+    actor: system
+    action: pacs008_hash(result)
+    expect: result != 0
+    expect: len(result) == 32
+}
+
+step verify_deterministic {
+    actor: system
+    action: pacs008_hash(credit_transfer)
+    expect: result == hash
+}
+
+observe metrics: [step_count, latency_ms, hash_time_us]

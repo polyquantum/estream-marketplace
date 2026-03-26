@@ -1,41 +1,39 @@
-// Journey: FIX Trading Compliance Gate
-// Tests the compliance check and order routing flow:
-//   create order → compliance check → route if cleared
+journey fix_trading_compliance "Order passes compliance check and gets routed to lex stream"
+    @status production
 
-journey "fix_trading_compliance" {
-    description "Order passes compliance check and gets routed to lex stream"
-    package "polyquantum.fintech"
-    platform ">= 0.12.0"
-
-    import fintech.fix-trading.fix_trading_gateway { compliance_check, order_route }
-    import fintech.fix-trading.trading_schemas { EStreamOrder }
-
-    setup {
-        let pk = test_keygen(1568)
-    }
-
-    step "create_order" {
-        let order = EStreamOrder {
-            order_id: sha3_256("ORD-2026-001"),
-            instrument: sha3_256("AAPL"),
-            side: 0,
-            quantity: 100,
-            price: 17500,
-            order_type: 0,
-            client_order_id: sha3_256("CLT-001"),
-        }
-        assert order.quantity == 100
-    }
-
-    step "run_compliance_check" {
-        let result = compliance_check(order, pk)
-        assert result.cleared == true
-        assert result.risk_score != 0
-    }
-
-    step "route_cleared_order" {
-        let route_hash = order_route(order, result, pk)
-        assert route_hash != 0
-        assert len(route_hash) == 32
-    }
+party trader {
+    role: trader
+    key: bytes(1568)
 }
+
+fixture order {
+    order_id: bytes(32) = sha3_256("ORD-2026-001")
+    instrument: bytes(32) = sha3_256("AAPL")
+    side: 0
+    quantity: 100
+    price: 17500
+    order_type: 0
+    client_order_id: bytes(32) = sha3_256("CLT-001")
+}
+
+step create_order {
+    actor: trader
+    action: create_order(order)
+    expect: result.quantity == 100
+}
+
+step run_compliance_check {
+    actor: system
+    action: compliance_check(order, trader.key)
+    expect: result.cleared == true
+    expect: result.risk_score != 0
+}
+
+step route_cleared_order {
+    actor: system
+    action: order_route(order, result, trader.key)
+    expect: result != 0
+    expect: len(result) == 32
+}
+
+observe metrics: [step_count, latency_ms, compliance_check_time_us]

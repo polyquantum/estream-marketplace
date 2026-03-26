@@ -1,66 +1,80 @@
-// Journey: Forensic Watermark Embed and Verify
-// Tests the SVD watermark lifecycle: seed generation → embedding → quality validation → extraction confidence
+journey watermark_verify "Generate trace seed, compute embedding, validate quality, check extraction confidence"
+    @status production
 
-journey "watermark_verify" {
-    description "Generate trace seed, compute embedding, validate quality, check extraction confidence"
-    package "polyquantum.secure-video"
-    platform ">= 0.12.0"
-
-    import secure-video.circuits.watermark {
-        generate_trace_seed, compute_embedding_decision,
-        select_embedding_points_per_frame, validate_embedding_quality,
-        codec_max_delta, extraction_confidence,
-        minimum_frames_for_attribution, collusion_resistance_threshold
-    }
-
-    step "generate_viewer_trace_seed" {
-        let seed = generate_trace_seed(
-            sha3_256("viewer-001"),
-            sha3_256("session-abc"),
-            sha3_256("master-key-hash")
-        )
-        assert len(seed) == 32
-        assert seed != 0
-    }
-
-    step "compute_embedding_for_frame" {
-        let decision = compute_embedding_decision(seed, 100, 42, 128, 3)
-        assert decision >= 0
-    }
-
-    step "validate_embedding_within_delta" {
-        let ok = validate_embedding_quality(128, 130, 3)
-        assert ok == true
-    }
-
-    step "reject_excessive_delta" {
-        let bad = validate_embedding_quality(128, 140, 3)
-        assert bad == false
-    }
-
-    step "check_codec_max_delta" {
-        let delta = codec_max_delta(0, 0)
-        assert delta == 3
-    }
-
-    step "select_embedding_density_standard" {
-        let count = select_embedding_points_per_frame(100, 8100, 2, seed)
-        assert count == 1
-    }
-
-    step "compute_extraction_confidence" {
-        let conf = extraction_confidence(500, 600, 450)
-        assert conf > 0
-        assert conf <= 100
-    }
-
-    step "check_minimum_frames_high_density" {
-        let frames = minimum_frames_for_attribution(3)
-        assert frames == 30
-    }
-
-    step "check_collusion_resistance" {
-        let threshold = collusion_resistance_threshold(100, 3)
-        assert threshold == 32
-    }
+party content_owner {
+    role: publisher
+    key: bytes(2592)
 }
+
+fixture viewer_session {
+    viewer_id: bytes(32) = sha3_256("viewer-001")
+    session_id: bytes(32) = sha3_256("session-abc")
+    master_key_hash: bytes(32) = sha3_256("master-key-hash")
+}
+
+fixture embedding_params {
+    original_value: 128
+    codec_id: 0
+    profile_id: 0
+    density_tier: 2
+    frame_count: 100
+    width: 8100
+}
+
+step generate_viewer_trace_seed {
+    actor: content_owner
+    action: generate_trace_seed(viewer_session.viewer_id, viewer_session.session_id, viewer_session.master_key_hash)
+    expect: len(result) == 32
+    expect: result != 0
+}
+
+step compute_embedding_for_frame {
+    actor: content_owner
+    action: compute_embedding_decision(result, 100, 42, 128, 3)
+    expect: result >= 0
+}
+
+step validate_embedding_within_delta {
+    actor: content_owner
+    action: validate_embedding_quality(128, 130, 3)
+    expect: result == true
+}
+
+step reject_excessive_delta {
+    actor: content_owner
+    action: validate_embedding_quality(128, 140, 3)
+    expect: result == false
+}
+
+step check_codec_max_delta {
+    actor: content_owner
+    action: codec_max_delta(embedding_params.codec_id, embedding_params.profile_id)
+    expect: result == 3
+}
+
+step select_embedding_density_standard {
+    actor: content_owner
+    action: select_embedding_points_per_frame(embedding_params.frame_count, embedding_params.width, embedding_params.density_tier, seed)
+    expect: result == 1
+}
+
+step compute_extraction_confidence {
+    actor: content_owner
+    action: extraction_confidence(500, 600, 450)
+    expect: result > 0
+    expect: result <= 100
+}
+
+step check_minimum_frames_high_density {
+    actor: content_owner
+    action: minimum_frames_for_attribution(3)
+    expect: result == 30
+}
+
+step check_collusion_resistance {
+    actor: content_owner
+    action: collusion_resistance_threshold(100, 3)
+    expect: result == 32
+}
+
+observe metrics: [step_count, latency_ms, embedding_quality]
