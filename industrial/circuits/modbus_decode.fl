@@ -1,8 +1,6 @@
 /// Spec: specs/verticals/INDUSTRIAL_SPEC.md
 /// MODBUS Register Decode Circuit (Track H — Industrial Port)
 /// Decode raw MODBUS register values to typed telemetry readings
-/// @rust_only — circuit logic lives in Rust; .fl defines the contract only
-
 type ModbusRegister = struct {
     device_id: bytes(16),
     register_addr: u32,

@@ -63,7 +63,7 @@ data ContentNode : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field content_id
         proof_system groth16
     }

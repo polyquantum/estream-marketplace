@@ -1,8 +1,6 @@
 /// Spec: specs/verticals/INDUSTRIAL_SPEC.md
 /// Telemetry Emission Circuit (Track H — Industrial Port)
 /// Stream telemetry data to StreamSight topics
-/// @rust_only — circuit logic lives in Rust; .fl defines the contract only
-
 type TelemetryPoint = struct {
     device_id: bytes(16),
     register_addr: u32,

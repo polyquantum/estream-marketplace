@@ -54,7 +54,7 @@ type TranscodeChain = struct {
 //   4=Conform, 5=QCReview, 6=Watermark, 7=Package
 
 circuit validate_render_node(
-    status production
+    @status production
     prime_identity: bytes(32),
     boot_hash: bytes(32),
     software_hash: bytes(32),
@@ -72,7 +72,7 @@ circuit validate_render_node(
 }
 
 circuit validate_rendered_frame(
-    status production
+    @status production
     source_hash: bytes(32),
     output_hash: bytes(32),
     node_id: bytes(32),
@@ -90,7 +90,7 @@ circuit validate_rendered_frame(
 }
 
 circuit validate_transcode_chain(
-    status production
+    @status production
     step_count: u8,
     master_hash: bytes(32),
     deliverable_hash: bytes(32)
@@ -107,7 +107,7 @@ circuit validate_transcode_chain(
 }
 
 circuit render_farm_health(
-    status production
+    @status production
     total_nodes: u32,
     healthy_nodes: u32,
     min_health_pct: u8

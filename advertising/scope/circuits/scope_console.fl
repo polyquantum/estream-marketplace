@@ -57,7 +57,7 @@ data PartnerConfig : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field partner_id
         proof_system groth16
     }
@@ -94,7 +94,7 @@ data LeadPipelineView : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field partner_id
         proof_system groth16
     }
@@ -138,7 +138,7 @@ data LeadQualityScore : circuit v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field lead_id
         proof_system groth16
     }

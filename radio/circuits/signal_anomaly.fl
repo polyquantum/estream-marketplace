@@ -53,7 +53,7 @@ type LiModelUpdate = struct {
 //   3=Shift_Aperture, 4=Emergency_Silent, 5=Alert_Command
 
 circuit detect_jamming(
-    status production
+    @status production
     measured_dbm: i16,
     baseline_dbm: i16,
     noise_stddev_x100: u16,
@@ -68,7 +68,7 @@ circuit detect_jamming(
 }
 
 circuit detect_spoofing(
-    status production
+    @status production
     timing_delta_ns: u64,
     max_expected_jitter_ns: u64,
     signal_consistency: u8
@@ -83,7 +83,7 @@ circuit detect_spoofing(
 }
 
 circuit anomaly_severity(
-    status production
+    @status production
     confidence_pct: u8,
     corroborating_nodes: u8,
     delta_db: i16
@@ -103,7 +103,7 @@ circuit anomaly_severity(
 }
 
 circuit should_canary(
-    status production
+    @status production
     severity: u8,
     classification_level: u8
 ) -> bool
@@ -117,7 +117,7 @@ circuit should_canary(
 }
 
 circuit validate_li_update(
-    status production
+    @status production
     model_hash: bytes(32),
     sample_count: u32,
     povc_witness: bytes(8),

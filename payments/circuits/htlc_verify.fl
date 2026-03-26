@@ -1,8 +1,6 @@
 /// Spec: specs/verticals/PAYMENTS_SPEC.md
 /// HTLC Verification Circuit (Track H — Cross-Border Port)
 /// Hashlock verification: SHA3-256(preimage) == hashlock
-/// @rust_only — circuit logic lives in Rust; .fl defines the contract only
-
 type HtlcParams = struct {
     swap_id: bytes(32),
     hashlock_hash: bytes(32),

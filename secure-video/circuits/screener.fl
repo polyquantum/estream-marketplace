@@ -29,7 +29,7 @@ type ScreenerPolicy = struct {
 //   5=PGA, 6=HFPA, 7=CriticsChoice, 8=NYFCC, 9=LAFCA, 10=Studio_Internal
 
 circuit validate_screener_session(
-    status production
+    @status production
     voter_id: bytes(32),
     content_id: bytes(32),
     device_hash: bytes(32),

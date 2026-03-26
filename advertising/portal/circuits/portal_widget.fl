@@ -125,7 +125,7 @@ data RbacCheck : app v1 {
     @observe events [granted, widget_type]
     @observe metrics [granted, widget_type] level adaptive
     @attest {
-        attested true
+        @attested true
         anchor_field check_id
     }
 

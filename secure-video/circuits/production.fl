@@ -38,7 +38,7 @@ type ProductionAsset = struct {
 // Access levels: 0=Director, 1=Producer, 2=Department, 3=Crew, 4=External
 
 circuit validate_dailies_transfer(
-    status production
+    @status production
     camera_id: bytes(32),
     dit_station_id: bytes(32),
     frame_count: u32,
@@ -57,7 +57,7 @@ circuit validate_dailies_transfer(
 }
 
 circuit validate_onset_screening(
-    status production
+    @status production
     viewer_trace: bytes(32),
     content_hash: bytes(32),
     started_at: u64,
@@ -74,7 +74,7 @@ circuit validate_onset_screening(
 }
 
 circuit validate_asset_access(
-    status production
+    @status production
     requester_level: u8,
     asset_level: u8
 ) -> bool

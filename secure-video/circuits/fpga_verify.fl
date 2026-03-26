@@ -5,7 +5,7 @@
 /// Same circuit, two targets — the eStream guarantee.
 
 circuit fpga_verify_segment_attestation(
-    status production
+    @status production
     content_hash: bytes(32),
     attestation_sig_len: u32,
     signer_id: bytes(32),
@@ -25,7 +25,7 @@ circuit fpga_verify_segment_attestation(
 }
 
 circuit fpga_verify_chain_continuity(
-    status production
+    @status production
     prev_segment_hash: bytes(32),
     curr_segment_prev_ref: bytes(32),
     chain_depth: u8,
@@ -41,7 +41,7 @@ circuit fpga_verify_chain_continuity(
 }
 
 circuit fpga_decode_gate(
-    status production
+    @status production
     attestation_valid: bool,
     chain_valid: bool,
     key_exchange_valid: bool,
@@ -55,7 +55,7 @@ circuit fpga_decode_gate(
 }
 
 circuit fpga_timing_budget_ns(
-    status production
+    @status production
     segment_duration_ms: u32,
     verification_ns: u64,
     decode_ns: u64,
@@ -71,7 +71,7 @@ circuit fpga_timing_budget_ns(
 }
 
 circuit fpga_nonce_fresh(
-    status production
+    @status production
     hardware_nonce: bytes(32),
     last_nonce: bytes(32)
 ) -> bool
@@ -83,7 +83,7 @@ circuit fpga_nonce_fresh(
 }
 
 circuit fpga_clock_mhz_required(
-    status production
+    @status production
     segment_duration_ms: u32,
     operations_per_segment: u32
 ) -> u32

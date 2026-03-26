@@ -29,7 +29,7 @@ type ForensicEvidence = struct {
 //   3=RenderFarmLeak, 4=ScreenerLeak, 5=CamRecording, 6=LinkBypass
 
 circuit validate_archive_entry(
-    status production
+    @status production
     encryption_algorithm: u8,
     integrity_hash: bytes(32),
     total_size: u64,
@@ -56,7 +56,7 @@ circuit archive_quantum_safe(encryption_algorithm: u8) -> bool
 }
 
 circuit evidence_chain_valid(
-    status production
+    @status production
     evidence_hash: bytes(32),
     signed_by: bytes(32),
     created_at: u64,

@@ -1,8 +1,6 @@
 /// Spec: specs/verticals/PAYMENTS_SPEC.md
 /// Multi-Party Settlement DAG (#74)
 /// Dimensional billing with percentage splits, fixed amounts, and delta-based calculations
-/// @rust_only — circuit logic lives in Rust; .fl defines the contract only
-
 type SourceNode = struct {
     source_id: bytes(32),
     payer_pubkey: bytes(2592),

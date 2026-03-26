@@ -1,8 +1,6 @@
 /// Spec: specs/verticals/BRIDGE_SPEC.md
 /// Batch Verification Circuit (Track H — Bridge Port)
 /// Batch-verify multiple deposit/withdrawal proofs for throughput
-/// @rust_only — circuit logic lives in Rust; .fl defines the contract only
-
 type ProofEntry = struct {
     entry_id: bytes(16),
     proof_hash: bytes(32),

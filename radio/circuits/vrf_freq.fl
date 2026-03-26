@@ -4,7 +4,7 @@
 /// Each message gets VRF-unpredictable band assignments.
 
 circuit select_frequency_bands(
-    status production
+    @status production
     vrf_seed: bytes(32),
     message_id: bytes(32),
     n_bands: u8,
@@ -29,7 +29,7 @@ circuit select_frequency_bands(
 }
 
 circuit validate_band_assignment(
-    status production
+    @status production
     center_hz: u64,
     bandwidth_hz: u32,
     min_freq_hz: u64,
@@ -46,7 +46,7 @@ circuit validate_band_assignment(
 }
 
 circuit band_separation_ok(
-    status production
+    @status production
     center_a_hz: u64,
     center_b_hz: u64,
     min_separation_hz: u32
@@ -65,7 +65,7 @@ circuit band_separation_ok(
 }
 
 circuit vrf_band_index(
-    status production
+    @status production
     vrf_output: bytes(32),
     shard_index: u8,
     total_bands_available: u16

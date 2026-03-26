@@ -47,7 +47,7 @@ type PqLaHandshake = struct {
 //   3=MutualVerify, 4=Established, 5=Rekeying
 
 circuit validate_device_identity(
-    status production
+    @status production
     device_id: bytes(32),
     manufacturer_id: bytes(32),
     firmware_hash: bytes(32),
@@ -66,7 +66,7 @@ circuit validate_device_identity(
 }
 
 circuit validate_handshake_step(
-    status production
+    @status production
     step: u8,
     expected_step: u8,
     timestamp: u64,
@@ -83,7 +83,7 @@ circuit validate_handshake_step(
 }
 
 circuit validate_mutual_auth(
-    status production
+    @status production
     source_id: bytes(32),
     sink_id: bytes(32),
     shared_secret: bytes(32)
@@ -100,7 +100,7 @@ circuit validate_mutual_auth(
 }
 
 circuit should_rekey(
-    status production
+    @status production
     frames_since_key: u64,
     max_frames_per_key: u64,
     ms_since_key: u64,
@@ -114,7 +114,7 @@ circuit should_rekey(
 }
 
 circuit frame_integrity_check(
-    status production
+    @status production
     content_hash: bytes(32),
     expected_hash: bytes(32)
 ) -> bool

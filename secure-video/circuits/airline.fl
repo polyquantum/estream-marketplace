@@ -38,7 +38,7 @@ type OfflineSyncBatch = struct {
 //   0x01=Aircraft, 0x02=CruiseShip, 0x03=Train, 0x04=Hotel, 0x05=MilitaryTransport
 
 circuit validate_offline_kdm(
-    status production
+    @status production
     content_id: bytes(32),
     vehicle_id: bytes(32),
     valid_from: u64,
@@ -58,7 +58,7 @@ circuit validate_offline_kdm(
 }
 
 circuit validate_seat_range(
-    status production
+    @status production
     seat_id: u16,
     range_start: u16,
     range_end: u16
@@ -71,7 +71,7 @@ circuit validate_seat_range(
 }
 
 circuit validate_sync_batch(
-    status production
+    @status production
     event_count: u32,
     batch_hash: bytes(32),
     max_events: u32

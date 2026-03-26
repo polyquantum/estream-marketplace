@@ -42,7 +42,7 @@ type GpsDeniedState = struct {
 }
 
 circuit validate_mesh_node(
-    status production
+    @status production
     node_id: bytes(32),
     prime_identity: bytes(32),
     classification_level: u8
@@ -59,7 +59,7 @@ circuit validate_mesh_node(
 }
 
 circuit can_communicate(
-    status production
+    @status production
     sender_level: u8,
     receiver_level: u8,
     channel_level: u8
@@ -72,7 +72,7 @@ circuit can_communicate(
 }
 
 circuit validate_mesh_link(
-    status production
+    @status production
     signal_strength_dbm: i16,
     min_signal_dbm: i16,
     latency_us: u32,
@@ -86,7 +86,7 @@ circuit validate_mesh_link(
 }
 
 circuit mesh_health(
-    status production
+    @status production
     node_count: u16,
     active_links: u16,
     min_connectivity: u8
@@ -102,7 +102,7 @@ circuit mesh_health(
 }
 
 circuit gps_denied_confidence(
-    status production
+    @status production
     holdover_ms: u64,
     peer_sync_count: u8,
     drift_ns: u64

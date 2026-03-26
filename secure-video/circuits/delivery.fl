@@ -5,7 +5,7 @@
 /// ML-KEM-1024 for key exchange, ML-DSA-87 for per-segment attestation.
 
 circuit validate_segment_attestation(
-    status production
+    @status production
     content_hash: bytes(32),
     viewer_trace_hash: bytes(32),
     signer_id: bytes(32),
@@ -25,7 +25,7 @@ circuit validate_segment_attestation(
 }
 
 circuit validate_delivery_hop(
-    status production
+    @status production
     hop_index: u8,
     max_hops: u8,
     received_at: u64,
@@ -43,7 +43,7 @@ circuit validate_delivery_hop(
 }
 
 circuit validate_delivery_chain(
-    status production
+    @status production
     hop_count: u8,
     origin_hash: bytes(32),
     final_hash: bytes(32),
@@ -60,7 +60,7 @@ circuit validate_delivery_chain(
 }
 
 circuit segment_freshness(
-    status production
+    @status production
     segment_timestamp: u64,
     current_time: u64,
     max_age_ms: u64
@@ -74,7 +74,7 @@ circuit segment_freshness(
 }
 
 circuit compute_stream_id(
-    status production
+    @status production
     content_id: bytes(32),
     viewer_id: bytes(32),
     session_nonce: bytes(32)
@@ -100,7 +100,7 @@ circuit max_delivery_hops(is_live: bool, is_premium: bool) -> u8
 }
 
 circuit validate_key_exchange(
-    status production
+    @status production
     encapsulation_size: u32,
     expected_size: u32,
     timestamp: u64,

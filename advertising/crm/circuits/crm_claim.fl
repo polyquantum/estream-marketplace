@@ -62,7 +62,7 @@ data ClaimRecord : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field claim_id
         proof_system groth16
     }
@@ -75,7 +75,7 @@ data EvidenceRecord : circuit v1 {
 }
     @observe events [claim_id, evidence_hash]
     @attest {
-        attested true
+        @attested true
         anchor_field evidence_hash
         proof_system groth16
     }

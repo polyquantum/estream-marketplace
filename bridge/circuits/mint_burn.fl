@@ -1,8 +1,6 @@
 /// Spec: specs/verticals/BRIDGE_SPEC.md
 /// Mint/Burn Token Circuit (Track H — Bridge Port)
 /// Mint pq-tokens on deposit, burn on withdrawal
-/// @rust_only — circuit logic lives in Rust; .fl defines the contract only
-
 type TokenAccount = struct {
     account_id: bytes(32),
     owner_commitment: bytes(32),

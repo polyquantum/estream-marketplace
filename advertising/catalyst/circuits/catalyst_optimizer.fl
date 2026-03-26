@@ -67,7 +67,7 @@ data OutcomeRecord : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field record_id
         proof_system groth16
     }
@@ -95,7 +95,7 @@ data OptimizationSuggestion : circuit v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field suggestion_id
         proof_system groth16
     }

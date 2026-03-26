@@ -74,7 +74,7 @@ data EngagementCode : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field code_id
     }
 
@@ -118,7 +118,7 @@ data ConsentProof : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field consent_hash
         proof_system groth16
     }

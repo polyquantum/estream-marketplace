@@ -46,7 +46,7 @@ type FronthaulLink = struct {
 // Enforcement: 0=Mandatory, 1=BestEffort, 2=Advisory
 
 circuit validate_e2_message(
-    status production
+    @status production
     source_node: bytes(32),
     target_node: bytes(32),
     message_type: u8,
@@ -66,7 +66,7 @@ circuit validate_e2_message(
 }
 
 circuit validate_a1_policy(
-    status production
+    @status production
     policy_type: u8,
     ric_id: bytes(32),
     enforcement_level: u8
@@ -82,7 +82,7 @@ circuit validate_a1_policy(
 }
 
 circuit validate_fronthaul_link(
-    status production
+    @status production
     du_id: bytes(32),
     ru_id: bytes(32),
     bandwidth_gbps: u8

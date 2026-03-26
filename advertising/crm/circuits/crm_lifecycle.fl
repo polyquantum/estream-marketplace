@@ -54,7 +54,7 @@ data LifecycleTransition : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field user_id
         proof_system groth16
     }

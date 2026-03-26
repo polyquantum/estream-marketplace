@@ -64,7 +64,7 @@ data ActivityScore : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field user_id
     }
 
@@ -96,7 +96,7 @@ data ScoreEvent : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field event_id
     }
 

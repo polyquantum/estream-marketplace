@@ -47,7 +47,7 @@ data PathProof : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field proof_id
         proof_system groth16
     }

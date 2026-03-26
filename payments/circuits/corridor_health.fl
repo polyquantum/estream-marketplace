@@ -1,8 +1,6 @@
 /// Spec: specs/verticals/PAYMENTS_SPEC.md
 /// Corridor Health Circuit (Track H — Cross-Border Port)
 /// Corridor capacity, status checks, and health monitoring
-/// @rust_only — circuit logic lives in Rust; .fl defines the contract only
-
 type CorridorConfig = struct {
     corridor_id: bytes(16),
     source_currency: bytes(4),

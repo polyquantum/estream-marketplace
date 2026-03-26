@@ -43,7 +43,7 @@ type SubscriberProfile = struct {
 // Subscription types: 0=Consumer, 1=Enterprise, 2=IoT, 3=Military, 4=Emergency
 
 circuit validate_challenge(
-    status production
+    @status production
     serving_network_id: bytes(32),
     ue_supi_hash: bytes(32),
     rand: bytes(32),
@@ -64,7 +64,7 @@ circuit validate_challenge(
 }
 
 circuit validate_response(
-    status production
+    @status production
     challenge_id: bytes(32),
     ue_id: bytes(32),
     res_star: bytes(32),
@@ -84,7 +84,7 @@ circuit validate_response(
 }
 
 circuit session_valid(
-    status production
+    @status production
     established_at: u64,
     rekey_at: u64,
     current_time: u64

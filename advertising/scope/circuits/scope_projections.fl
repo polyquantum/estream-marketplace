@@ -56,7 +56,7 @@ data RevenueProjection : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field partner_id
         proof_system groth16
     }
@@ -84,7 +84,7 @@ data MarketTrend : circuit v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field trend_id
         proof_system groth16
     }

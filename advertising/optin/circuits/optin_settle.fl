@@ -71,7 +71,7 @@ data SettlementRecord : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field settlement_id
         proof_system groth16
     }
@@ -99,7 +99,7 @@ data SettlementRules : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field rule_id
     }
 

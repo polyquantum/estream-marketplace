@@ -6,7 +6,7 @@
 /// the mark is distributed across thousands of encoding decisions.
 
 circuit generate_trace_seed(
-    status production
+    @status production
     viewer_id: bytes(32),
     session_id: bytes(32),
     master_key_hash: bytes(32)
@@ -20,7 +20,7 @@ circuit generate_trace_seed(
 }
 
 circuit compute_embedding_decision(
-    status production
+    @status production
     trace_seed: bytes(32),
     frame_index: u32,
     block_index: u32,
@@ -38,7 +38,7 @@ circuit compute_embedding_decision(
 }
 
 circuit select_embedding_points_per_frame(
-    status production
+    @status production
     frame_index: u32,
     total_blocks: u32,
     density: u8,
@@ -59,7 +59,7 @@ circuit select_embedding_points_per_frame(
 }
 
 circuit validate_embedding_quality(
-    status production
+    @status production
     original_value: u32,
     embedded_value: u32,
     max_delta: u32
@@ -94,7 +94,7 @@ circuit codec_max_delta(codec: u8, point_type: u8) -> u32
 }
 
 circuit extraction_confidence(
-    status production
+    @status production
     points_found: u32,
     points_expected: u32,
     match_count: u32

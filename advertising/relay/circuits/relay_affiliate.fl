@@ -52,7 +52,7 @@ data ReferralLink : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field link_id
         proof_system groth16
     }
@@ -138,7 +138,7 @@ data Compensation : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field comp_id
         proof_system groth16
     }
@@ -176,7 +176,7 @@ data ViralMetrics : circuit v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field campaign_id
         proof_system groth16
     }

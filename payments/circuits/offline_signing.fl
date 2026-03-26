@@ -45,7 +45,7 @@ data SignedTransaction : core v1 {
         detached true
     }
     attest {
-        attested true
+        @attested true
         anchor_field tx_id
         proof_system groth16
         commitment_scheme pedersen

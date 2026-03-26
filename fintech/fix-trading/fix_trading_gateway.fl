@@ -48,7 +48,7 @@ data SettlementResult : circuit v1 {
 }
     @observe events [settled, settlement_hash]
     @attest {
-        attested true
+        @attested true
         anchor_field settlement_hash
         proof_system groth16
     }
@@ -67,7 +67,7 @@ data AuditRecord : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field details_hash
         commitment_scheme pedersen
     }

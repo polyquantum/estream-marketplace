@@ -21,7 +21,7 @@ type ReconstructionResult = struct {
 }
 
 circuit validate_scatter_config(
-    status production
+    @status production
     n_bands: u8,
     k_threshold: u8,
     payload_bytes: u32
@@ -77,7 +77,7 @@ circuit information_leakage(shards_captured: u8, k_threshold: u8) -> u8
 }
 
 circuit optimal_n_for_environment(
-    status production
+    @status production
     jam_probability_pct: u8,
     latency_budget_us: u32,
     power_budget_dbm: i16

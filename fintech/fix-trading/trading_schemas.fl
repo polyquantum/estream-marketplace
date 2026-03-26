@@ -62,7 +62,7 @@ data EStreamOrder : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field order_id
         proof_system groth16
     }
@@ -92,7 +92,7 @@ data EStreamFill : app v1 {
     @observe metrics [quantity, price, fee] level adaptive
     @observe events [fill_id, order_id, instrument]
     @attest {
-        attested true
+        @attested true
         anchor_field fill_id
         proof_system groth16
     }

@@ -1,8 +1,6 @@
 /// Spec: specs/verticals/WIDGET_SPEC.md
 /// Impact Widget Data Protocol (#146)
 /// Wire-level streaming for embeddable carbon/energy impact widgets
-/// @rust_only — circuit logic lives in Rust; .fl defines the contract only
-
 type WidgetConfig = struct {
     widget_id: bytes(16),
     tenant_id: bytes(16),

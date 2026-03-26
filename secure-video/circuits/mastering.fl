@@ -42,7 +42,7 @@ type ArchiveRecord = struct {
 // Encryption: 0=ML_KEM_1024, 1=AES_256_GCM_legacy
 
 circuit validate_imf_package(
-    status production
+    @status production
     component_count: u8,
     integrity_hash: bytes(32),
     has_video: bool,
@@ -61,7 +61,7 @@ circuit validate_imf_package(
 }
 
 circuit validate_dcp_package(
-    status production
+    @status production
     component_count: u8,
     integrity_hash: bytes(32),
     has_kdm: bool
@@ -76,7 +76,7 @@ circuit validate_dcp_package(
 }
 
 circuit archive_retention_valid(
-    status production
+    @status production
     stored_at: u64,
     expiry_year: u16,
     current_year: u16

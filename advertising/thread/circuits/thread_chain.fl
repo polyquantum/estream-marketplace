@@ -59,7 +59,7 @@ data ProvenanceHop : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field hop_id
     }
 

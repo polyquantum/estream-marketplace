@@ -52,7 +52,7 @@ data UserProfile : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field id
         proof_system groth16
     }

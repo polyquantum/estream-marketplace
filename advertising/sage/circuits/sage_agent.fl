@@ -60,7 +60,7 @@ data ConversationContext : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field session_id
         proof_system groth16
     }
@@ -74,7 +74,7 @@ data AgentResponse : circuit v1 {
 }
     @observe events [confidence, intent_classification]
     @attest {
-        attested true
+        @attested true
         anchor_field response_text
         proof_system groth16
     }

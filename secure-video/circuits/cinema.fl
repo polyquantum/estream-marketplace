@@ -56,7 +56,7 @@ type ScreenTrace = struct {
 // Play attestation types: 0=PlayStart, 1=Heartbeat, 2=PlayComplete, 3=PlayAborted
 
 circuit validate_pq_kdm(
-    status production
+    @status production
     content_id: bytes(32),
     screen_id: bytes(32),
     valid_from: u64,
@@ -76,7 +76,7 @@ circuit validate_pq_kdm(
 }
 
 circuit evaluate_exhibition_rule(
-    status production
+    @status production
     rule_type: u8,
     current_time: u64,
     param_a: u64,
@@ -94,7 +94,7 @@ circuit evaluate_exhibition_rule(
 }
 
 circuit validate_play_attestation(
-    status production
+    @status production
     attestation_type: u8,
     content_id: bytes(32),
     screen_id: bytes(32),
@@ -113,7 +113,7 @@ circuit validate_play_attestation(
 }
 
 circuit reconcile_revenue(
-    status production
+    @status production
     play_attestation_count: u32,
     ticket_count: u32,
     max_discrepancy_pct: u8

@@ -65,7 +65,7 @@ data ViewRecord : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field record_id
     }
 
@@ -94,7 +94,7 @@ data ViewAccess : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field access_id
     }
 

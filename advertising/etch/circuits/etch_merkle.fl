@@ -43,7 +43,7 @@ data ImpressionChainNode : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field node_hash
         proof_system groth16
     }

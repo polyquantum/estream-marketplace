@@ -67,7 +67,7 @@ data ReservationAccount : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field account_id
     }
 
@@ -101,7 +101,7 @@ data Reservation : app v1 {
         detached true
     }
     @attest {
-        attested true
+        @attested true
         anchor_field reservation_id
     }
 

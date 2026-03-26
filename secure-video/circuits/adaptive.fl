@@ -44,7 +44,7 @@ type CrossCodecTraceMap = struct {
 // Including codec_id in the derivation means the trace is continuous across transitions.
 
 circuit compensate_density_for_fps_drop(
-    status production
+    @status production
     base_density: u8,
     source_fps_x100: u32,
     current_fps_x100: u32
@@ -69,7 +69,7 @@ circuit compensate_density_for_fps_drop(
 }
 
 circuit recalc_attribution_frames(
-    status production
+    @status production
     base_density: u8,
     effective_density: u8,
     current_fps_x100: u32,
@@ -92,7 +92,7 @@ circuit recalc_attribution_frames(
 }
 
 circuit validate_codec_transition(
-    status production
+    @status production
     from_codec: u8,
     to_codec: u8,
     trace_seed_present: bool,
@@ -121,7 +121,7 @@ circuit cross_codec_embedding_capacity(codec: u8) -> u8
 }
 
 circuit transition_preserves_attribution(
-    status production
+    @status production
     points_before_transition: u64,
     points_after_transition: u64,
     min_points_for_attribution: u32
@@ -135,7 +135,7 @@ circuit transition_preserves_attribution(
 }
 
 circuit evaluate_watermark_aware_switch(
-    status production
+    @status production
     adaptive_action: u8,
     current_codec: u8,
     candidate_codec: u8,
