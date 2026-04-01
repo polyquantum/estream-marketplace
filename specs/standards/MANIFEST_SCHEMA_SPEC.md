@@ -656,6 +656,60 @@ visibility = "compiled"
 
 ---
 
+## 16.2 `[grants]` Section
+
+Optional section declaring strategic license grants. Publishers can grant specific consumer lex patterns zero-fee access with full source visibility. See [STRATEGIC_GRANTS_SPEC.md](../STRATEGIC_GRANTS_SPEC.md) for full specification.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `grantee_lex` | string | **Required** | — | Lex path glob pattern for the grantee (e.g., `lex://polyquantum/*`) |
+| `visibility` | string | Optional | `"licensed"` | Granted visibility level: `"open"`, `"interface"`, `"compiled"`, `"licensed"` |
+| `pricing` | string | Optional | `"free"` | Pricing override: `"free"` for zero-fee grants |
+| `type` | string | **Required** | — | Grant type: `"platform"`, `"strategic_partner"`, `"ecosystem"` |
+| `include_source` | bool | Optional | `true` | Whether grantee gets full FL source access |
+| `include_fork_rights` | bool | Optional | `false` | Whether grantee can fork and customize internally |
+
+### Grant Types
+
+| Type | Description |
+|------|-------------|
+| `platform` | Same corporate family (e.g., publisher's parent org) |
+| `strategic_partner` | Cross-organization strategic relationship |
+| `ecosystem` | Community/ecosystem participants |
+
+### Example
+
+```toml
+# Platform grant — same corporate family
+[[grants.strategic]]
+grantee_lex = "lex://polyquantum/*"
+visibility = "licensed"
+pricing = "free"
+type = "platform"
+include_source = true
+include_fork_rights = true
+
+# Strategic partner grant — cross-org
+[[grants.strategic]]
+grantee_lex = "lex://paragon/*"
+visibility = "licensed"
+pricing = "free"
+type = "strategic_partner"
+include_source = true
+include_fork_rights = true
+```
+
+### Validation Rules
+
+| Code | Rule |
+|------|------|
+| E020 | `grantee_lex` must be a valid lex path pattern |
+| E021 | `type` must be one of: `platform`, `strategic_partner`, `ecosystem` |
+| E022 | `visibility` must not exceed the package's own visibility level |
+| E023 | `pricing` must be `"free"` (only zero-fee grants supported in v1) |
+
+---
+
 ## 17. Complete Example
 
 ```toml

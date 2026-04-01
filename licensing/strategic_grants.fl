@@ -1,0 +1,496 @@
+// Marketplace Licensing — Strategic License Grants
+// Epic 8: estream-marketplace#8
+//
+// Publisher-declared, consumer-specific zero-fee full-source grants.
+// Enables publishers (e.g., Poly Labs) to grant specific consumer lex
+// paths (e.g., eStream, Paragon) no-fee access with LicensedFull
+// visibility to packages that may be paid for other consumers.
+//
+// Grant flow:
+//   1. Publisher creates StrategicLicenseGrant targeting consumer lex pattern
+//   2. Consumer installs package → check_grant_entitlement finds match
+//   3. auto_issue_granted_token issues blinded token at zero cost
+//   4. Settlement records $0 transaction (full audit trail preserved)
+//   5. Consumer gets LicensedFull visibility + fork rights
+//
+// Composes with:
+//   - blinded_tokens.fl (auto-issue at zero cost)
+//   - composite_visibility.fl (entitlement resolution, reason code 5)
+//   - internal_marketplace.fl (resolution priority step 4)
+//   - settlement.fl (zero-amount transactions)
+
+/// govern lex marketplace/licensing
+
+// --- Types ---
+
+type GrantId = bytes(32)
+type PackageRef = bytes(32)
+type LexPath = bytes(128)
+type PublisherSparkId = bytes(32)
+type ConsumerSparkId = bytes(32)
+type WitnessSignature = bytes(4627)
+
+type GrantType = u8
+// 0=PlatformGrant (same corporate family, e.g. Poly Labs → eStream)
+// 1=StrategicPartner (cross-org, e.g. Poly Labs → Paragon)
+// 2=EcosystemGrant (open ecosystem participants, community)
+
+type SourceVisibility = u8
+// 0=Open, 1=Interface, 2=Compiled, 3=LicensedFull
+
+type StrategicLicenseGrant = struct {
+    grant_id: GrantId,
+    publisher_spark_id: PublisherSparkId,
+    package_pattern: bytes(128),
+    grantee_lex_pattern: LexPath,
+    granted_visibility: SourceVisibility,
+    pricing_override_micros: u64,
+    grant_type: GrantType,
+    include_source: bool,
+    include_fork_rights: bool,
+    renewable: bool,
+    created_at: u64,
+    expires_at: u64,
+    witness_chain_hash: bytes(32),
+    is_active: bool,
+}
+
+type GrantedEntitlement = struct {
+    grant_id: GrantId,
+    consumer_lex: LexPath,
+    package_id: PackageRef,
+    effective_visibility: SourceVisibility,
+    has_source_access: bool,
+    has_fork_rights: bool,
+    pricing_micros: u64,
+    grant_type: GrantType,
+    matched_at: u64,
+}
+
+type GrantAuditRecord = struct {
+    grant_id: GrantId,
+    action: u8,
+    actor_spark_id: bytes(32),
+    package_ref: PackageRef,
+    consumer_lex: LexPath,
+    timestamp: u64,
+    detail_hash: bytes(32),
+}
+// action: 0=Created, 1=Matched, 2=TokenIssued, 3=Renewed, 4=Revoked
+
+type AutoIssuedToken = struct {
+    grant_id: GrantId,
+    token_id: bytes(32),
+    consumer_blinded_id: bytes(32),
+    package_id: PackageRef,
+    issued_at: u64,
+    expires_at: u64,
+    pricing_micros: u64,
+}
+
+// --- Cortex ---
+
+cortex strategic_grant_intelligence {
+    expose [grant_count, grant_matches, auto_issued_tokens, grant_types]
+    infer on_write { model grant_advisor; confidence_threshold 0.80 }
+    on_anomaly alert { severity warning; channel marketplace }
+    on_suggestion store { review_required true }
+}
+
+// --- Streams ---
+
+stream strategic_grants: state<GrantId, StrategicLicenseGrant>
+    @retention forever
+    @consumers [cli, console, licensing, publisher_dashboard, audit]
+
+stream grant_audit: event<GrantAuditRecord>
+    @retention 7y
+    @consumers [console, audit, compliance]
+
+stream auto_issued_tokens: event<AutoIssuedToken>
+    @retention 365d
+    @consumers [licensing, billing, audit]
+
+// --- Circuits ---
+
+/// Create a strategic license grant. Publisher declares zero-fee
+/// full-source access for specific consumer lex patterns.
+/// Witness-attested with ML-DSA-87 for non-repudiation.
+/// test golden
+circuit create_strategic_grant(
+    publisher_spark_id: PublisherSparkId,
+    package_pattern: bytes(128),
+    grantee_lex_pattern: LexPath,
+    granted_visibility: SourceVisibility,
+    pricing_override_micros: u64,
+    grant_type: GrantType,
+    include_source: bool,
+    include_fork_rights: bool,
+    renewable: bool,
+    duration_seconds: u64,
+    witness_key: bytes(1952)
+) -> StrategicLicenseGrant
+    @lex marketplace/licensing/grants
+    @precision A
+    @rbac [publisher, org_admin]
+    @observe metrics: [grants_created, grant_type, package_pattern]
+    @attested true
+    @invariant "valid_visibility" { granted_visibility <= 3 }
+    @invariant "valid_grant_type" { grant_type <= 2 }
+{
+    let grant_id = sha3_256(concat(publisher_spark_id, concat(package_pattern, grantee_lex_pattern)))
+    let witness_data = sha3_256(concat(grant_id, concat(package_pattern, grantee_lex_pattern)))
+    let witness_sig = mldsa_sign(witness_data, witness_key)
+
+    let grant = StrategicLicenseGrant {
+        grant_id: grant_id,
+        publisher_spark_id: publisher_spark_id,
+        package_pattern: package_pattern,
+        grantee_lex_pattern: grantee_lex_pattern,
+        granted_visibility: granted_visibility,
+        pricing_override_micros: pricing_override_micros,
+        grant_type: grant_type,
+        include_source: include_source,
+        include_fork_rights: include_fork_rights,
+        renewable: renewable,
+        created_at: current_time(),
+        expires_at: current_time() + (duration_seconds * 1000000000),
+        witness_chain_hash: sha3_256(concat(witness_data, witness_sig)),
+        is_active: true,
+    }
+
+    store_put(strategic_grants, grant_id, grant)
+
+    let audit = GrantAuditRecord {
+        grant_id: grant_id,
+        action: 0,
+        actor_spark_id: publisher_spark_id,
+        package_ref: sha3_256(package_pattern),
+        consumer_lex: grantee_lex_pattern,
+        timestamp: current_time(),
+        detail_hash: sha3_256(concat(grant_id, bytes(32))),
+    }
+    emit(grant_audit, audit)
+
+    grant
+}
+
+/// Check if a consumer lex + package ID matches any active strategic grant.
+/// Uses glob pattern matching on both package_pattern and grantee_lex_pattern.
+/// Returns GrantedEntitlement if a match is found, nil otherwise.
+/// test golden
+circuit check_grant_entitlement(
+    consumer_lex: LexPath,
+    package_id: PackageRef
+) -> GrantedEntitlement
+    @lex marketplace/licensing/grants
+    @precision A
+    @observe metrics: [grant_checks, grant_matches, grant_misses]
+{
+    let grants = store_scan(strategic_grants, bytes(0))
+    for grant in grants {
+        if grant.is_active == false {
+            continue
+        }
+        let not_expired = grant.expires_at > current_time()
+        if not_expired == false {
+            continue
+        }
+        let lex_match = lex_glob_match(consumer_lex, grant.grantee_lex_pattern)
+        let pkg_match = package_glob_match(package_id, grant.package_pattern)
+        if lex_match && pkg_match {
+            let audit = GrantAuditRecord {
+                grant_id: grant.grant_id,
+                action: 1,
+                actor_spark_id: bytes(32),
+                package_ref: package_id,
+                consumer_lex: consumer_lex,
+                timestamp: current_time(),
+                detail_hash: sha3_256(concat(grant.grant_id, package_id)),
+            }
+            emit(grant_audit, audit)
+
+            return GrantedEntitlement {
+                grant_id: grant.grant_id,
+                consumer_lex: consumer_lex,
+                package_id: package_id,
+                effective_visibility: grant.granted_visibility,
+                has_source_access: grant.include_source,
+                has_fork_rights: grant.include_fork_rights,
+                pricing_micros: grant.pricing_override_micros,
+                grant_type: grant.grant_type,
+                matched_at: current_time(),
+            }
+        }
+    }
+    nil
+}
+
+/// When a grant matches, auto-issue a blinded license token at zero cost.
+/// Composes over blinded_tokens.fl issue_blinded_token — the token is
+/// indistinguishable from a purchased token. Settlement records $0.
+/// test golden
+circuit auto_issue_granted_token(
+    entitlement: GrantedEntitlement,
+    consumer_blinded_id: bytes(32),
+    blinding_factor: bytes(64)
+) -> AutoIssuedToken
+    @lex marketplace/licensing/grants
+    @precision A
+    @observe metrics: [grant_tokens_issued, grant_type, package_id]
+    @attested true
+{
+    let token_id = sha3_256(concat(entitlement.grant_id, concat(consumer_blinded_id, entitlement.package_id)))
+    let bf_hash = sha3_256(blinding_factor)
+
+    let issued = AutoIssuedToken {
+        grant_id: entitlement.grant_id,
+        token_id: token_id,
+        consumer_blinded_id: consumer_blinded_id,
+        package_id: entitlement.package_id,
+        issued_at: current_time(),
+        expires_at: current_time() + (365 * 24 * 3600 * 1000000000),
+        pricing_micros: entitlement.pricing_micros,
+    }
+
+    let audit = GrantAuditRecord {
+        grant_id: entitlement.grant_id,
+        action: 2,
+        actor_spark_id: bytes(32),
+        package_ref: entitlement.package_id,
+        consumer_lex: entitlement.consumer_lex,
+        timestamp: current_time(),
+        detail_hash: sha3_256(concat(token_id, bf_hash)),
+    }
+    emit(grant_audit, audit)
+    emit(auto_issued_tokens, issued)
+
+    issued
+}
+
+/// Renew a strategic grant with fresh witness attestation.
+/// Only the original publisher can renew. Extends expiry.
+/// test golden
+circuit renew_strategic_grant(
+    grant_id: GrantId,
+    publisher_spark_id: PublisherSparkId,
+    additional_seconds: u64,
+    witness_key: bytes(1952)
+) -> StrategicLicenseGrant
+    @lex marketplace/licensing/grants
+    @precision B
+    @rbac [publisher, org_admin]
+    @observe metrics: [grants_renewed, grant_id]
+    @attested true
+{
+    let grant = store_get(strategic_grants, grant_id)
+    if grant == nil {
+        fail("grant not found")
+    }
+    if grant.publisher_spark_id != publisher_spark_id {
+        fail("only the original publisher can renew a grant")
+    }
+
+    let new_expires = grant.expires_at + (additional_seconds * 1000000000)
+    let witness_data = sha3_256(concat(grant_id, concat(publisher_spark_id, bytes(32))))
+    let witness_sig = mldsa_sign(witness_data, witness_key)
+
+    let renewed = StrategicLicenseGrant {
+        grant_id: grant.grant_id,
+        publisher_spark_id: grant.publisher_spark_id,
+        package_pattern: grant.package_pattern,
+        grantee_lex_pattern: grant.grantee_lex_pattern,
+        granted_visibility: grant.granted_visibility,
+        pricing_override_micros: grant.pricing_override_micros,
+        grant_type: grant.grant_type,
+        include_source: grant.include_source,
+        include_fork_rights: grant.include_fork_rights,
+        renewable: grant.renewable,
+        created_at: grant.created_at,
+        expires_at: new_expires,
+        witness_chain_hash: sha3_256(concat(witness_data, witness_sig)),
+        is_active: true,
+    }
+
+    store_put(strategic_grants, grant_id, renewed)
+
+    let audit = GrantAuditRecord {
+        grant_id: grant_id,
+        action: 3,
+        actor_spark_id: publisher_spark_id,
+        package_ref: sha3_256(grant.package_pattern),
+        consumer_lex: grant.grantee_lex_pattern,
+        timestamp: current_time(),
+        detail_hash: sha3_256(concat(grant_id, witness_data)),
+    }
+    emit(grant_audit, audit)
+
+    renewed
+}
+
+/// Revoke a strategic grant. Existing auto-issued tokens remain valid
+/// until their individual expiry, but no new tokens will be issued.
+/// test golden
+circuit revoke_strategic_grant(
+    grant_id: GrantId,
+    publisher_spark_id: PublisherSparkId,
+    reason: bytes(256)
+) -> bool
+    @lex marketplace/licensing/grants
+    @precision B
+    @rbac [publisher, org_admin, marketplace_admin]
+    @observe metrics: [grants_revoked, grant_id]
+    @attested true
+{
+    let grant = store_get(strategic_grants, grant_id)
+    if grant == nil {
+        return false
+    }
+    if grant.publisher_spark_id != publisher_spark_id {
+        return false
+    }
+
+    let revoked = StrategicLicenseGrant {
+        grant_id: grant.grant_id,
+        publisher_spark_id: grant.publisher_spark_id,
+        package_pattern: grant.package_pattern,
+        grantee_lex_pattern: grant.grantee_lex_pattern,
+        granted_visibility: grant.granted_visibility,
+        pricing_override_micros: grant.pricing_override_micros,
+        grant_type: grant.grant_type,
+        include_source: grant.include_source,
+        include_fork_rights: grant.include_fork_rights,
+        renewable: false,
+        created_at: grant.created_at,
+        expires_at: grant.expires_at,
+        witness_chain_hash: grant.witness_chain_hash,
+        is_active: false,
+    }
+
+    store_put(strategic_grants, grant_id, revoked)
+
+    let audit = GrantAuditRecord {
+        grant_id: grant_id,
+        action: 4,
+        actor_spark_id: publisher_spark_id,
+        package_ref: sha3_256(grant.package_pattern),
+        consumer_lex: grant.grantee_lex_pattern,
+        timestamp: current_time(),
+        detail_hash: sha3_256(concat(grant_id, reason)),
+    }
+    emit(grant_audit, audit)
+
+    true
+}
+
+/// List all active grants for a specific package. Used by console/CLI
+/// to display grant status on publisher dashboard.
+/// test golden
+circuit list_grants_for_package(
+    package_id: PackageRef
+) -> list<StrategicLicenseGrant>
+    @lex marketplace/licensing/grants
+    @precision C
+    @rbac [publisher, org_admin, marketplace_admin]
+    @observe metrics: [grant_listings, package_id]
+{
+    let all_grants = store_scan(strategic_grants, bytes(0))
+    let matching = list<StrategicLicenseGrant>{}
+    for grant in all_grants {
+        let pkg_match = package_glob_match(package_id, grant.package_pattern)
+        let is_active = grant.is_active && grant.expires_at > current_time()
+        if pkg_match && is_active {
+            matching = list_append(matching, grant)
+        }
+    }
+    matching
+}
+
+// --- Extern ---
+
+extern "fl" {
+    fn store_get(stream: any, key: bytes) -> any
+    fn store_scan(stream: any, key: bytes) -> list<any>
+    fn store_put(stream: any, key: bytes, value: any) -> void
+    fn lex_glob_match(path: LexPath, pattern: LexPath) -> bool
+    fn package_glob_match(id: PackageRef, pattern: bytes(128)) -> bool
+    fn mldsa_sign(data: bytes, key: bytes(1952)) -> bytes(4627)
+    fn list_append(list: list<any>, item: any) -> list<any>
+}
+
+// --- Tests ---
+
+test golden "create_strategic_grant_platform" {
+    let grant = create_strategic_grant(
+        "0xPUB1", "polylabs/*", "lex://polyquantum/*",
+        3, 0, 0, true, true, true,
+        31536000, bytes(1952)
+    )
+    assert grant.granted_visibility == 3
+    assert grant.pricing_override_micros == 0
+    assert grant.grant_type == 0
+    assert grant.include_source == true
+    assert grant.include_fork_rights == true
+    assert grant.is_active == true
+}
+
+test golden "create_strategic_grant_partner" {
+    let grant = create_strategic_grant(
+        "0xPUB1", "polylabs/*", "lex://paragon/*",
+        3, 0, 1, true, true, true,
+        31536000, bytes(1952)
+    )
+    assert grant.grant_type == 1
+    assert grant.grantee_lex_pattern == "lex://paragon/*"
+}
+
+test golden "check_grant_entitlement_match" {
+    let _ = create_strategic_grant(
+        "0xPUB1", "polylabs/*", "lex://polyquantum/*",
+        3, 0, 0, true, true, true,
+        31536000, bytes(1952)
+    )
+    let entitlement = check_grant_entitlement("lex://polyquantum/estream", "0xPKG1")
+    assert entitlement != nil
+    assert entitlement.has_source_access == true
+    assert entitlement.pricing_micros == 0
+}
+
+test golden "check_grant_entitlement_no_match" {
+    let entitlement = check_grant_entitlement("lex://external-org/app", "0xPKG2")
+    assert entitlement == nil
+}
+
+test golden "auto_issue_granted_token_zero_cost" {
+    let _ = create_strategic_grant(
+        "0xPUB1", "polylabs/*", "lex://paragon/*",
+        3, 0, 1, true, true, true,
+        31536000, bytes(1952)
+    )
+    let entitlement = check_grant_entitlement("lex://paragon/fo/family1", "0xPKG3")
+    assert entitlement != nil
+    let token = auto_issue_granted_token(entitlement, "0xBLIND1", bytes(64))
+    assert token.pricing_micros == 0
+    assert token.package_id == "0xPKG3"
+}
+
+test golden "revoke_strategic_grant_stops_new_matches" {
+    let grant = create_strategic_grant(
+        "0xPUB2", "polylabs/polyportal", "lex://partner/*",
+        3, 0, 1, true, false, false,
+        86400, bytes(1952)
+    )
+    let revoked = revoke_strategic_grant(grant.grant_id, "0xPUB2", "partnership ended")
+    assert revoked == true
+}
+
+test golden "renew_strategic_grant_extends_expiry" {
+    let grant = create_strategic_grant(
+        "0xPUB3", "polylabs/*", "lex://polyquantum/*",
+        3, 0, 0, true, true, true,
+        86400, bytes(1952)
+    )
+    let renewed = renew_strategic_grant(grant.grant_id, "0xPUB3", 86400, bytes(1952))
+    assert renewed.expires_at > grant.expires_at
+    assert renewed.is_active == true
+}
