@@ -1,0 +1,548 @@
+// Marketplace Licensing — Composite Visibility & Derivative Manifests
+// Epic 7: estream-marketplace#7
+//
+// Handles mixed-visibility composites (Model 3) and derivative
+// composites (Model 4) from the VCS & Marketplace Licensing plan.
+//
+// Model 3: A composite circuit composes sub-circuits with different
+// SourceVisibility and license per dependency. The consumer sees
+// effective visibility based on their license entitlements.
+//
+// Model 4: A derivative wraps a composite, adds new circuits, and
+// republishes with nested revenue waterfall. Visibility constraints
+// from the base composite are inherited — consumers cannot see more
+// of any sub-component than the original licensing allows.
+//
+// Revenue waterfall composes with solutions/revenue_waterfall.fl:
+// derivative → base composite → sub-circuit publishers, all atomic.
+
+/// govern lex marketplace/licensing
+
+// --- Types ---
+
+type PackageRef = bytes(32)
+type LicenseToken = bytes(32)
+type LexPath = bytes(128)
+
+type SourceVisibility = u8
+// 0=Open, 1=Interface, 2=Compiled, 3=LicensedFull
+
+type SubCircuitLicense = struct {
+    sub_circuit_id: PackageRef,
+    sub_circuit_name: bytes(128),
+    visibility: SourceVisibility,
+    license_spdx: bytes(32),
+    requires_separate_token: bool,
+    bundled_with_parent: bool,
+}
+
+type CompositeVisibilityManifest = struct {
+    composite_id: PackageRef,
+    composite_name: bytes(128),
+    composite_visibility: SourceVisibility,
+    composite_license: bytes(32),
+    sub_circuit_count: u16,
+    sub_circuit_licenses_hash: bytes(32),
+    created_at: u64,
+}
+
+type DerivativeManifest = struct {
+    derivative_id: PackageRef,
+    derivative_name: bytes(128),
+    base_composite: PackageRef,
+    base_composite_version: bytes(20),
+    addition_count: u16,
+    additions_hash: bytes(32),
+    revenue_derivative_bps: u16,
+    revenue_base_composite_bps: u16,
+    revenue_platform_bps: u16,
+    created_at: u64,
+}
+
+type DerivativeAddition = struct {
+    addition_id: bytes(32),
+    derivative_id: PackageRef,
+    circuit_name: bytes(128),
+    visibility: SourceVisibility,
+    license_spdx: bytes(32),
+    position: u8,
+}
+// position: 0=PreIngress, 1=PostIngress, 2=PreEgress, 3=PostEgress, 4=Parallel
+
+type EffectiveEntitlement = struct {
+    consumer_id: bytes(32),
+    package_id: PackageRef,
+    sub_circuit_id: PackageRef,
+    effective_visibility: SourceVisibility,
+    has_source_access: bool,
+    has_compiled_access: bool,
+    has_interface_only: bool,
+    entitlement_reason: u8,
+}
+// entitlement_reason: 0=OpenSource, 1=LicenseToken, 2=BundledWithParent,
+//                     3=CompiledDefault, 4=InterfaceOnly
+
+type EntitlementResolutionResult = struct {
+    consumer_id: bytes(32),
+    composite_id: PackageRef,
+    total_sub_circuits: u16,
+    source_accessible: u16,
+    compiled_accessible: u16,
+    interface_only: u16,
+    resolution_ms: u32,
+}
+
+// --- Cortex ---
+
+cortex composite_licensing_intelligence {
+    expose [sub_circuit_count, visibility_distribution, entitlement_rate]
+    infer on_write { model licensing_advisor; confidence_threshold 0.75 }
+    on_anomaly alert { severity warning; channel licensing }
+    on_suggestion store { review_required true }
+}
+
+// --- Streams ---
+
+stream composite_manifests: state<PackageRef, CompositeVisibilityManifest>
+    @retention 365d
+    @consumers [cli, console, registry, licensing]
+
+stream sub_circuit_licenses: event<SubCircuitLicense>
+    @retention 365d
+    @consumers [cli, console, registry, licensing]
+
+stream derivative_manifests: state<PackageRef, DerivativeManifest>
+    @retention 365d
+    @consumers [cli, console, registry, licensing]
+
+stream derivative_additions: event<DerivativeAddition>
+    @retention 365d
+    @consumers [cli, console, registry, licensing]
+
+stream entitlement_resolutions: event<EntitlementResolutionResult>
+    @retention 90d
+    @consumers [cli, console, licensing, audit]
+
+// --- Circuits ---
+
+/// Register a composite circuit's per-dependency visibility declarations.
+/// Each sub-circuit declares its own SourceVisibility and license.
+/// test golden
+circuit register_composite_visibility(composite_id: PackageRef, composite_name: bytes(128), composite_visibility: SourceVisibility, composite_license: bytes(32), sub_circuits: list<SubCircuitLicense>) -> CompositeVisibilityManifest
+    @lex marketplace/licensing/composite
+    @precision B
+    @rbac [publisher]
+    @observe metrics: [composites_registered, sub_circuit_count]
+    @attested true
+    @invariant "has_sub_circuits" { len(sub_circuits) > 0 }
+{
+    let sub_count = len(sub_circuits)
+    let licenses_hash = sha3_256(bytes(32))
+    for sc in sub_circuits {
+        licenses_hash = sha3_256(concat(licenses_hash, concat(sc.sub_circuit_id, sc.license_spdx)))
+        emit(sub_circuit_licenses, sc)
+    }
+    let manifest = CompositeVisibilityManifest {
+        composite_id: composite_id,
+        composite_name: composite_name,
+        composite_visibility: composite_visibility,
+        composite_license: composite_license,
+        sub_circuit_count: sub_count,
+        sub_circuit_licenses_hash: licenses_hash,
+        created_at: current_time(),
+    }
+    store_put(composite_manifests, composite_id, manifest)
+    manifest
+}
+
+/// Register a derivative that wraps a base composite and adds circuits.
+/// Revenue split must sum to 10000 bps. Base composite's revenue
+/// cascades through its own waterfall to its sub-circuit publishers.
+/// test golden
+circuit register_derivative(derivative_id: PackageRef, derivative_name: bytes(128), base_composite: PackageRef, base_composite_version: bytes(20), additions: list<DerivativeAddition>, revenue_derivative_bps: u16, revenue_base_composite_bps: u16, revenue_platform_bps: u16) -> DerivativeManifest
+    @lex marketplace/licensing/derivative
+    @precision B
+    @rbac [publisher]
+    @observe metrics: [derivatives_registered, addition_count]
+    @attested true
+    @invariant "revenue_sums_10000" { revenue_derivative_bps + revenue_base_composite_bps + revenue_platform_bps == 10000 }
+{
+    let total_bps = revenue_derivative_bps + revenue_base_composite_bps + revenue_platform_bps
+    if total_bps != 10000 {
+        fail("revenue split must sum to 10000 basis points")
+    }
+    let base_exists = store_get(composite_manifests, base_composite)
+    if base_exists == nil {
+        fail("base composite not registered")
+    }
+    let addition_count = len(additions)
+    let additions_hash = sha3_256(bytes(32))
+    for add in additions {
+        additions_hash = sha3_256(concat(additions_hash, concat(add.circuit_name, add.license_spdx)))
+        emit(derivative_additions, add)
+    }
+    let manifest = DerivativeManifest {
+        derivative_id: derivative_id,
+        derivative_name: derivative_name,
+        base_composite: base_composite,
+        base_composite_version: base_composite_version,
+        addition_count: addition_count,
+        additions_hash: additions_hash,
+        revenue_derivative_bps: revenue_derivative_bps,
+        revenue_base_composite_bps: revenue_base_composite_bps,
+        revenue_platform_bps: revenue_platform_bps,
+        created_at: current_time(),
+    }
+    store_put(derivative_manifests, derivative_id, manifest)
+    manifest
+}
+
+/// Resolve effective entitlements for a consumer across all sub-circuits
+/// in a composite. Walks the dependency DAG, checks the consumer's
+/// license tokens, and computes per-sub-circuit visibility.
+/// test golden
+circuit resolve_effective_entitlements(consumer_id: bytes(32), composite_id: PackageRef, consumer_tokens: list<LicenseToken>) -> EntitlementResolutionResult
+    @lex marketplace/licensing/entitlements
+    @precision B
+    @observe metrics: [entitlement_resolutions, consumer_id, composite_id]
+{
+    let composite = store_get(composite_manifests, composite_id)
+    if composite == nil {
+        return EntitlementResolutionResult {
+            consumer_id: consumer_id,
+            composite_id: composite_id,
+            total_sub_circuits: 0,
+            source_accessible: 0,
+            compiled_accessible: 0,
+            interface_only: 0,
+            resolution_ms: 0,
+        }
+    }
+    let sub_circuits = store_scan(sub_circuit_licenses, composite_id)
+    let total = 0u16
+    let source_count = 0u16
+    let compiled_count = 0u16
+    let interface_count = 0u16
+    let start = current_time()
+    for sc in sub_circuits {
+        total = total + 1
+        let entitlement = compute_sub_circuit_entitlement(consumer_id, sc, consumer_tokens)
+        if entitlement.has_source_access {
+            source_count = source_count + 1
+        } else if entitlement.has_compiled_access {
+            compiled_count = compiled_count + 1
+        } else {
+            interface_count = interface_count + 1
+        }
+    }
+    let elapsed = (current_time() - start) / 1000000
+    let result = EntitlementResolutionResult {
+        consumer_id: consumer_id,
+        composite_id: composite_id,
+        total_sub_circuits: total,
+        source_accessible: source_count,
+        compiled_accessible: compiled_count,
+        interface_only: interface_count,
+        resolution_ms: elapsed,
+    }
+    emit(entitlement_resolutions, result)
+    result
+}
+
+/// Compute a single sub-circuit's effective entitlement for a consumer.
+/// Open → source access for everyone.
+/// LicensedFull → source access if consumer has a matching token.
+/// Compiled → compiled access for everyone, no source.
+/// Interface → interface only.
+/// test golden
+circuit compute_sub_circuit_entitlement(consumer_id: bytes(32), sub_circuit: SubCircuitLicense, consumer_tokens: list<LicenseToken>) -> EffectiveEntitlement
+    @lex marketplace/licensing/entitlements
+    @precision B
+{
+    let vis = sub_circuit.visibility
+    if vis == 0 {
+        return EffectiveEntitlement {
+            consumer_id: consumer_id,
+            package_id: sub_circuit.sub_circuit_id,
+            sub_circuit_id: sub_circuit.sub_circuit_id,
+            effective_visibility: 0,
+            has_source_access: true,
+            has_compiled_access: true,
+            has_interface_only: false,
+            entitlement_reason: 0,
+        }
+    }
+    if vis == 3 {
+        let has_grant = check_strategic_grant(consumer_id, sub_circuit.sub_circuit_id)
+        if has_grant {
+            return EffectiveEntitlement {
+                consumer_id: consumer_id,
+                package_id: sub_circuit.sub_circuit_id,
+                sub_circuit_id: sub_circuit.sub_circuit_id,
+                effective_visibility: 3,
+                has_source_access: true,
+                has_compiled_access: true,
+                has_interface_only: false,
+                entitlement_reason: 5,
+            }
+        }
+        let has_token = check_license_token(consumer_id, sub_circuit.sub_circuit_id, consumer_tokens)
+        let bundled = sub_circuit.bundled_with_parent
+        let can_access = has_token || bundled
+        return EffectiveEntitlement {
+            consumer_id: consumer_id,
+            package_id: sub_circuit.sub_circuit_id,
+            sub_circuit_id: sub_circuit.sub_circuit_id,
+            effective_visibility: if can_access { 3 } else { 1 },
+            has_source_access: can_access,
+            has_compiled_access: true,
+            has_interface_only: !can_access,
+            entitlement_reason: if has_token { 1 } else if bundled { 2 } else { 4 },
+        }
+    }
+    if vis == 2 {
+        return EffectiveEntitlement {
+            consumer_id: consumer_id,
+            package_id: sub_circuit.sub_circuit_id,
+            sub_circuit_id: sub_circuit.sub_circuit_id,
+            effective_visibility: 2,
+            has_source_access: false,
+            has_compiled_access: true,
+            has_interface_only: false,
+            entitlement_reason: 3,
+        }
+    }
+    EffectiveEntitlement {
+        consumer_id: consumer_id,
+        package_id: sub_circuit.sub_circuit_id,
+        sub_circuit_id: sub_circuit.sub_circuit_id,
+        effective_visibility: 1,
+        has_source_access: false,
+        has_compiled_access: false,
+        has_interface_only: true,
+        entitlement_reason: 4,
+    }
+}
+
+/// Resolve entitlements for a derivative, combining base composite
+/// entitlements with the derivative's own additions.
+/// test golden
+circuit resolve_derivative_entitlements(consumer_id: bytes(32), derivative_id: PackageRef, consumer_tokens: list<LicenseToken>) -> EntitlementResolutionResult
+    @lex marketplace/licensing/entitlements
+    @precision B
+    @observe metrics: [derivative_entitlement_resolutions, derivative_id]
+{
+    let derivative = store_get(derivative_manifests, derivative_id)
+    if derivative == nil {
+        return EntitlementResolutionResult {
+            consumer_id: consumer_id,
+            composite_id: derivative_id,
+            total_sub_circuits: 0,
+            source_accessible: 0,
+            compiled_accessible: 0,
+            interface_only: 0,
+            resolution_ms: 0,
+        }
+    }
+    let base_result = resolve_effective_entitlements(
+        consumer_id, derivative.base_composite, consumer_tokens
+    )
+    let additions = store_scan(derivative_additions, derivative_id)
+    let add_source = 0u16
+    let add_compiled = 0u16
+    let add_interface = 0u16
+    for add in additions {
+        let add_license = SubCircuitLicense {
+            sub_circuit_id: add.addition_id,
+            sub_circuit_name: add.circuit_name,
+            visibility: add.visibility,
+            license_spdx: add.license_spdx,
+            requires_separate_token: false,
+            bundled_with_parent: true,
+        }
+        let ent = compute_sub_circuit_entitlement(consumer_id, add_license, consumer_tokens)
+        if ent.has_source_access {
+            add_source = add_source + 1
+        } else if ent.has_compiled_access {
+            add_compiled = add_compiled + 1
+        } else {
+            add_interface = add_interface + 1
+        }
+    }
+    EntitlementResolutionResult {
+        consumer_id: consumer_id,
+        composite_id: derivative_id,
+        total_sub_circuits: base_result.total_sub_circuits + derivative.addition_count,
+        source_accessible: base_result.source_accessible + add_source,
+        compiled_accessible: base_result.compiled_accessible + add_compiled,
+        interface_only: base_result.interface_only + add_interface,
+        resolution_ms: base_result.resolution_ms,
+    }
+}
+
+/// Check whether a consumer holds a valid license token for a package.
+circuit check_license_token(consumer_id: bytes(32), package_id: PackageRef, tokens: list<LicenseToken>) -> bool
+    @lex marketplace/licensing/entitlements
+    @precision A
+{
+    let expected = sha3_256(concat(consumer_id, package_id))
+    for token in tokens {
+        let token_hash = sha3_256(token)
+        if token_hash == expected || token == package_id {
+            return true
+        }
+    }
+    false
+}
+
+/// Check whether a consumer has an active strategic license grant for a package.
+/// Delegates to strategic_grants.fl check_grant_entitlement.
+/// Returns true if an active, unexpired grant matches the consumer + package.
+// entitlement_reason: 0=OpenSource, 1=LicenseToken, 2=BundledWithParent, 3=CompiledDefault, 4=InterfaceOnly, 5=StrategicGrant
+circuit check_strategic_grant(consumer_id: bytes(32), package_id: PackageRef) -> bool
+    @lex marketplace/licensing/entitlements
+    @precision A
+{
+    let consumer_lex = consumer_id_to_lex(consumer_id)
+    let entitlement = check_grant_entitlement(consumer_lex, package_id)
+    if entitlement != nil {
+        entitlement.has_source_access
+    } else {
+        false
+    }
+}
+
+// --- Extern Reference (strategic_grants.fl, internal_marketplace.fl) ---
+
+extern "fl" {
+    fn check_grant_entitlement(consumer_lex: bytes(128), package_id: bytes(32)) -> any
+    fn consumer_id_to_lex(consumer_id: bytes(32)) -> bytes(128)
+}
+
+// --- Tests ---
+
+test golden "register_composite_visibility_basic" {
+    let sub_a = SubCircuitLicense {
+        sub_circuit_id: "0xA1",
+        sub_circuit_name: "sub-circuit-a",
+        visibility: 0,
+        license_spdx: "Apache-2.0",
+        requires_separate_token: false,
+        bundled_with_parent: true,
+    }
+    let sub_b = SubCircuitLicense {
+        sub_circuit_id: "0xB1",
+        sub_circuit_name: "sub-circuit-b",
+        visibility: 2,
+        license_spdx: "LicenseRef-Commercial",
+        requires_separate_token: false,
+        bundled_with_parent: true,
+    }
+    let sub_c = SubCircuitLicense {
+        sub_circuit_id: "0xC1",
+        sub_circuit_name: "sub-circuit-c",
+        visibility: 3,
+        license_spdx: "LicenseRef-Commercial-Source",
+        requires_separate_token: true,
+        bundled_with_parent: false,
+    }
+    let manifest = register_composite_visibility(
+        "0xDD", "composite-design-a", 3, "LicenseRef-Commercial",
+        [sub_a, sub_b, sub_c]
+    )
+    assert manifest.sub_circuit_count == 3
+    assert manifest.composite_visibility == 3
+}
+
+test golden "register_derivative_basic" {
+    let pre = DerivativeAddition {
+        addition_id: "0xE1",
+        derivative_id: "0xFF",
+        circuit_name: "pre-processor",
+        visibility: 0,
+        license_spdx: "Apache-2.0",
+        position: 0,
+    }
+    let post = DerivativeAddition {
+        addition_id: "0xE2",
+        derivative_id: "0xFF",
+        circuit_name: "post-processor",
+        visibility: 3,
+        license_spdx: "LicenseRef-DevB",
+        position: 3,
+    }
+    let manifest = register_derivative(
+        "0xFF", "enhanced-design", "0xDD", "1.0.0",
+        [pre, post], 4000, 5000, 1000
+    )
+    assert manifest.addition_count == 2
+    assert manifest.revenue_derivative_bps == 4000
+    assert manifest.revenue_base_composite_bps == 5000
+    assert manifest.revenue_platform_bps == 1000
+}
+
+test golden "entitlement_open_source_always_accessible" {
+    let sub = SubCircuitLicense {
+        sub_circuit_id: "0x11",
+        sub_circuit_name: "open-lib",
+        visibility: 0,
+        license_spdx: "Apache-2.0",
+        requires_separate_token: false,
+        bundled_with_parent: true,
+    }
+    let ent = compute_sub_circuit_entitlement("0xCC", sub, [])
+    assert ent.has_source_access == true
+    assert ent.entitlement_reason == 0
+}
+
+test golden "entitlement_compiled_no_source" {
+    let sub = SubCircuitLicense {
+        sub_circuit_id: "0x22",
+        sub_circuit_name: "compiled-lib",
+        visibility: 2,
+        license_spdx: "LicenseRef-Commercial",
+        requires_separate_token: false,
+        bundled_with_parent: true,
+    }
+    let ent = compute_sub_circuit_entitlement("0xCC", sub, [])
+    assert ent.has_source_access == false
+    assert ent.has_compiled_access == true
+    assert ent.entitlement_reason == 3
+}
+
+test golden "entitlement_licensed_with_token" {
+    let sub = SubCircuitLicense {
+        sub_circuit_id: "0x33",
+        sub_circuit_name: "licensed-lib",
+        visibility: 3,
+        license_spdx: "LicenseRef-Commercial-Source",
+        requires_separate_token: true,
+        bundled_with_parent: false,
+    }
+    let ent = compute_sub_circuit_entitlement("0xCC", sub, ["0x33"])
+    assert ent.has_source_access == true
+    assert ent.entitlement_reason == 1
+}
+
+test golden "entitlement_licensed_no_token" {
+    let sub = SubCircuitLicense {
+        sub_circuit_id: "0x44",
+        sub_circuit_name: "licensed-no-token",
+        visibility: 3,
+        license_spdx: "LicenseRef-Commercial-Source",
+        requires_separate_token: true,
+        bundled_with_parent: false,
+    }
+    let ent = compute_sub_circuit_entitlement("0xCC", sub, [])
+    assert ent.has_source_access == false
+    assert ent.has_interface_only == true
+    assert ent.entitlement_reason == 4
+}
+
+test golden "revenue_split_must_sum_10000" {
+    let result = register_derivative(
+        "0xBB", "bad-split", "0xDD", "1.0.0",
+        [], 5000, 5000, 1000
+    )
+    assert result == nil
+}

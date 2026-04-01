@@ -254,3 +254,125 @@ circuit scaffold_package(package_path: bytes(256)) -> DocGenResult
         examples_count: initial_examples,
     }
 }
+
+// --- Upstream Contribution Workflow ---
+//
+// `estream marketplace upstream` CLI command implementation.
+// Submits local fork patches back to the upstream publisher's
+// es-vcs repository as a contribution (PR-equivalent).
+//
+// Workflow:
+//   1. Identify fork from current working directory's .es/ metadata
+//   2. Collect local patches not yet submitted upstream
+//   3. Package patches into an UpstreamContribution
+//   4. Submit via wire protocol to publisher's registry endpoint
+//   5. Track submission status
+
+type UpstreamSubmitRequest = struct {
+    fork_id: bytes(32),
+    patch_refs: bytes(512),
+    patch_count: u16,
+    description: bytes(256),
+    contributor_spark_id: bytes(32),
+    signing_key: bytes(1952),
+}
+
+type UpstreamSubmitResult = struct {
+    contribution_id: bytes(32),
+    fork_id: bytes(32),
+    upstream_package: bytes(32),
+    patches_submitted: u16,
+    status: u8,
+    submitted_at: u64,
+}
+// status: 0=Submitted, 1=Failed, 2=AlreadySubmitted
+
+stream upstream_submissions: event<UpstreamSubmitResult>
+    @retention 365d
+    @consumers [dev, console, audit]
+
+/// Submit local fork patches upstream to the publisher.
+/// Implements `estream marketplace upstream [--all | --patches <refs>]`.
+/// Validates fork exists, collects unsubmitted patches, signs the
+/// contribution with the contributor's SPARK key, and submits.
+/// test golden
+circuit marketplace_upstream(request: UpstreamSubmitRequest) -> UpstreamSubmitResult
+    @lex marketplace/dev
+    @precision B
+    @rbac [developer, publisher]
+    @observe metrics: [upstream_submissions, fork_id, patches_submitted]
+    @attested true
+{
+    let fork = store_get(fork_registry, request.fork_id)
+    if fork == nil {
+        return UpstreamSubmitResult {
+            contribution_id: bytes(32),
+            fork_id: request.fork_id,
+            upstream_package: bytes(32),
+            patches_submitted: 0,
+            status: 1,
+            submitted_at: current_time(),
+        }
+    }
+    let contribution_hash = sha3_256(concat(
+        request.fork_id,
+        concat(request.contributor_spark_id, sha3_256(request.patch_refs))
+    ))
+    let sig = mldsa_sign(contribution_hash, request.signing_key)
+    let contribution = submit_upstream_contribution(
+        request.fork_id,
+        request.patch_refs,
+        request.patch_count,
+        request.description,
+        request.contributor_spark_id
+    )
+    let result = UpstreamSubmitResult {
+        contribution_id: contribution.contribution_id,
+        fork_id: request.fork_id,
+        upstream_package: fork.upstream_package,
+        patches_submitted: request.patch_count,
+        status: 0,
+        submitted_at: current_time(),
+    }
+    emit(upstream_submissions, result)
+    result
+}
+
+/// Check status of a previously submitted upstream contribution.
+/// test golden
+circuit check_upstream_status(contribution_id: bytes(32)) -> u8
+    @lex marketplace/dev
+    @precision C
+    @observe metrics: [upstream_status_checks]
+{
+    let contribution = store_get(upstream_contributions, contribution_id)
+    if contribution == nil {
+        return 255
+    }
+    contribution.status
+}
+
+/// List all upstream contributions for a fork.
+/// test golden
+circuit list_upstream_contributions(fork_id: bytes(32)) -> u16
+    @lex marketplace/dev
+    @precision C
+    @observe metrics: [upstream_contribution_listings]
+{
+    let contributions = store_scan(upstream_contributions, fork_id)
+    let count = 0u16
+    for c in contributions {
+        if c.fork_id == fork_id {
+            count = count + 1
+        }
+    }
+    count
+}
+
+// --- Extern Reference (package_fork.fl) ---
+
+extern "fl" {
+    fn submit_upstream_contribution(fork_id: bytes, patch_refs: bytes, patch_count: u16, description: bytes, contributor: bytes) -> UpstreamContribution
+    fn store_get(stream: any, key: bytes) -> any
+    fn store_scan(stream: any, key: bytes) -> list<any>
+}

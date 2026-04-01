@@ -1,0 +1,415 @@
+// Domain Package Registry — Fork Manifests & Internal Overrides
+// Epic 7: estream-marketplace#7
+//
+// Tracks forked marketplace packages with upstream lineage, local patches,
+// and Cortex-assisted sync policy. Supports both open-source forks
+// (Model 1: unrestricted) and licensed-source internal overrides
+// (Model 2: org-internal only, never leaks to network).
+//
+// Stratum DAG stores the fork's patch history. Each local patch is a
+// delta ref in the DAG, enabling Cortex to compute merge feasibility
+// when new upstream versions are published.
+
+/// govern lex marketplace/registry
+
+// --- Types ---
+
+type ForkId = bytes(32)
+type PackageRef = bytes(32)
+type DagCommitHash = bytes(32)
+type DeltaRef = bytes(32)
+type LexPath = bytes(128)
+type PatchDescription = bytes(256)
+type SyncPolicyTag = u8
+// 0=Auto (merge if no conflicts), 1=Suggest (notify, require approval), 2=Manual (no auto action)
+
+type CortexMergePolicy = u8
+// 0=AutoIfClean, 1=SuggestAlways, 2=ManualOnly
+
+type ForkPolicy = u8
+// 0=Unrestricted (open source, anyone can fork externally)
+// 1=InternalOnly (licensed source, fork stays within consumer lex)
+// 2=ProhibitFork (compiled-only, no fork allowed)
+
+type OverrideVisibility = u8
+// 0=InternalOnly (never leaks to network)
+// 1=OrgWide (visible within org lex)
+// 2=CrossLexBridge (shared via explicit bilateral bridge)
+
+type PatchEntry = struct {
+    patch_id: bytes(32),
+    description: PatchDescription,
+    delta_ref: DeltaRef,
+    author_spark_id: bytes(32),
+    applied_at: u64,
+}
+
+type ForkManifest = struct {
+    fork_id: ForkId,
+    upstream_package: PackageRef,
+    upstream_version: bytes(20),
+    fork_point: DagCommitHash,
+    fork_policy: ForkPolicy,
+    local_patch_count: u16,
+    auto_sync: bool,
+    cortex_merge_policy: CortexMergePolicy,
+    forked_by: bytes(32),
+    forked_at: u64,
+    last_sync_at: u64,
+    last_sync_version: bytes(20),
+}
+
+type InternalOverrideManifest = struct {
+    override_id: bytes(32),
+    marketplace_package: PackageRef,
+    marketplace_version: bytes(20),
+    internal_lex: LexPath,
+    override_dag_ref: DagCommitHash,
+    patch_count: u16,
+    upstream_sync_enabled: bool,
+    cortex_policy: CortexMergePolicy,
+    conflict_escalation_role: bytes(64),
+    visibility: OverrideVisibility,
+    created_by: bytes(32),
+    created_at: u64,
+    updated_at: u64,
+}
+
+type SyncResult = struct {
+    fork_id: ForkId,
+    upstream_version: bytes(20),
+    new_version: bytes(20),
+    patches_reapplied: u16,
+    conflicts_found: u16,
+    auto_merged: bool,
+    merged_dag_ref: DagCommitHash,
+    synced_at: u64,
+}
+
+type UpstreamContribution = struct {
+    contribution_id: bytes(32),
+    fork_id: ForkId,
+    upstream_package: PackageRef,
+    patch_refs: bytes(512),
+    patch_count: u16,
+    description: PatchDescription,
+    contributor_spark_id: bytes(32),
+    submitted_at: u64,
+    status: u8,
+}
+// status: 0=Submitted, 1=UnderReview, 2=Accepted, 3=Rejected, 4=Withdrawn
+
+// --- Cortex ---
+
+cortex fork_intelligence {
+    expose [upstream_version, local_patch_count, sync_status, conflict_rate]
+    infer on_write { model fork_sync_advisor; confidence_threshold 0.80 }
+    on_anomaly alert { severity warning; channel vcs }
+    on_suggestion store { review_required true }
+}
+
+// --- Streams ---
+
+stream fork_registry: state<ForkId, ForkManifest>
+    @retention 365d
+    @consumers [cli, console, registry, cortex]
+
+stream internal_overrides: state<bytes(32), InternalOverrideManifest>
+    @retention 365d
+    @consumers [cli, console, registry, cortex]
+
+stream fork_patches: event<PatchEntry>
+    @retention 365d
+    @consumers [cli, console, registry, audit]
+
+stream sync_results: event<SyncResult>
+    @retention 365d
+    @consumers [cli, console, registry, audit, cortex]
+
+stream upstream_contributions: event<UpstreamContribution>
+    @retention 365d
+    @consumers [cli, console, registry, audit]
+
+// --- Circuits ---
+
+/// Create a fork of a marketplace package. Validates fork policy,
+/// records fork point in Stratum DAG, and initializes sync tracking.
+/// test golden
+circuit create_fork(upstream_package: PackageRef, upstream_version: bytes(20), fork_point: DagCommitHash, fork_policy: ForkPolicy, forker_spark_id: bytes(32), auto_sync: bool, cortex_policy: CortexMergePolicy) -> ForkManifest
+    @lex marketplace/registry/forks
+    @precision B
+    @rbac [developer, publisher]
+    @observe metrics: [forks_created, upstream_package, fork_policy]
+    @attested true
+    @invariant "fork_policy_allows" { fork_policy != 2 }
+{
+    let fork_seed = concat(upstream_package, forker_spark_id)
+    let fork_id = sha3_256(concat(fork_seed, fork_point))
+    let existing = store_get(fork_registry, fork_id)
+    if existing != nil {
+        fail("fork already exists for this package + identity + fork point")
+    }
+    let manifest = ForkManifest {
+        fork_id: fork_id,
+        upstream_package: upstream_package,
+        upstream_version: upstream_version,
+        fork_point: fork_point,
+        fork_policy: fork_policy,
+        local_patch_count: 0,
+        auto_sync: auto_sync,
+        cortex_merge_policy: cortex_policy,
+        forked_by: forker_spark_id,
+        forked_at: current_time(),
+        last_sync_at: current_time(),
+        last_sync_version: upstream_version,
+    }
+    store_put(fork_registry, fork_id, manifest)
+    manifest
+}
+
+/// Add a local patch to a fork. Each patch is a Stratum DAG delta ref
+/// tracking the exact change made to the upstream source.
+/// test golden
+circuit add_fork_patch(fork_id: ForkId, description: PatchDescription, delta_ref: DeltaRef, author_spark_id: bytes(32)) -> PatchEntry
+    @lex marketplace/registry/forks
+    @precision B
+    @rbac [developer, publisher]
+    @observe metrics: [patches_added, fork_id]
+    @attested true
+{
+    let fork = store_get(fork_registry, fork_id)
+    if fork == nil {
+        fail("fork not found")
+    }
+    let patch_id = sha3_256(concat(fork_id, delta_ref))
+    let patch = PatchEntry {
+        patch_id: patch_id,
+        description: description,
+        delta_ref: delta_ref,
+        author_spark_id: author_spark_id,
+        applied_at: current_time(),
+    }
+    let updated_fork = ForkManifest {
+        fork_id: fork.fork_id,
+        upstream_package: fork.upstream_package,
+        upstream_version: fork.upstream_version,
+        fork_point: fork.fork_point,
+        fork_policy: fork.fork_policy,
+        local_patch_count: fork.local_patch_count + 1,
+        auto_sync: fork.auto_sync,
+        cortex_merge_policy: fork.cortex_merge_policy,
+        forked_by: fork.forked_by,
+        forked_at: fork.forked_at,
+        last_sync_at: fork.last_sync_at,
+        last_sync_version: fork.last_sync_version,
+    }
+    store_put(fork_registry, fork_id, updated_fork)
+    emit(fork_patches, patch)
+    patch
+}
+
+/// Create an internal override of a marketplace package. The override
+/// lives within the consumer's lex and is invisible to the publisher
+/// and network. Lex-scoped dependency resolution will prefer this
+/// override over the marketplace package.
+/// test golden
+circuit create_internal_override(marketplace_package: PackageRef, marketplace_version: bytes(20), internal_lex: LexPath, creator_spark_id: bytes(32), cortex_policy: CortexMergePolicy, conflict_escalation_role: bytes(64), visibility: OverrideVisibility) -> InternalOverrideManifest
+    @lex marketplace/registry/overrides
+    @precision B
+    @rbac [developer, org_admin]
+    @observe metrics: [overrides_created, marketplace_package, visibility]
+    @attested true
+    @invariant "lex_not_empty" { internal_lex != bytes(128) }
+{
+    let override_seed = concat(marketplace_package, internal_lex)
+    let override_id = sha3_256(concat(override_seed, creator_spark_id))
+    let dag_root = sha3_256(concat(override_id, marketplace_version))
+    let manifest = InternalOverrideManifest {
+        override_id: override_id,
+        marketplace_package: marketplace_package,
+        marketplace_version: marketplace_version,
+        internal_lex: internal_lex,
+        override_dag_ref: dag_root,
+        patch_count: 0,
+        upstream_sync_enabled: true,
+        cortex_policy: cortex_policy,
+        conflict_escalation_role: conflict_escalation_role,
+        visibility: visibility,
+        created_by: creator_spark_id,
+        created_at: current_time(),
+        updated_at: current_time(),
+    }
+    store_put(internal_overrides, override_id, manifest)
+    manifest
+}
+
+/// Record the result of syncing a fork with a new upstream version.
+/// Called by the Cortex upstream sync circuit after merge attempt.
+/// test golden
+circuit record_sync_result(fork_id: ForkId, upstream_version: bytes(20), new_version: bytes(20), patches_reapplied: u16, conflicts_found: u16, auto_merged: bool, merged_dag_ref: DagCommitHash) -> SyncResult
+    @lex marketplace/registry/forks
+    @precision B
+    @observe metrics: [syncs_recorded, fork_id, auto_merged, conflicts_found]
+    @attested true
+{
+    let result = SyncResult {
+        fork_id: fork_id,
+        upstream_version: upstream_version,
+        new_version: new_version,
+        patches_reapplied: patches_reapplied,
+        conflicts_found: conflicts_found,
+        auto_merged: auto_merged,
+        merged_dag_ref: merged_dag_ref,
+        synced_at: current_time(),
+    }
+    let fork = store_get(fork_registry, fork_id)
+    if fork != nil && auto_merged {
+        let updated = ForkManifest {
+            fork_id: fork.fork_id,
+            upstream_package: fork.upstream_package,
+            upstream_version: upstream_version,
+            fork_point: merged_dag_ref,
+            fork_policy: fork.fork_policy,
+            local_patch_count: patches_reapplied,
+            auto_sync: fork.auto_sync,
+            cortex_merge_policy: fork.cortex_merge_policy,
+            forked_by: fork.forked_by,
+            forked_at: fork.forked_at,
+            last_sync_at: current_time(),
+            last_sync_version: upstream_version,
+        }
+        store_put(fork_registry, fork_id, updated)
+    }
+    emit(sync_results, result)
+    result
+}
+
+/// Submit local patches as an upstream contribution to the publisher.
+/// Works for both open-source (Model 1) and licensed-source (Model 2, optional).
+/// test golden
+circuit submit_upstream_contribution(fork_id: ForkId, patch_refs: bytes(512), patch_count: u16, description: PatchDescription, contributor_spark_id: bytes(32)) -> UpstreamContribution
+    @lex marketplace/registry/forks
+    @precision B
+    @rbac [developer, publisher]
+    @observe metrics: [upstream_contributions_submitted, fork_id]
+    @attested true
+{
+    let fork = store_get(fork_registry, fork_id)
+    if fork == nil {
+        fail("fork not found")
+    }
+    let contribution_id = sha3_256(concat(fork_id, concat(contributor_spark_id, sha3_256(patch_refs))))
+    let contribution = UpstreamContribution {
+        contribution_id: contribution_id,
+        fork_id: fork_id,
+        upstream_package: fork.upstream_package,
+        patch_refs: patch_refs,
+        patch_count: patch_count,
+        description: description,
+        contributor_spark_id: contributor_spark_id,
+        submitted_at: current_time(),
+        status: 0,
+    }
+    emit(upstream_contributions, contribution)
+    contribution
+}
+
+/// Check if a fork is behind the upstream and needs sync.
+/// test golden
+circuit check_fork_currency(fork_id: ForkId, current_upstream_version: bytes(20)) -> bool
+    @lex marketplace/registry/forks
+    @precision C
+    @observe metrics: [currency_checks, fork_id]
+{
+    let fork = store_get(fork_registry, fork_id)
+    if fork == nil {
+        return false
+    }
+    fork.last_sync_version != current_upstream_version
+}
+
+// --- Tests ---
+
+test golden "create_fork_basic" {
+    let fork = create_fork(
+        "0xAA", "1.0.0", "0xBB",
+        0, "0xCC", true, 0
+    )
+    assert fork.upstream_package == "0xAA"
+    assert fork.upstream_version == "1.0.0"
+    assert fork.fork_point == "0xBB"
+    assert fork.fork_policy == 0
+    assert fork.local_patch_count == 0
+    assert fork.auto_sync == true
+    assert fork.cortex_merge_policy == 0
+}
+
+test golden "create_fork_prohibit_fails" {
+    let result = create_fork(
+        "0xAA", "1.0.0", "0xBB",
+        2, "0xCC", true, 0
+    )
+    assert result == nil
+}
+
+test golden "add_patch_increments_count" {
+    let fork = create_fork(
+        "0xDD", "2.0.0", "0xEE",
+        0, "0xFF", false, 1
+    )
+    let patch = add_fork_patch(fork.fork_id, "Fix internal routing", "0x11", "0xFF")
+    assert patch.delta_ref == "0x11"
+    let updated = store_get(fork_registry, fork.fork_id)
+    assert updated.local_patch_count == 1
+}
+
+test golden "create_internal_override_basic" {
+    let override = create_internal_override(
+        "0xAA", "0.2.0",
+        "lex://polyquantum/internal",
+        "0xBB", 0, "security_lead", 0
+    )
+    assert override.marketplace_package == "0xAA"
+    assert override.marketplace_version == "0.2.0"
+    assert override.upstream_sync_enabled == true
+    assert override.visibility == 0
+}
+
+test golden "record_sync_auto_merge" {
+    let fork = create_fork(
+        "0xCC", "1.0.0", "0xDD",
+        0, "0xEE", true, 0
+    )
+    let sync = record_sync_result(
+        fork.fork_id, "1.1.0", "1.1.0+patch1",
+        2, 0, true, "0xFF"
+    )
+    assert sync.auto_merged == true
+    assert sync.conflicts_found == 0
+    let updated = store_get(fork_registry, fork.fork_id)
+    assert updated.upstream_version == "1.1.0"
+    assert updated.last_sync_version == "1.1.0"
+}
+
+test golden "check_fork_currency_behind" {
+    let fork = create_fork(
+        "0x11", "1.0.0", "0x22",
+        0, "0x33", true, 0
+    )
+    assert check_fork_currency(fork.fork_id, "1.1.0") == true
+    assert check_fork_currency(fork.fork_id, "1.0.0") == false
+}
+
+test golden "submit_upstream_contribution_basic" {
+    let fork = create_fork(
+        "0x44", "1.0.0", "0x55",
+        0, "0x66", true, 0
+    )
+    let contrib = submit_upstream_contribution(
+        fork.fork_id, "0x77", 1,
+        "Improve error handling", "0x66"
+    )
+    assert contrib.fork_id == fork.fork_id
+    assert contrib.status == 0
+    assert contrib.patch_count == 1
+}

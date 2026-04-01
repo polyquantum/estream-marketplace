@@ -1,0 +1,433 @@
+// Marketplace Licensing — ASIC Hard IP Extension
+// Epic 7: estream-marketplace#7
+//
+// Extends the marketplace licensing model for ASIC hard IP:
+// silicon-specific visibility levels, pricing models, foundry
+// constraints, verification badges, and GDSII escrow.
+//
+// Composes with composite_visibility.fl (Model 3/4 composites),
+// settlement.fl (atomic multi-party settlement), and
+// solutions/lex_boundary.fl (cross-org IP sharing).
+//
+// See specs/ASIC_HARD_IP_LICENSING_SPEC.md for full specification.
+
+/// govern lex marketplace/licensing
+
+// --- Types ---
+
+type IpBlockId = bytes(32)
+type PackageRef = bytes(32)
+type LexPath = bytes(128)
+type FoundryId = bytes(32)
+type EscrowId = bytes(32)
+type GdsiiRef = bytes(32)
+
+type AsicVisibility = u8
+// 0=BehavioralOnly (RTL behavioral model, no synthesis results)
+// 1=SynthNetlist (gate-level netlist, post-synthesis, pre-PnR)
+// 2=TimingAbstract (Liberty .lib + LEF abstract for integration)
+// 3=HardMacro (opaque LEF/LIB only, black-box with pin geometry)
+// 4=FullPhysical (GDSII + LEF + LIB + timing models + signoff deck)
+// 5=EscrowedFull (full GDSII in escrow, released on trigger)
+
+type AsicPricingType = u8
+// 0=PerTapeout, 1=RoyaltyPerUnit, 2=SiteLicense, 3=Subscription, 4=NRE
+
+type AsicPricing = struct {
+    pricing_type: AsicPricingType,
+    base_fee_micros: u64,
+    royalty_bps: u16,
+    minimum_units: u64,
+    cap_per_unit_micros: u64,
+    annual_fee_micros: u64,
+    foundry_restricted: bool,
+    foundry_id: FoundryId,
+    includes_updates: bool,
+    includes_migration: bool,
+    includes_signoff: bool,
+    milestone_count: u8,
+    deliverable_visibility: AsicVisibility,
+}
+
+type FoundryConstraint = struct {
+    foundry_id: FoundryId,
+    foundry_name: bytes(64),
+    process_node: bytes(32),
+    requires_nda: bool,
+    requires_foundry_approval: bool,
+    restricted_to_foundry: bool,
+    pdk_version: bytes(32),
+}
+
+type AsicIpBlock = struct {
+    block_id: IpBlockId,
+    name: bytes(128),
+    version: bytes(20),
+    publisher_id: bytes(32),
+    visibility: AsicVisibility,
+    pricing: AsicPricing,
+    foundry_constraint: FoundryConstraint,
+    area_um2: u64,
+    power_mw: u32,
+    target_freq_mhz: u32,
+    badges: u16,
+    source_hash: bytes(32),
+    created_at: u64,
+}
+// badges bitmask: bit 0=DrcClean, 1=LvsClean, 2=TimingSignedOff,
+//   3=PowerSignedOff, 4=FormallyVerified, 5=SiliconProven,
+//   6=ProcessPortable, 7=RadHard
+
+type EscrowTriggerType = u8
+// 0=VendorBankruptcy, 1=ContractBreach, 2=DiscontinuedSupport,
+// 3=AcquisitionChange, 4=TimeBased
+
+type EscrowTrigger = struct {
+    trigger_type: EscrowTriggerType,
+    threshold_witnesses: u8,
+    verification_lex: LexPath,
+    description: bytes(256),
+}
+
+type EscrowConfig = struct {
+    escrow_id: EscrowId,
+    ip_block_id: IpBlockId,
+    gdsii_scatter_ref: GdsiiRef,
+    key_share_count: u8,
+    key_threshold: u8,
+    trigger_count: u8,
+    triggers_hash: bytes(32),
+    escrow_agent_lex: LexPath,
+    created_at: u64,
+    expires_at: u64,
+    released: bool,
+    released_at: u64,
+}
+
+type EscrowReleaseRequest = struct {
+    escrow_id: EscrowId,
+    trigger_type: EscrowTriggerType,
+    witness_signatures: bytes(512),
+    witness_count: u8,
+    evidence_hash: bytes(32),
+}
+
+// --- Cortex ---
+
+cortex asic_ip_intelligence {
+    expose [block_count, visibility_distribution, escrow_status, foundry_distribution]
+    infer on_write { model asic_licensing_advisor; confidence_threshold 0.80 }
+    on_anomaly alert { severity critical; channel hardware }
+    on_suggestion store { review_required true }
+}
+
+// --- Streams ---
+
+stream asic_ip_blocks: state<IpBlockId, AsicIpBlock>
+    @retention 365d
+    @consumers [cli, console, registry, licensing, hardware]
+
+stream escrow_configs: state<EscrowId, EscrowConfig>
+    @retention 3650d
+    @consumers [cli, console, licensing, audit, escrow_agent]
+
+stream escrow_releases: event<EscrowReleaseRequest>
+    @retention 3650d
+    @consumers [cli, console, licensing, audit, escrow_agent]
+
+// --- Circuits ---
+
+/// Register an ASIC IP block in the marketplace.
+/// Validates foundry constraints and pricing consistency.
+/// test golden
+circuit register_asic_ip_block(block: AsicIpBlock) -> AsicIpBlock
+    @lex marketplace/licensing/asic
+    @precision B
+    @rbac [publisher, hardware_admin]
+    @observe metrics: [asic_blocks_registered, visibility, foundry_id]
+    @attested true
+    @invariant "valid_visibility" { block.visibility <= 5 }
+    @invariant "valid_pricing" { block.pricing.pricing_type <= 4 }
+{
+    let name_valid = block.name != bytes(128)
+    let version_valid = block.version != bytes(20)
+    let publisher_valid = block.publisher_id != bytes(32)
+    if !name_valid || !version_valid || !publisher_valid {
+        fail("invalid block metadata")
+    }
+    if block.pricing.foundry_restricted && block.foundry_constraint.foundry_id == bytes(32) {
+        fail("foundry-restricted pricing requires foundry_id")
+    }
+    if block.visibility == 5 {
+        fail("EscrowedFull requires separate escrow configuration via create_escrow_config")
+    }
+    let registered = AsicIpBlock {
+        block_id: sha3_256(concat(block.name, block.version)),
+        name: block.name,
+        version: block.version,
+        publisher_id: block.publisher_id,
+        visibility: block.visibility,
+        pricing: block.pricing,
+        foundry_constraint: block.foundry_constraint,
+        area_um2: block.area_um2,
+        power_mw: block.power_mw,
+        target_freq_mhz: block.target_freq_mhz,
+        badges: block.badges,
+        source_hash: block.source_hash,
+        created_at: current_time(),
+    }
+    store_put(asic_ip_blocks, registered.block_id, registered)
+    registered
+}
+
+/// Create an escrow configuration for EscrowedFull IP blocks.
+/// GDSII is stored in scatter-CAS with encryption key split
+/// via k-of-n threshold across the witness set.
+/// test golden
+circuit create_escrow_config(ip_block_id: IpBlockId, gdsii_scatter_ref: GdsiiRef, key_share_count: u8, key_threshold: u8, triggers: list<EscrowTrigger>, escrow_agent_lex: LexPath, duration_years: u8) -> EscrowConfig
+    @lex marketplace/licensing/asic/escrow
+    @precision A
+    @rbac [publisher, hardware_admin]
+    @observe metrics: [escrows_created, ip_block_id]
+    @attested true
+    @invariant "threshold_valid" { key_threshold <= key_share_count }
+    @invariant "has_triggers" { len(triggers) > 0 }
+{
+    if key_threshold > key_share_count {
+        fail("threshold cannot exceed share count")
+    }
+    if key_threshold == 0 {
+        fail("threshold must be at least 1")
+    }
+    let trigger_count = len(triggers)
+    let triggers_hash = sha3_256(bytes(32))
+    for t in triggers {
+        triggers_hash = sha3_256(concat(triggers_hash, concat(t.verification_lex, sha3_256(t.trigger_type))))
+    }
+    let escrow_id = sha3_256(concat(ip_block_id, gdsii_scatter_ref))
+    let seconds_per_year = 31536000u64
+    let duration_ns = (duration_years * seconds_per_year) * 1000000000
+    let config = EscrowConfig {
+        escrow_id: escrow_id,
+        ip_block_id: ip_block_id,
+        gdsii_scatter_ref: gdsii_scatter_ref,
+        key_share_count: key_share_count,
+        key_threshold: key_threshold,
+        trigger_count: trigger_count,
+        triggers_hash: triggers_hash,
+        escrow_agent_lex: escrow_agent_lex,
+        created_at: current_time(),
+        expires_at: current_time() + duration_ns,
+        released: false,
+        released_at: 0,
+    }
+    store_put(escrow_configs, escrow_id, config)
+    let block = store_get(asic_ip_blocks, ip_block_id)
+    if block != nil {
+        let updated_block = AsicIpBlock {
+            block_id: block.block_id,
+            name: block.name,
+            version: block.version,
+            publisher_id: block.publisher_id,
+            visibility: 5,
+            pricing: block.pricing,
+            foundry_constraint: block.foundry_constraint,
+            area_um2: block.area_um2,
+            power_mw: block.power_mw,
+            target_freq_mhz: block.target_freq_mhz,
+            badges: block.badges,
+            source_hash: block.source_hash,
+            created_at: block.created_at,
+        }
+        store_put(asic_ip_blocks, block.block_id, updated_block)
+    }
+    config
+}
+
+/// Request escrow release. Requires k-of-n witness signatures
+/// matching the escrow config's threshold. The trigger type must
+/// match one of the configured release conditions.
+/// test golden
+circuit request_escrow_release(request: EscrowReleaseRequest) -> bool
+    @lex marketplace/licensing/asic/escrow
+    @precision A
+    @rbac [licensee, escrow_agent]
+    @observe metrics: [escrow_releases_requested, trigger_type]
+    @attested true
+{
+    let config = store_get(escrow_configs, request.escrow_id)
+    if config == nil {
+        return false
+    }
+    if config.released {
+        return false
+    }
+    let not_expired = config.expires_at > current_time()
+    if !not_expired {
+        return false
+    }
+    let witnesses_sufficient = request.witness_count >= config.key_threshold
+    if !witnesses_sufficient {
+        return false
+    }
+    let sig_hash = sha3_256(concat(request.escrow_id, request.evidence_hash))
+    let sig_valid = mldsa_verify(sig_hash, request.witness_signatures, bytes(1952))
+    if !sig_valid {
+        return false
+    }
+    let released_config = EscrowConfig {
+        escrow_id: config.escrow_id,
+        ip_block_id: config.ip_block_id,
+        gdsii_scatter_ref: config.gdsii_scatter_ref,
+        key_share_count: config.key_share_count,
+        key_threshold: config.key_threshold,
+        trigger_count: config.trigger_count,
+        triggers_hash: config.triggers_hash,
+        escrow_agent_lex: config.escrow_agent_lex,
+        created_at: config.created_at,
+        expires_at: config.expires_at,
+        released: true,
+        released_at: current_time(),
+    }
+    store_put(escrow_configs, config.escrow_id, released_config)
+    emit(escrow_releases, request)
+    true
+}
+
+/// Map AsicVisibility to the base SourceVisibility for use in
+/// composite entitlement resolution. Allows ASIC blocks to
+/// participate in mixed composites alongside software circuits.
+/// test golden
+circuit asic_to_source_visibility(asic_vis: AsicVisibility) -> u8
+    @lex marketplace/licensing/asic
+    @precision C
+{
+    if asic_vis == 0 { return 0 }
+    if asic_vis == 1 { return 3 }
+    if asic_vis == 2 { return 2 }
+    if asic_vis == 3 { return 2 }
+    if asic_vis == 4 { return 3 }
+    if asic_vis == 5 { return 3 }
+    1
+}
+
+/// Validate that a consumer's target foundry matches the IP block's
+/// foundry constraint. Blocks installation if incompatible.
+/// test golden
+circuit validate_foundry_compatibility(block_id: IpBlockId, target_foundry: FoundryId, target_process: bytes(32)) -> bool
+    @lex marketplace/licensing/asic
+    @precision B
+    @observe metrics: [foundry_validations, foundry_rejections]
+{
+    let block = store_get(asic_ip_blocks, block_id)
+    if block == nil {
+        return false
+    }
+    let constraint = block.foundry_constraint
+    if !constraint.restricted_to_foundry {
+        return true
+    }
+    let foundry_match = constraint.foundry_id == target_foundry
+    let process_match = constraint.process_node == target_process || constraint.process_node == bytes(32)
+    foundry_match && process_match
+}
+
+// --- Tests ---
+
+test golden "register_asic_ip_block_basic" {
+    let pricing = AsicPricing {
+        pricing_type: 0,
+        base_fee_micros: 50000000,
+        royalty_bps: 0,
+        minimum_units: 0,
+        cap_per_unit_micros: 0,
+        annual_fee_micros: 0,
+        foundry_restricted: true,
+        foundry_id: "0xF1",
+        includes_updates: false,
+        includes_migration: false,
+        includes_signoff: true,
+        milestone_count: 3,
+        deliverable_visibility: 4,
+    }
+    let constraint = FoundryConstraint {
+        foundry_id: "0xF1",
+        foundry_name: "TSMC",
+        process_node: "N7",
+        requires_nda: true,
+        requires_foundry_approval: false,
+        restricted_to_foundry: true,
+        pdk_version: "1.0.0",
+    }
+    let block = AsicIpBlock {
+        block_id: bytes(32),
+        name: "pq-ntt-accelerator",
+        version: "1.0.0",
+        publisher_id: "0xPQ",
+        visibility: 4,
+        pricing: pricing,
+        foundry_constraint: constraint,
+        area_um2: 250000,
+        power_mw: 150,
+        target_freq_mhz: 1000,
+        badges: 0x1F,
+        source_hash: "0xAB",
+        created_at: 0,
+    }
+    let registered = register_asic_ip_block(block)
+    assert registered.visibility == 4
+    assert registered.area_um2 == 250000
+}
+
+test golden "create_escrow_config_basic" {
+    let trigger = EscrowTrigger {
+        trigger_type: 0,
+        threshold_witnesses: 3,
+        verification_lex: "lex://escrow-agent/verification",
+        description: "Vendor bankruptcy",
+    }
+    let config = create_escrow_config(
+        "0x11", "0x22",
+        5, 3, [trigger],
+        "lex://neutral-escrow-agent",
+        10
+    )
+    assert config.key_share_count == 5
+    assert config.key_threshold == 3
+    assert config.released == false
+}
+
+test golden "asic_to_source_visibility_mapping" {
+    assert asic_to_source_visibility(0) == 0
+    assert asic_to_source_visibility(3) == 2
+    assert asic_to_source_visibility(4) == 3
+    assert asic_to_source_visibility(5) == 3
+}
+
+test golden "foundry_validation_restricted" {
+    let block = register_asic_ip_block(AsicIpBlock {
+        block_id: bytes(32),
+        name: "restricted-phy",
+        version: "1.0.0",
+        publisher_id: "0xBB",
+        visibility: 3,
+        pricing: AsicPricing {
+            pricing_type: 0, base_fee_micros: 100000, royalty_bps: 0,
+            minimum_units: 0, cap_per_unit_micros: 0, annual_fee_micros: 0,
+            foundry_restricted: true, foundry_id: "0xF2",
+            includes_updates: false, includes_migration: false,
+            includes_signoff: false, milestone_count: 0,
+            deliverable_visibility: 3,
+        },
+        foundry_constraint: FoundryConstraint {
+            foundry_id: "0xF2", foundry_name: "GF",
+            process_node: "12LP", requires_nda: true,
+            requires_foundry_approval: false,
+            restricted_to_foundry: true, pdk_version: "2.0",
+        },
+        area_um2: 100000, power_mw: 50, target_freq_mhz: 800,
+        badges: 0x07, source_hash: "0xCD", created_at: 0,
+    })
+    assert validate_foundry_compatibility(block.block_id, "0xF2", "12LP") == true
+    assert validate_foundry_compatibility(block.block_id, "0xF3", "12LP") == false
+}

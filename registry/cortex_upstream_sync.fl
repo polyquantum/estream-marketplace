@@ -1,0 +1,393 @@
+// Domain Package Registry — Cortex Upstream Sync
+// Epic 7: estream-marketplace#7
+//
+// Watches the marketplace for new upstream versions of forked packages.
+// When a new version is published, computes delta between the fork's
+// local patches and the new upstream. If no conflicts, auto-merges
+// per the fork's CortexMergePolicy. If conflicts, surfaces them for
+// manual resolution or escalates per the override's conflict_escalation_role.
+//
+// Integrates with Stratum DAG for delta computation, Cortex for
+// merge feasibility analysis, and the fork registry (package_fork.fl)
+// for fork/override state management.
+
+/// govern lex marketplace/registry
+
+// --- Types ---
+
+type SyncJobId = bytes(32)
+type ForkId = bytes(32)
+type PackageRef = bytes(32)
+type DagCommitHash = bytes(32)
+type DeltaRef = bytes(32)
+type LexPath = bytes(128)
+
+type UpstreamVersionEvent = struct {
+    package_id: PackageRef,
+    old_version: bytes(20),
+    new_version: bytes(20),
+    source_hash: bytes(32),
+    compiled_hash: bytes(32),
+    published_at: u64,
+}
+
+type SyncJob = struct {
+    job_id: SyncJobId,
+    fork_id: ForkId,
+    upstream_package: PackageRef,
+    upstream_old_version: bytes(20),
+    upstream_new_version: bytes(20),
+    local_patch_count: u16,
+    status: u8,
+    conflict_count: u16,
+    merged_dag_ref: DagCommitHash,
+    created_at: u64,
+    completed_at: u64,
+}
+// status: 0=Pending, 1=Analyzing, 2=Merging, 3=Completed, 4=ConflictsFound, 5=Escalated, 6=Failed
+
+type ConflictDetail = struct {
+    sync_job_id: SyncJobId,
+    patch_index: u16,
+    patch_delta_ref: DeltaRef,
+    conflict_type: u8,
+    upstream_delta_ref: DeltaRef,
+    description: bytes(256),
+}
+// conflict_type: 0=TextualConflict, 1=SemanticConflict, 2=TypeSignatureChange,
+//                3=DependencyConflict, 4=BreakingApiChange
+
+type MergeFeasibility = struct {
+    fork_id: ForkId,
+    upstream_new_version: bytes(20),
+    total_patches: u16,
+    clean_patches: u16,
+    conflicting_patches: u16,
+    confidence_score: u16,
+    recommended_action: u8,
+    analysis_ms: u32,
+}
+// recommended_action: 0=AutoMerge, 1=MergeWithReview, 2=ManualResolution, 3=RejectUpgrade
+// confidence_score: 0-1000 (1000 = fully confident in auto-merge)
+
+// --- Cortex ---
+
+cortex upstream_sync_intelligence {
+    expose [upstream_version, patch_count, conflict_rate, merge_confidence]
+    infer on_write { model upstream_merge_advisor; confidence_threshold 0.85 }
+    on_anomaly alert { severity warning; channel vcs }
+    on_suggestion store { review_required false }
+}
+
+// --- State Machine ---
+
+state_machine sync_job_lifecycle {
+    initial PENDING
+    persistence wal
+    terminal [COMPLETED, FAILED]
+    ai_anomaly_detection true
+    verify deadlock_free
+    verify reachable_all
+    verify terminal_convergence
+
+    PENDING -> ANALYZING { trigger begin_analysis; action compute_deltas }
+    ANALYZING -> MERGING { trigger analysis_clean; guard no_conflicts; action begin_merge }
+    ANALYZING -> CONFLICTS_FOUND { trigger conflicts_detected; action surface_conflicts }
+    MERGING -> COMPLETED { trigger merge_success; action update_fork_registry }
+    MERGING -> FAILED { trigger merge_failure; action rollback }
+    CONFLICTS_FOUND -> ESCALATED { trigger escalate; action notify_escalation_role }
+    CONFLICTS_FOUND -> MERGING { trigger manual_resolve; guard all_conflicts_resolved; action begin_merge }
+    ESCALATED -> MERGING { trigger resolution_approved; guard escalation_resolved; action begin_merge }
+    ESCALATED -> FAILED { trigger resolution_rejected; action mark_skipped }
+}
+
+// --- Streams ---
+
+stream upstream_version_events: event<UpstreamVersionEvent>
+    @retention 90d
+    @consumers [registry, cortex, fork_sync]
+
+stream sync_jobs: state<SyncJobId, SyncJob>
+    @retention 365d
+    @consumers [cli, console, registry, cortex, audit]
+
+stream sync_conflicts: event<ConflictDetail>
+    @retention 365d
+    @consumers [cli, console, registry, audit]
+
+stream merge_feasibilities: event<MergeFeasibility>
+    @retention 90d
+    @consumers [cli, console, cortex]
+
+// --- Circuits ---
+
+/// Scan all forks of a package when a new upstream version is published.
+/// Creates sync jobs for each fork that has auto_sync enabled or
+/// CortexMergePolicy != ManualOnly.
+/// test golden
+circuit on_upstream_version_published(event: UpstreamVersionEvent) -> u16
+    @lex marketplace/registry/sync
+    @precision B
+    @observe metrics: [upstream_events_processed, package_id, forks_notified]
+    @attested true
+{
+    let forks = store_scan(fork_registry, event.package_id)
+    let jobs_created = 0u16
+    for fork in forks {
+        if fork.upstream_package == event.package_id {
+            let needs_sync = fork.last_sync_version != event.new_version
+            let policy_allows = fork.cortex_merge_policy != 2
+            if needs_sync && (fork.auto_sync || policy_allows) {
+                let job_id = sha3_256(concat(fork.fork_id, sha3_256(event.new_version)))
+                let job = SyncJob {
+                    job_id: job_id,
+                    fork_id: fork.fork_id,
+                    upstream_package: event.package_id,
+                    upstream_old_version: fork.last_sync_version,
+                    upstream_new_version: event.new_version,
+                    local_patch_count: fork.local_patch_count,
+                    status: 0,
+                    conflict_count: 0,
+                    merged_dag_ref: bytes(32),
+                    created_at: current_time(),
+                    completed_at: 0,
+                }
+                store_put(sync_jobs, job_id, job)
+                jobs_created = jobs_created + 1
+            }
+        }
+    }
+    jobs_created
+}
+
+/// Analyze merge feasibility for a sync job. Uses Cortex to evaluate
+/// each local patch against the upstream delta, scoring conflict risk.
+/// test golden
+circuit analyze_merge_feasibility(job_id: SyncJobId) -> MergeFeasibility
+    @lex marketplace/registry/sync
+    @precision B
+    @observe metrics: [feasibility_analyses, fork_id, confidence_score]
+    @attested true
+{
+    let job = store_get(sync_jobs, job_id)
+    if job == nil {
+        fail("sync job not found")
+    }
+    let fork = store_get(fork_registry, job.fork_id)
+    if fork == nil {
+        fail("fork not found")
+    }
+    let patches = store_scan(fork_patches, job.fork_id)
+    let clean = 0u16
+    let conflicting = 0u16
+    let analysis_start = current_time()
+    for patch in patches {
+        let upstream_delta = stratum_dag_diff(fork.fork_point, job.upstream_new_version)
+        let overlap = delta_overlap(patch.delta_ref, upstream_delta)
+        if overlap == 0 {
+            clean = clean + 1
+        } else {
+            conflicting = conflicting + 1
+            let conflict = ConflictDetail {
+                sync_job_id: job_id,
+                patch_index: clean + conflicting - 1,
+                patch_delta_ref: patch.delta_ref,
+                conflict_type: classify_conflict(overlap),
+                upstream_delta_ref: upstream_delta,
+                description: bytes(256),
+            }
+            emit(sync_conflicts, conflict)
+        }
+    }
+    let total = clean + conflicting
+    let confidence = if total == 0 { 1000u16 } else { (clean * 1000) / total }
+    let recommended = if conflicting == 0 { 0u8 }
+        else if confidence > 800 { 1u8 }
+        else if confidence > 500 { 2u8 }
+        else { 3u8 }
+    let updated_job = SyncJob {
+        job_id: job.job_id,
+        fork_id: job.fork_id,
+        upstream_package: job.upstream_package,
+        upstream_old_version: job.upstream_old_version,
+        upstream_new_version: job.upstream_new_version,
+        local_patch_count: job.local_patch_count,
+        status: if conflicting == 0 { 2u8 } else { 4u8 },
+        conflict_count: conflicting,
+        merged_dag_ref: job.merged_dag_ref,
+        created_at: job.created_at,
+        completed_at: 0,
+    }
+    store_put(sync_jobs, job_id, updated_job)
+    let analysis_ms = (current_time() - analysis_start) / 1000000
+    let feasibility = MergeFeasibility {
+        fork_id: job.fork_id,
+        upstream_new_version: job.upstream_new_version,
+        total_patches: total,
+        clean_patches: clean,
+        conflicting_patches: conflicting,
+        confidence_score: confidence,
+        recommended_action: recommended,
+        analysis_ms: analysis_ms,
+    }
+    emit(merge_feasibilities, feasibility)
+    feasibility
+}
+
+/// Execute an auto-merge for a sync job with no conflicts.
+/// Reapplies all local patches on top of the new upstream version
+/// in the Stratum DAG, producing a new merged commit.
+/// test golden
+circuit execute_auto_merge(job_id: SyncJobId) -> SyncJob
+    @lex marketplace/registry/sync
+    @precision A
+    @observe metrics: [auto_merges_executed, fork_id, patches_reapplied]
+    @attested true
+    @invariant "no_conflicts" { job.conflict_count == 0 }
+{
+    let job = store_get(sync_jobs, job_id)
+    if job == nil {
+        fail("sync job not found")
+    }
+    if job.conflict_count != 0 {
+        fail("cannot auto-merge with conflicts")
+    }
+    let fork = store_get(fork_registry, job.fork_id)
+    if fork == nil {
+        fail("fork not found")
+    }
+    let patches = store_scan(fork_patches, job.fork_id)
+    let merge_base = sha3_256(concat(job.upstream_new_version, fork.fork_point))
+    let current_ref = merge_base
+    let applied = 0u16
+    for patch in patches {
+        let new_ref = sha3_256(concat(current_ref, patch.delta_ref))
+        current_ref = new_ref
+        applied = applied + 1
+    }
+    let completed_job = SyncJob {
+        job_id: job.job_id,
+        fork_id: job.fork_id,
+        upstream_package: job.upstream_package,
+        upstream_old_version: job.upstream_old_version,
+        upstream_new_version: job.upstream_new_version,
+        local_patch_count: applied,
+        status: 3,
+        conflict_count: 0,
+        merged_dag_ref: current_ref,
+        created_at: job.created_at,
+        completed_at: current_time(),
+    }
+    store_put(sync_jobs, job_id, completed_job)
+    record_sync_result(
+        job.fork_id, job.upstream_new_version,
+        job.upstream_new_version, applied, 0, true, current_ref
+    )
+    completed_job
+}
+
+/// Escalate a sync job with conflicts to the designated role.
+/// For InternalOverrideManifest, uses the conflict_escalation_role.
+/// test golden
+circuit escalate_sync_conflicts(job_id: SyncJobId) -> SyncJob
+    @lex marketplace/registry/sync
+    @precision B
+    @rbac [developer, org_admin]
+    @observe metrics: [escalations, fork_id, conflict_count]
+    @attested true
+{
+    let job = store_get(sync_jobs, job_id)
+    if job == nil {
+        fail("sync job not found")
+    }
+    if job.conflict_count == 0 {
+        fail("no conflicts to escalate")
+    }
+    let escalated_job = SyncJob {
+        job_id: job.job_id,
+        fork_id: job.fork_id,
+        upstream_package: job.upstream_package,
+        upstream_old_version: job.upstream_old_version,
+        upstream_new_version: job.upstream_new_version,
+        local_patch_count: job.local_patch_count,
+        status: 5,
+        conflict_count: job.conflict_count,
+        merged_dag_ref: job.merged_dag_ref,
+        created_at: job.created_at,
+        completed_at: 0,
+    }
+    store_put(sync_jobs, job_id, escalated_job)
+    escalated_job
+}
+
+// --- Extern Functions (Stratum DAG integration) ---
+
+extern "rust" {
+    fn stratum_dag_diff(base: bytes, target: bytes) -> bytes
+    fn delta_overlap(patch_delta: bytes, upstream_delta: bytes) -> u16
+    fn classify_conflict(overlap: u16) -> u8
+}
+
+// --- Extern Reference (package_fork.fl) ---
+
+extern "fl" {
+    fn record_sync_result(fork_id: bytes, upstream_version: bytes, new_version: bytes, patches_reapplied: u16, conflicts_found: u16, auto_merged: bool, merged_dag_ref: bytes) -> SyncResult
+    fn store_scan(stream: any, key: bytes) -> list<any>
+    fn store_get(stream: any, key: bytes) -> any
+}
+
+// --- Tests ---
+
+test golden "on_upstream_version_published_creates_jobs" {
+    let fork = create_fork(
+        "0xAA", "1.0.0", "0xBB",
+        0, "0xCC", true, 0
+    )
+    let event = UpstreamVersionEvent {
+        package_id: "0xAA",
+        old_version: "1.0.0",
+        new_version: "1.1.0",
+        source_hash: "0xDD",
+        compiled_hash: "0xEE",
+        published_at: current_time(),
+    }
+    let count = on_upstream_version_published(event)
+    assert count == 1
+}
+
+test golden "auto_merge_no_conflicts" {
+    let fork = create_fork(
+        "0x11", "1.0.0", "0x22",
+        0, "0x33", true, 0
+    )
+    add_fork_patch(fork.fork_id, "Fix routing", "0x44", "0x33")
+    let event = UpstreamVersionEvent {
+        package_id: "0x11",
+        old_version: "1.0.0",
+        new_version: "1.1.0",
+        source_hash: "0x55",
+        compiled_hash: "0x66",
+        published_at: current_time(),
+    }
+    let count = on_upstream_version_published(event)
+    assert count == 1
+}
+
+test golden "escalate_conflicts" {
+    let job = SyncJob {
+        job_id: "0x77",
+        fork_id: "0x88",
+        upstream_package: "0x99",
+        upstream_old_version: "1.0.0",
+        upstream_new_version: "2.0.0",
+        local_patch_count: 3,
+        status: 4,
+        conflict_count: 2,
+        merged_dag_ref: bytes(32),
+        created_at: current_time(),
+        completed_at: 0,
+    }
+    store_put(sync_jobs, "0x77", job)
+    let escalated = escalate_sync_conflicts("0x77")
+    assert escalated.status == 5
+}

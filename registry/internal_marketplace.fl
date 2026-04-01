@@ -1,0 +1,300 @@
+// Domain Package Registry — Org-Internal Marketplace
+// Epic 7: estream-marketplace#7
+//
+// Enables organizations to publish packages within their own lex
+// (org-internal marketplace) and selectively share across org
+// boundaries via cross-lex bridges. All four licensing models
+// (open source, licensed source, mixed composite, derivative)
+// work identically in internal vs external marketplaces.
+//
+// Resolution priority:
+//   1. Internal override (lex://org/internal/overrides/) — fork patches
+//   2. Org-internal registry (lex://org/internal/marketplace/) — org packages
+//   3. Cross-lex bridge packages (bilateral sharing)
+//   4. Public marketplace (lex://esn/marketplace/) — fallback
+//
+// Composes with solutions/lex_boundary.fl for tier nesting and
+// registry/package_fork.fl for internal override resolution.
+
+/// govern lex marketplace/registry
+
+// --- Types ---
+
+type OrgRegistryId = bytes(32)
+type PackageRef = bytes(32)
+type LexPath = bytes(128)
+type BridgeId = bytes(32)
+
+type OrgRegistryScope = u8
+// 0=OrgWide (all teams in org see it)
+// 1=TeamScoped (only specific team lex sees it)
+// 2=ProjectScoped (only specific project lex sees it)
+
+type OrgPackageEntry = struct {
+    entry_id: bytes(32),
+    org_lex: LexPath,
+    package_id: PackageRef,
+    package_name: bytes(128),
+    version: bytes(20),
+    publisher_spark_id: bytes(32),
+    scope: OrgRegistryScope,
+    scope_lex: LexPath,
+    source_visibility: u8,
+    created_at: u64,
+}
+// source_visibility: 0=Open, 1=Interface, 2=Compiled, 3=LicensedFull
+
+type CrossLexPackageShare = struct {
+    share_id: bytes(32),
+    bridge_id: BridgeId,
+    source_org_lex: LexPath,
+    target_org_lex: LexPath,
+    package_id: PackageRef,
+    shared_visibility: u8,
+    share_fields: bytes(256),
+    redact_fields: bytes(256),
+    witness_chain_hash: bytes(32),
+    approved_at: u64,
+    expires_at: u64,
+}
+
+type PackageResolutionOrder = struct {
+    consumer_lex: LexPath,
+    package_name: bytes(128),
+    resolved_from: u8,
+    resolved_id: bytes(32),
+    resolved_version: bytes(20),
+}
+// resolved_from: 0=InternalOverride, 1=OrgRegistry, 2=CrossLexBridge, 3=StrategicGrant, 4=PublicMarketplace
+
+// --- Cortex ---
+
+cortex internal_marketplace_intelligence {
+    expose [org_package_count, cross_lex_shares, resolution_sources]
+    infer on_write { model internal_market_advisor; confidence_threshold 0.75 }
+    on_anomaly alert { severity warning; channel marketplace }
+    on_suggestion store { review_required true }
+}
+
+// --- Streams ---
+
+stream org_registry: state<bytes(32), OrgPackageEntry>
+    @retention 365d
+    @consumers [cli, console, registry, org_admin]
+
+stream cross_lex_shares: state<bytes(32), CrossLexPackageShare>
+    @retention 365d
+    @consumers [cli, console, registry, org_admin, audit]
+
+stream resolution_audit: event<PackageResolutionOrder>
+    @retention 90d
+    @consumers [console, audit]
+
+// --- Circuits ---
+
+/// Publish a package to the org-internal marketplace.
+/// The package is visible only within the specified org lex
+/// (or narrower scope if TeamScoped/ProjectScoped).
+/// test golden
+circuit publish_to_org_registry(org_lex: LexPath, package_id: PackageRef, package_name: bytes(128), version: bytes(20), publisher_spark_id: bytes(32), scope: OrgRegistryScope, scope_lex: LexPath, source_visibility: u8) -> OrgPackageEntry
+    @lex marketplace/registry/internal
+    @precision B
+    @rbac [developer, org_admin]
+    @observe metrics: [org_publishes, org_lex, scope]
+    @attested true
+    @invariant "lex_not_empty" { org_lex != bytes(128) }
+{
+    let entry_id = sha3_256(concat(org_lex, concat(package_id, version)))
+    let entry = OrgPackageEntry {
+        entry_id: entry_id,
+        org_lex: org_lex,
+        package_id: package_id,
+        package_name: package_name,
+        version: version,
+        publisher_spark_id: publisher_spark_id,
+        scope: scope,
+        scope_lex: if scope == 0 { org_lex } else { scope_lex },
+        source_visibility: source_visibility,
+        created_at: current_time(),
+    }
+    store_put(org_registry, entry_id, entry)
+    entry
+}
+
+/// Share a package across org boundaries via cross-lex bridge.
+/// Requires bilateral consent: both source and target orgs must
+/// approve. Field-level transforms (share/redact) control what
+/// crosses the boundary. Every crossing produces a chained witness.
+/// test golden
+circuit create_cross_lex_share(bridge_id: BridgeId, source_org_lex: LexPath, target_org_lex: LexPath, package_id: PackageRef, shared_visibility: u8, share_fields: bytes(256), redact_fields: bytes(256), duration_seconds: u64, witness_key: bytes(1952)) -> CrossLexPackageShare
+    @lex marketplace/registry/bridge
+    @precision A
+    @rbac [org_admin]
+    @observe metrics: [cross_lex_shares_created, source_org, target_org]
+    @attested true
+    @invariant "different_orgs" { source_org_lex != target_org_lex }
+{
+    if source_org_lex == target_org_lex {
+        fail("cannot share within same org -- use org registry instead")
+    }
+    let share_id = sha3_256(concat(bridge_id, concat(package_id, target_org_lex)))
+    let witness_data = sha3_256(concat(share_id, concat(source_org_lex, target_org_lex)))
+    let witness_sig = mldsa_sign(witness_data, witness_key)
+    let share = CrossLexPackageShare {
+        share_id: share_id,
+        bridge_id: bridge_id,
+        source_org_lex: source_org_lex,
+        target_org_lex: target_org_lex,
+        package_id: package_id,
+        shared_visibility: shared_visibility,
+        share_fields: share_fields,
+        redact_fields: redact_fields,
+        witness_chain_hash: sha3_256(concat(witness_data, witness_sig)),
+        approved_at: current_time(),
+        expires_at: current_time() + (duration_seconds * 1000000000),
+    }
+    store_put(cross_lex_shares, share_id, share)
+    share
+}
+
+/// Resolve a package with full lex-scoped priority chain.
+/// Checks: internal override → org registry → cross-lex bridge → strategic grant → public marketplace.
+/// test golden
+circuit resolve_package_lex_priority(consumer_lex: LexPath, package_name: bytes(128), package_id: PackageRef, marketplace_version: bytes(20)) -> PackageResolutionOrder
+    @lex marketplace/registry/install
+    @precision B
+    @observe metrics: [lex_priority_resolutions, resolved_from]
+{
+    let override_key = sha3_256(concat(package_id, consumer_lex))
+    let override = store_get(internal_overrides, override_key)
+    if override != nil {
+        return PackageResolutionOrder {
+            consumer_lex: consumer_lex,
+            package_name: package_name,
+            resolved_from: 0,
+            resolved_id: override.override_id,
+            resolved_version: override.marketplace_version,
+        }
+    }
+    let org_entries = store_scan(org_registry, consumer_lex)
+    for entry in org_entries {
+        if entry.package_name == package_name && entry.org_lex == consumer_lex {
+            let audit = PackageResolutionOrder {
+                consumer_lex: consumer_lex,
+                package_name: package_name,
+                resolved_from: 1,
+                resolved_id: entry.entry_id,
+                resolved_version: entry.version,
+            }
+            emit(resolution_audit, audit)
+            return audit
+        }
+    }
+    let bridge_shares = store_scan(cross_lex_shares, consumer_lex)
+    for share in bridge_shares {
+        if share.package_id == package_id && share.target_org_lex == consumer_lex {
+            let not_expired = share.expires_at > current_time()
+            if not_expired {
+                let audit = PackageResolutionOrder {
+                    consumer_lex: consumer_lex,
+                    package_name: package_name,
+                    resolved_from: 2,
+                    resolved_id: share.share_id,
+                    resolved_version: marketplace_version,
+                }
+                emit(resolution_audit, audit)
+                return audit
+            }
+        }
+    }
+    let grant_entitlement = check_strategic_grant_for_resolution(consumer_lex, package_id)
+    if grant_entitlement != nil {
+        let audit = PackageResolutionOrder {
+            consumer_lex: consumer_lex,
+            package_name: package_name,
+            resolved_from: 3,
+            resolved_id: grant_entitlement.grant_id,
+            resolved_version: marketplace_version,
+        }
+        emit(resolution_audit, audit)
+        return audit
+    }
+    let fallback = PackageResolutionOrder {
+        consumer_lex: consumer_lex,
+        package_name: package_name,
+        resolved_from: 4,
+        resolved_id: package_id,
+        resolved_version: marketplace_version,
+    }
+    emit(resolution_audit, fallback)
+    fallback
+}
+
+/// Revoke a cross-lex package share. Can be initiated by either org.
+/// test golden
+circuit revoke_cross_lex_share(share_id: bytes(32)) -> bool
+    @lex marketplace/registry/bridge
+    @precision B
+    @rbac [org_admin]
+    @observe metrics: [cross_lex_shares_revoked]
+    @attested true
+{
+    let share = store_get(cross_lex_shares, share_id)
+    if share == nil {
+        return false
+    }
+    store_delete(cross_lex_shares, share_id)
+    true
+}
+
+// --- Extern Reference (package_fork.fl) ---
+
+extern "fl" {
+    fn store_get(stream: any, key: bytes) -> any
+    fn store_scan(stream: any, key: bytes) -> list<any>
+    fn store_put(stream: any, key: bytes, value: any) -> void
+    fn store_delete(stream: any, key: bytes) -> void
+    fn check_strategic_grant_for_resolution(consumer_lex: bytes(128), package_id: bytes(32)) -> any
+}
+
+// --- Tests ---
+
+test golden "publish_to_org_registry_basic" {
+    let entry = publish_to_org_registry(
+        "lex://acme-corp/internal",
+        "0xAA", "acme-custom-auth", "1.0.0",
+        "0xBB", 0, "lex://acme-corp/internal", 0
+    )
+    assert entry.org_lex == "lex://acme-corp/internal"
+    assert entry.scope == 0
+    assert entry.source_visibility == 0
+}
+
+test golden "create_cross_lex_share_bilateral" {
+    let share = create_cross_lex_share(
+        "0xCC",
+        "lex://acme-corp", "lex://partner-corp",
+        "0xDD", 3, "interface,metrics", "source,internals",
+        86400, bytes(1952)
+    )
+    assert share.source_org_lex == "lex://acme-corp"
+    assert share.target_org_lex == "lex://partner-corp"
+    assert share.shared_visibility == 3
+}
+
+test golden "resolve_priority_fallback_to_marketplace" {
+    let resolution = resolve_package_lex_priority(
+        "lex://new-org", "some-package", "0xEE", "1.0.0"
+    )
+    assert resolution.resolved_from == 4
+}
+
+test golden "cross_lex_share_same_org_fails" {
+    let result = create_cross_lex_share(
+        "0xFF",
+        "lex://same-org", "lex://same-org",
+        "0x11", 0, bytes(256), bytes(256),
+        86400, bytes(1952)
+    )
+    assert result == nil
+}
