@@ -194,3 +194,129 @@ circuit validate_platform_constraints(package_id: bytes(32), platform_version: b
         if platform_valid { flir_valid } else { false }
     } else { false }
 }
+
+// --- Lex-Scoped Override Resolution ---
+//
+// When resolving dependencies, internal overrides take precedence over
+// marketplace packages. Resolution order:
+//   1. Check consumer's lex for InternalOverrideManifest matching package name
+//   2. If found and override is active, use the override's DAG ref
+//   3. Otherwise, fall back to marketplace registry
+//
+// This enables Model 2 (licensed-source internal fork): the consumer
+// installs from marketplace, forks internally with patches, and the
+// resolver transparently serves the internal version to all internal
+// circuit consumers without changing their dependency declarations.
+
+type LexScopedRequest = struct {
+    request_id: bytes(32),
+    root_package: bytes(128),
+    root_version: bytes(32),
+    consumer_lex: bytes(128),
+    max_depth: u16,
+    include_optional: bool,
+    platform_version: bytes(12),
+    flir_api_version: bytes(12),
+}
+
+type OverrideResolution = struct {
+    package_id: bytes(32),
+    package_name: bytes(128),
+    resolved_from: u8,
+    override_id: bytes(32),
+    override_dag_ref: bytes(32),
+    marketplace_version: bytes(20),
+    effective_version: bytes(20),
+}
+// resolved_from: 0=Marketplace, 1=InternalOverride, 2=LexBridge
+
+/// Resolve a single package with lex-scoped override check.
+/// Checks the consumer's lex for an InternalOverrideManifest first.
+/// If found and active, returns the override; otherwise returns marketplace.
+/// test golden
+circuit resolve_with_lex_override(package_id: bytes(32), package_name: bytes(128), marketplace_version: bytes(20), consumer_lex: bytes(128)) -> OverrideResolution
+    @lex marketplace/registry/install
+    @precision B
+    @observe metrics: [lex_override_checks, overrides_applied, marketplace_fallbacks]
+{
+    let override_key = sha3_256(concat(package_id, consumer_lex))
+    let override = store_get(internal_overrides, override_key)
+    if override != nil {
+        let lex_match = override.internal_lex == consumer_lex
+        let package_match = override.marketplace_package == package_id
+        let is_active = override.upstream_sync_enabled || override.patch_count > 0
+        if lex_match && package_match && is_active {
+            return OverrideResolution {
+                package_id: package_id,
+                package_name: package_name,
+                resolved_from: 1,
+                override_id: override.override_id,
+                override_dag_ref: override.override_dag_ref,
+                marketplace_version: override.marketplace_version,
+                effective_version: override.marketplace_version,
+            }
+        }
+    }
+    OverrideResolution {
+        package_id: package_id,
+        package_name: package_name,
+        resolved_from: 0,
+        override_id: bytes(32),
+        override_dag_ref: bytes(32),
+        marketplace_version: marketplace_version,
+        effective_version: marketplace_version,
+    }
+}
+
+/// Full dependency resolution with lex-scoped override support.
+/// Wraps resolve_dependencies, then checks each resolved package
+/// against the consumer's lex for internal overrides.
+/// test golden
+circuit resolve_dependencies_lex_scoped(request: LexScopedRequest) -> ResolutionResult
+    @lex marketplace/registry/install
+    @precision C
+    @observe metrics: [lex_scoped_resolutions, overrides_applied]
+{
+    let base_request = ResolutionRequest {
+        request_id: request.request_id,
+        root_package: request.root_package,
+        root_version: request.root_version,
+        max_depth: request.max_depth,
+        include_optional: request.include_optional,
+        platform_version: request.platform_version,
+        flir_api_version: request.flir_api_version,
+    }
+    let base_result = resolve_dependencies(base_request)
+    if !base_result.is_satisfiable {
+        return base_result
+    }
+    let lex_valid = request.consumer_lex != bytes(128)
+    if !lex_valid {
+        return base_result
+    }
+    let install_order = compute_install_order(base_request)
+    let override_count = 0u16
+    for pkg in install_order {
+        let resolution = resolve_with_lex_override(
+            pkg.package_id, pkg.name,
+            pkg.version, request.consumer_lex
+        )
+        if resolution.resolved_from == 1 {
+            override_count = override_count + 1
+        }
+    }
+    ResolutionResult {
+        request_id: base_result.request_id,
+        resolved_count: base_result.resolved_count,
+        conflict_count: base_result.conflict_count,
+        max_depth_reached: base_result.max_depth_reached,
+        resolution_ms: base_result.resolution_ms,
+        is_satisfiable: base_result.is_satisfiable,
+    }
+}
+
+// --- Extern Reference (package_fork.fl) ---
+
+extern "fl" {
+    fn store_get(stream: any, key: bytes) -> any
+}
