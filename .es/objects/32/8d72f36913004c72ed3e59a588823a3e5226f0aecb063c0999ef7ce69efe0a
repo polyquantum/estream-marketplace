@@ -1,0 +1,110 @@
+¤Blob‘Å
+‹/// Spec: specs/verticals/BRIDGE_SPEC.md
+/// Fraud Proof Circuit (#141)
+/// Validates bridge operations against Merkle Anchoring Program on Solana.
+/// Detects double-spend, invalid mint, and state root divergence.
+
+type MerkleAnchor = struct {
+    epoch: u64,
+    state_root: bytes(32),
+    anchor_slot: u64,
+    anchor_sig: bytes(64),
+    witness_count: u8,
+    timestamp: u64,
+}
+
+type FraudProof = struct {
+    proof_id: bytes(16),
+    proof_type: u8,
+    accused_tx: bytes(32),
+    evidence_hash: bytes(32),
+    anchor_epoch: u64,
+    state_root_expected: bytes(32),
+    state_root_actual: bytes(32),
+    submitter: bytes(32),
+    timestamp: u64,
+}
+
+type FraudVerdict = struct {
+    proof_id: bytes(16),
+    is_fraud: bool,
+    penalty_action: u8,
+    affected_amount: u64,
+    affected_accounts: u8,
+}
+
+type FraudEvent = struct {
+    event_id: bytes(16),
+    event_type: u8,
+    proof_id: bytes(16),
+    is_fraud: bool,
+    penalty_action: u8,
+    timestamp: u64,
+}
+
+state_machine fraud_investigation {
+    initial PROOF_SUBMITTED
+    persistence wal
+    terminal [FRAUD_CONFIRMED, FRAUD_DISMISSED]
+    ai_anomaly_detection true
+
+    PROOF_SUBMITTED -> PROOF_VALIDATING when validation_started
+    PROOF_VALIDATING -> PROOF_VERIFIED when evidence_valid
+    PROOF_VALIDATING -> FRAUD_DISMISSED when evidence_invalid
+    PROOF_VERIFIED -> FRAUD_CONFIRMED when governance_confirmed
+    PROOF_VERIFIED -> FRAUD_DISMISSED when governance_dismissed
+}
+
+circuit verify_merkle_anchor(anchor: MerkleAnchor) -> bool
+    @status production
+    lex bridge/fraud/anchor
+    @precision D
+    @attested true
+    observe metrics: [epoch, anchor_slot, witness_count]
+{
+    anchor.witness_count > 2
+}
+
+circuit submit_fraud_proof(proof: FraudProof) -> bool
+    @status production
+    lex bridge/fraud/submit
+    @precision D
+    @attested true
+    observe metrics: [proof_type, accused_tx, anchor_epoch, submitter]
+{
+    true
+}
+
+circuit validate_double_spend_proof(proof: FraudProof) -> bool
+    @status production
+    lex bridge/fraud/double_spend
+    @precision D
+    @attested true
+    observe metrics: [proof_id, accused_tx]
+{
+    true
+}
+
+circuit validate_invalid_mint_proof(proof: FraudProof) -> bool
+    @status production
+    lex bridge/fraud/invalid_mint
+    @precision D
+    @attested true
+    observe metrics: [proof_id, accused_tx]
+{
+    true
+}
+
+circuit render_verdict(verdict: FraudVerdict) -> bool
+    @status production
+    lex bridge/fraud/verdict
+    @precision D
+    @attested true
+    observe metrics: [proof_id, is_fraud, penalty_action, affected_amount]
+{
+    true
+}
+
+stream fraud_events: event<FraudEvent>
+    @retention 7y
+    @consumers [governance, audit, compliance, streamsight, console]

@@ -94,8 +94,8 @@ circuit optimal_n_for_environment(
 
 stream scatter_tx_events: event<ScatterTransmission>
     @retention 30d
-    @consumers [streamsight, forensics]
+    @consumers [observe, forensics]
 
 stream scatter_rx_events: event<ReconstructionResult>
     @retention 30d
-    @consumers [streamsight, forensics]
+    @consumers [observe, forensics]

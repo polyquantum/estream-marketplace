@@ -9,8 +9,8 @@
 // The claim outcome predictor model uses claim type, evidence count, and state
 // history as inputs. It retrains automatically when prediction drift exceeds 10%.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import crm_graph from "advertising/crm/circuits/crm_graph"
 
@@ -101,12 +101,12 @@ data EvidenceRecord : circuit v1 {
 
 stream crm_claim_events: event<ClaimRecord>
     @retention 7y
-    @consumers [streamsight, audit, cortex, alerting, compliance]
+    @consumers [observe, audit, cortex, alerting, compliance]
     @classify claim_id: IDENTIFIER, user_id: IDENTIFIER, claim_type: METADATA, state: METADATA
 
 stream crm_evidence_events: event<EvidenceRecord>
     @retention 7y
-    @consumers [streamsight, audit]
+    @consumers [observe, audit]
     @classify claim_id: IDENTIFIER, evidence_hash: IDENTIFIER
 
 // =============================================================================
@@ -152,8 +152,8 @@ circuit crm_file_claim(user_id: bytes(32), claim_type: bytes(64), pk: bytes(1568
     let kem = mlkem_encaps(pk)
     let sig = mldsa_sign(claim_id, user_id)
     let verified = mldsa_verify(claim_id, sig, user_id)
-    let anomaly = streamsight_anomaly(claim_id)
-    let baseline = streamsight_baseline("claims_filed")
+    let anomaly = observe_anomaly(claim_id)
+    let baseline = observe_baseline("claims_filed")
     let now = 0
 
     let edge = graph_add_edge(crm_graph, user_id, claim_id, "filed_claim")
@@ -216,8 +216,8 @@ circuit crm_transition_claim(claim_id: bytes(32), new_state: u8, pk: bytes(1568)
 
     let is_valid = valid_draft_to_submit || valid_submit_to_review || valid_review_to_evidence || valid_review_to_decision || valid_evidence_to_review || valid_decision_to_approved || valid_decision_to_denied || valid_denied_to_appealed || valid_appealed_to_review
 
-    let anomaly = streamsight_anomaly(transition_hash)
-    let baseline = streamsight_baseline("claim_transitions")
+    let anomaly = observe_anomaly(transition_hash)
+    let baseline = observe_baseline("claim_transitions")
     let prediction = li_infer(claim_id, current.claim_type)
     let now = 0
 
@@ -258,8 +258,8 @@ circuit crm_add_evidence(claim_id: bytes(32), evidence_hash: bytes(32), pk: byte
     let kem = mlkem_encaps(pk)
     let sig = mldsa_sign(evidence_anchor, claim_id)
     let verified = mldsa_verify(evidence_anchor, sig, claim_id)
-    let anomaly = streamsight_anomaly(evidence_anchor)
-    let baseline = streamsight_baseline("evidence_submitted")
+    let anomaly = observe_anomaly(evidence_anchor)
+    let baseline = observe_baseline("evidence_submitted")
 
     let current = kv_get(claim_id)
     let new_count = current.evidence_count + 1

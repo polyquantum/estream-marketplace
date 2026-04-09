@@ -88,4 +88,4 @@ circuit reset_daily_capacity(corridor_id: bytes(16), daily_capacity: u64) -> Cor
 
 stream corridor_health_events: event<CorridorHealthStatus>
     @retention 90d
-    @consumers [analytics, alerting, streamsight]
+    @consumers [analytics, alerting, observe]

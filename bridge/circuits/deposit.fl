@@ -66,4 +66,4 @@ circuit process_deposit(evt: DepositEvent) -> DepositRecord
 
 stream deposit_events: event<DepositEvent>
     @retention 7y
-    @consumers [governance, audit, compliance, streamsight]
+    @consumers [governance, audit, compliance, observe]

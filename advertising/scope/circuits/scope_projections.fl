@@ -10,8 +10,8 @@
 // pipeline data, current budget, market trends, and seasonal factors as
 // inputs. Projections include confidence intervals and are PoVC-attested.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import scope_console from "advertising/scope/circuits/scope_console"
 
@@ -95,12 +95,12 @@ data MarketTrend : circuit v1 {
 
 stream scope_projection_events: event<RevenueProjection>
     @retention 365d
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify partner_id: IDENTIFIER, period: IDENTIFIER, projected_revenue: METRIC, confidence: METRIC
 
 stream scope_trend_events: event<MarketTrend>
     @retention 365d
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify trend_id: IDENTIFIER, trend_type: METADATA, magnitude: METRIC, direction: METADATA
 
 // =============================================================================
@@ -148,8 +148,8 @@ circuit scope_project_revenue(partner_id: bytes(32), period: bytes(32), pk: byte
 
     let forecast = li_infer(partner_id, period)
     let classification = li_classify(partner_id, period)
-    let anomaly = streamsight_anomaly(projection_hash)
-    let baseline = streamsight_baseline("projections_generated")
+    let anomaly = observe_anomaly(projection_hash)
+    let baseline = observe_baseline("projections_generated")
 
     let config = kv_get(partner_id)
 
@@ -193,8 +193,8 @@ circuit scope_detect_trends(partner_id: bytes(32), pk: bytes(1568)) -> list<Mark
 
     let patterns = li_infer(partner_id, scan_hash)
     let classification = li_classify(partner_id, scan_hash)
-    let anomaly = streamsight_anomaly(scan_hash)
-    let baseline = streamsight_baseline("trends_detected")
+    let anomaly = observe_anomaly(scan_hash)
+    let baseline = observe_baseline("trends_detected")
 
     [MarketTrend {
         trend_id: sha3_256(scan_hash),
@@ -238,8 +238,8 @@ circuit scope_compare_projections(partner_id: bytes(32), periods: list<bytes(32)
 
     let projections = li_infer(partner_id, periods)
     let actuals = li_classify(partner_id, periods)
-    let anomaly = streamsight_anomaly(comparison_hash)
-    let baseline = streamsight_baseline("comparisons_run")
+    let anomaly = observe_anomaly(comparison_hash)
+    let baseline = observe_baseline("comparisons_run")
 
     [RevenueProjection {
         partner_id: partner_id,

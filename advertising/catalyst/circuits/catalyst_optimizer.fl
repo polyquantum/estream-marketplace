@@ -13,8 +13,8 @@
 // A secondary `catalyst_drift_detector` consumer triggers retraining when
 // accuracy drops below 0.75.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import crm_graph from "advertising/crm/circuits/crm_graph"
 
@@ -135,17 +135,17 @@ data FeedbackLoop : circuit v1 {
 
 stream catalyst_outcome_events: event<OutcomeRecord>
     @retention 7y
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify record_id: IDENTIFIER, application_id: IDENTIFIER, outcome: METADATA, confidence: METRIC
 
 stream catalyst_suggestion_events: event<OptimizationSuggestion>
     @retention 365d
-    @consumers [streamsight, cortex, analytics]
+    @consumers [observe, cortex, analytics]
     @classify suggestion_id: IDENTIFIER, application_id: IDENTIFIER, action: METADATA, confidence: METRIC
 
 stream catalyst_feedback_events: event<FeedbackLoop>
     @retention forever
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify loop_id: IDENTIFIER, accuracy: METRIC, drift_score: METRIC
 
 // =============================================================================
@@ -178,7 +178,7 @@ cortex campaign_intelligence {
 // =============================================================================
 //
 // Runs inference to predict application outcome. Hashes features, encapsulates
-// key material, signs the prediction, and checks for anomalies via StreamSight.
+// key material, signs the prediction, and checks for anomalies via Observe.
 // Returns an OutcomeRecord with predicted outcome and confidence.
 
 circuit catalyst_predict_outcome(application_id: bytes(32), features: bytes(2048), pk: bytes(1568)) -> OutcomeRecord
@@ -205,8 +205,8 @@ circuit catalyst_predict_outcome(application_id: bytes(32), features: bytes(2048
 
     let predicted = li_infer(application_id, features)
     let confidence = li_classify(features, application_id)
-    let anomaly = streamsight_anomaly(record_id)
-    let baseline = streamsight_baseline("predictions_made")
+    let anomaly = observe_anomaly(record_id)
+    let baseline = observe_baseline("predictions_made")
 
     let context = kv_get(application_id)
 
@@ -250,8 +250,8 @@ circuit catalyst_record_outcome(application_id: bytes(32), actual_outcome: enum 
     let verified = mldsa_verify(record_hash, sig, application_id)
 
     let existing = kv_get(application_id)
-    let anomaly = streamsight_anomaly(record_hash)
-    let baseline = streamsight_baseline("outcomes_recorded")
+    let anomaly = observe_anomaly(record_hash)
+    let baseline = observe_baseline("outcomes_recorded")
 
     OutcomeRecord {
         record_id: existing.record_id,
@@ -295,8 +295,8 @@ circuit catalyst_generate_suggestions(application_id: bytes(32), pk: bytes(1568)
 
     let analysis = li_infer(application_id, app_hash)
     let actions = li_classify(analysis, application_id)
-    let anomaly = streamsight_anomaly(app_hash)
-    let baseline = streamsight_baseline("suggestions_generated")
+    let anomaly = observe_anomaly(app_hash)
+    let baseline = observe_baseline("suggestions_generated")
 
     let context = kv_get(application_id)
 
@@ -337,8 +337,8 @@ circuit catalyst_evaluate_drift(loop_id: bytes(32), pk: bytes(1568)) -> Feedback
     let verified = mldsa_verify(loop_hash, sig, loop_id)
 
     let state = kv_get(loop_id)
-    let anomaly = streamsight_anomaly(loop_hash)
-    let baseline = streamsight_baseline("current_accuracy")
+    let anomaly = observe_anomaly(loop_hash)
+    let baseline = observe_baseline("current_accuracy")
 
     let drift = li_classify(loop_id, loop_hash)
 

@@ -1,0 +1,93 @@
+¤Blob‘Å	e/// Spec: specs/verticals/CONTENT_SECURITY_SPEC.md
+/// eStream Content Security â€” Mastering phase
+/// IMF packaging attestation, DCP creation, master archive.
+/// Content-addressed components with PQ attestation.
+
+type MasterPackage = struct {
+    package_id: bytes(32),
+    format: u8,
+    component_count: u8,
+    total_size: u64,
+    integrity_hash: bytes(32),
+    created_at: u64,
+    created_by: bytes(32),
+    attestation: bytes,
+}
+
+type PackageComponent = struct {
+    component_id: bytes(32),
+    package_id: bytes(32),
+    component_type: u8,
+    track_hash: bytes(32),
+    file_size: u64,
+    duration_ms: u64,
+}
+
+type ArchiveRecord = struct {
+    content_id: bytes(32),
+    archive_location: u8,
+    encrypted_with: u8,
+    stored_at: u64,
+    integrity_hash: bytes(32),
+    expiry_year: u16,
+}
+
+// Package format: 0=IMF, 1=DCP, 2=ProRes_Master, 3=DNxHR_Master
+
+// Component types: 0=Video_Main, 1=Video_HDR, 2=Audio_Stereo, 3=Audio_51,
+//   4=Audio_71, 5=Audio_Atmos, 6=Subtitle, 7=ClosedCaption,
+//   8=Metadata, 9=Thumbnail, 10=CPL
+
+// Archive location: 0=Hot_SSD, 1=Warm_HDD, 2=Cold_Tape, 3=Glacier, 4=Scatter_CAS
+// Encryption: 0=ML_KEM_1024, 1=AES_256_GCM_legacy
+
+circuit validate_imf_package(
+    status production
+    component_count: u8,
+    integrity_hash: bytes(32),
+    has_video: bool,
+    has_audio: bool,
+    has_cpl: bool
+) -> bool
+    lex platform/cs/mastering
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    let count_ok = component_count >= 3 && component_count <= 64
+    let hash_ok = integrity_hash != bytes(32){0}
+    let complete = has_video && has_audio && has_cpl
+    count_ok && hash_ok && complete
+}
+
+circuit validate_dcp_package(
+    status production
+    component_count: u8,
+    integrity_hash: bytes(32),
+    has_kdm: bool
+) -> bool
+    lex platform/cs/mastering
+    @precision C
+    @attested true
+{
+    let count_ok = component_count >= 3 && component_count <= 32
+    let hash_ok = integrity_hash != bytes(32){0}
+    count_ok && hash_ok && has_kdm
+}
+
+circuit archive_retention_valid(
+    status production
+    stored_at: u64,
+    expiry_year: u16,
+    current_year: u16
+) -> bool
+    lex platform/cs/mastering
+    @precision C
+    @attested true
+{
+    expiry_year > current_year && expiry_year <= current_year + 100
+}
+
+stream mastering_events: event<MasterPackage>
+    @retention 7y
+    @consumers [governance, audit, streamsight, compliance]

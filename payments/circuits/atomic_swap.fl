@@ -92,4 +92,4 @@ circuit refund_swap(swap_id: bytes(32), current_time: u64, timelock_expiry: u64)
 
 stream swap_events: event<SwapResult>
     @retention 7y
-    @consumers [governance, audit, compliance, streamsight]
+    @consumers [governance, audit, compliance, observe]

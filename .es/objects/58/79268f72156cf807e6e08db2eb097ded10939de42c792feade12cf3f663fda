@@ -1,0 +1,98 @@
+¤Blob‘Å	æ/// Spec: specs/verticals/RADIO_SPEC.md
+/// eStream Radio Scatter â€” VRF Frequency Selection
+/// Adapts VRF scatter path selection to frequency domain.
+/// Each message gets VRF-unpredictable band assignments.
+
+circuit select_frequency_bands(
+    status production
+    vrf_seed: bytes(32),
+    message_id: bytes(32),
+    n_bands: u8,
+    min_freq_hz: u64,
+    max_freq_hz: u64,
+    min_separation_hz: u32
+) -> u8
+    lex platform/radio/vrf_freq
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    let seed_ok = vrf_seed != bytes(32){0}
+    let msg_ok = message_id != bytes(32){0}
+    let bands_ok = n_bands >= 3 && n_bands <= 32
+    let range_ok = max_freq_hz > min_freq_hz
+    let aperture = max_freq_hz - min_freq_hz
+    let min_aperture = min_separation_hz * n_bands
+    let aperture_ok = aperture >= min_aperture
+    if seed_ok && msg_ok && bands_ok && range_ok && aperture_ok { return n_bands }
+    0
+}
+
+circuit validate_band_assignment(
+    status production
+    center_hz: u64,
+    bandwidth_hz: u32,
+    min_freq_hz: u64,
+    max_freq_hz: u64
+) -> bool
+    lex platform/radio/vrf_freq
+    @precision C
+    @attested true
+{
+    let half_bw = bandwidth_hz / 2
+    let lower = center_hz - half_bw
+    let upper = center_hz + half_bw
+    lower >= min_freq_hz && upper <= max_freq_hz
+}
+
+circuit band_separation_ok(
+    status production
+    center_a_hz: u64,
+    center_b_hz: u64,
+    min_separation_hz: u32
+) -> bool
+    lex platform/radio/vrf_freq
+    @precision C
+    @attested true
+{
+    let diff = 0
+    if center_a_hz > center_b_hz {
+        diff = center_a_hz - center_b_hz
+    } else {
+        diff = center_b_hz - center_a_hz
+    }
+    diff >= min_separation_hz
+}
+
+circuit vrf_band_index(
+    status production
+    vrf_output: bytes(32),
+    shard_index: u8,
+    total_bands_available: u16
+) -> u16
+    lex platform/radio/vrf_freq
+    @precision C
+    @attested true
+{
+    let index_ok = shard_index < 32
+    if !index_ok { return 0 }
+    let derived = hkdf_sha3(vrf_output, shard_index, "radio-band-v1")
+    let band = extract_u64_le(derived, 0) % total_bands_available
+    band
+}
+
+circuit max_simultaneous_bands(aperture_hz: u64, bandwidth_per_band_hz: u32, guard_hz: u32) -> u8
+    @status production
+    lex platform/radio/vrf_freq
+    @precision C
+    @attested true
+{
+    let slot_width = bandwidth_per_band_hz + guard_hz
+    let max = aperture_hz / slot_width
+    if max > 32 { return 32 }
+    max
+}
+
+stream vrf_freq_events: event<RadioShard>
+    @retention 30d
+    @consumers [streamsight, forensics]

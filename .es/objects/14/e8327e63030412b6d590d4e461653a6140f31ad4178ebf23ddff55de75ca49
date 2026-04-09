@@ -1,0 +1,72 @@
+¤Blob‘Å		// Journey: Cross-Chain Deposit and Withdrawal
+// Tests the bridge lifecycle: validate deposit â†’ process deposit â†’ validate withdrawal â†’ process withdrawal
+
+journey "deposit_withdraw" {
+    description "End-to-end bridge flow: deposit on L1, mint on L2, withdraw from L2, disburse on L1"
+    package "polyquantum.bridge"
+    platform ">= 0.12.0"
+
+    import bridge.circuits.deposit {
+        validate_deposit, process_deposit,
+        DepositEvent, DepositRecord
+    }
+    import bridge.circuits.withdraw {
+        validate_withdrawal, process_withdrawal,
+        WithdrawalRequest, WithdrawalRecord
+    }
+
+    step "create_deposit_event" {
+        let evt = DepositEvent {
+            bridge_id: sha3_256("bridge-alpha"),
+            deposit_id: 1001,
+            depositor: sha3_256("user-alice"),
+            amount: 5000000,
+            recipient_commitment: sha3_256("alice-l2-commitment"),
+            nonce: 42,
+            slot: 280000000,
+            sig: sha3_512("deposit-sig"),
+            timestamp_ms: 1742000000000,
+        }
+        assert evt.amount == 5000000
+        assert evt.deposit_id == 1001
+    }
+
+    step "validate_deposit" {
+        let valid = validate_deposit(evt)
+        assert valid == true
+    }
+
+    step "process_deposit_mint" {
+        let record = process_deposit(evt)
+        assert record.deposit_id == 1001
+        assert record.status == 0
+        assert record.retries == 0
+    }
+
+    step "create_withdrawal_request" {
+        let req = WithdrawalRequest {
+            bridge_id: sha3_256("bridge-alpha"),
+            withdrawal_id: 2001,
+            account_id: sha3_256("user-alice"),
+            amount: 3000000,
+            solana_recipient: sha3_256("alice-solana-addr"),
+            l2_state_root: sha3_256("l2-state-root-latest"),
+            l2_state_slot: 500000,
+            proof_len: 256,
+            timestamp_ms: 1742001000000,
+        }
+        assert req.amount == 3000000
+    }
+
+    step "validate_withdrawal" {
+        let w_valid = validate_withdrawal(req, sha3_256("l2-state-root-latest"))
+        assert w_valid == true
+    }
+
+    step "process_withdrawal_disburse" {
+        let w_record = process_withdrawal(req)
+        assert w_record.withdrawal_id == 2001
+        assert w_record.status == 0
+        assert w_record.retries == 0
+    }
+}

@@ -94,4 +94,4 @@ circuit fx_convert(source_amount: u64, rate_fp18: u64) -> u64
 
 stream fx_rate_events: event<FxQuoteResult>
     @retention 90d
-    @consumers [audit, analytics, streamsight]
+    @consumers [audit, analytics, observe]

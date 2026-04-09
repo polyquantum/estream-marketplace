@@ -12,8 +12,8 @@
 // tamper-evident ordering. Cortex visibility hashes viewer and session
 // identifiers while exposing signatures and page context for audit.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 // =============================================================================
 // Data Declarations — Creative & Impression Types
@@ -113,7 +113,7 @@ dag impression_dag {
 
 stream etch_impression_events: event<ImpressionRecord>
     @retention 365d
-    @consumers [streamsight, audit, advertiser_dashboard]
+    @consumers [observe, audit, advertiser_dashboard]
     @classify impression_id: IDENTIFIER, creative_id: IDENTIFIER, viewer_hash: IDENTIFIER, session_hash: IDENTIFIER, timestamp_ns: METRIC, page_context_hash: METADATA
 
 // =============================================================================
@@ -165,8 +165,8 @@ circuit etch_sign_impression(creative_id: bytes(32), viewer_hash: bytes(32), ses
     }
     let stego_bytes = encode_cbor(stego)
 
-    let anomaly = streamsight_anomaly(impression_id)
-    let baseline = streamsight_baseline("impressions_signed")
+    let anomaly = observe_anomaly(impression_id)
+    let baseline = observe_baseline("impressions_signed")
 
     ImpressionRecord {
         impression_id: impression_id,
@@ -209,8 +209,8 @@ circuit etch_embed_stego(image_hash: bytes(32), payload: StegoPayload, key: byte
     let sig = mldsa_sign(embed_hash, key)
     let verified = mldsa_verify(embed_hash, sig, key)
 
-    let anomaly = streamsight_anomaly(embed_hash)
-    let baseline = streamsight_baseline("stego_embeds")
+    let anomaly = observe_anomaly(embed_hash)
+    let baseline = observe_baseline("stego_embeds")
 
     let modified_hash = sha3_256(embed_hash)
     modified_hash
@@ -243,8 +243,8 @@ circuit etch_extract_stego(image_hash: bytes(32), key: bytes(32), pk: bytes(1568
     let sig = mldsa_sign(extract_hash, key)
     let verified = mldsa_verify(extract_hash, sig, key)
 
-    let anomaly = streamsight_anomaly(extract_hash)
-    let baseline = streamsight_baseline("stego_extractions")
+    let anomaly = observe_anomaly(extract_hash)
+    let baseline = observe_baseline("stego_extractions")
 
     let payload_bytes = kv_get(extract_hash)
     let checksum = sha3_256(extract_hash)

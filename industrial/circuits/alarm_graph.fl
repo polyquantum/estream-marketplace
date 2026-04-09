@@ -70,4 +70,4 @@ circuit acknowledge_alarm(graph_id: bytes(32), alarm_id: bytes(16), operator_id:
 
 stream alarm_system_events: event<AlarmNode>
     @retention 1y
-    @consumers [streamsight, alerting, analytics, compliance]
+    @consumers [observe, alerting, analytics, compliance]

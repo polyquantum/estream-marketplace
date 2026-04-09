@@ -1,0 +1,155 @@
+¤Blob‘Åš/// Spec: specs/verticals/CONTENT_SECURITY_SPEC.md
+/// eStream Content Security â€” PQ Link Authentication (PQ-LA)
+/// Open, post-quantum replacement for HDCP.
+/// ML-KEM-1024 key exchange, ML-DSA-87 mutual device auth, per-frame integrity.
+/// No licensing fees. Works over HDMI, DisplayPort, USB-C, IP.
+
+type PqLaSession = struct {
+    session_id: bytes(32),
+    source_id: bytes(32),
+    sink_id: bytes(32),
+    source_prime_cert: bytes,
+    sink_prime_cert: bytes,
+    shared_secret: bytes(32),
+    established_at: u64,
+    link_type: u8,
+}
+
+type DeviceIdentity = struct {
+    device_id: bytes(32),
+    manufacturer_id: bytes(32),
+    prime_public_key: bytes,
+    device_type: u8,
+    firmware_hash: bytes(32),
+    cert_chain_depth: u8,
+}
+
+type LinkFrame = struct {
+    frame_index: u64,
+    content_hash: bytes(32),
+    encrypted: bool,
+    integrity_tag: bytes(16),
+}
+
+type PqLaHandshake = struct {
+    step: u8,
+    source_encapsulation: bytes,
+    sink_response: bytes,
+    mutual_auth_complete: bool,
+    timestamp: u64,
+}
+
+// Link types: 0=HDMI, 1=DisplayPort, 2=USB_C, 3=IP_Network, 4=SDI, 5=Thunderbolt
+// Device types: 0=Source_Player, 1=Source_STB, 2=Source_PC, 3=Source_Console,
+//   4=Sink_TV, 5=Sink_Monitor, 6=Sink_Projector, 7=Sink_AVR, 8=Repeater
+
+// Handshake steps: 0=Init, 1=SourceKeyShare, 2=SinkResponse,
+//   3=MutualVerify, 4=Established, 5=Rekeying
+
+circuit validate_device_identity(
+    status production
+    device_id: bytes(32),
+    manufacturer_id: bytes(32),
+    firmware_hash: bytes(32),
+    cert_chain_depth: u8
+) -> bool
+    lex platform/cs/link_auth
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    let device_ok = device_id != bytes(32){0}
+    let mfr_ok = manufacturer_id != bytes(32){0}
+    let firmware_ok = firmware_hash != bytes(32){0}
+    let chain_ok = cert_chain_depth > 0 && cert_chain_depth <= 8
+    device_ok && mfr_ok && firmware_ok && chain_ok
+}
+
+circuit validate_handshake_step(
+    status production
+    step: u8,
+    expected_step: u8,
+    timestamp: u64,
+    handshake_start: u64,
+    max_handshake_ms: u64
+) -> bool
+    lex platform/cs/link_auth
+    @precision C
+    @attested true
+{
+    let step_ok = step == expected_step
+    let time_ok = (timestamp - handshake_start) <= max_handshake_ms
+    step_ok && time_ok
+}
+
+circuit validate_mutual_auth(
+    status production
+    source_id: bytes(32),
+    sink_id: bytes(32),
+    shared_secret: bytes(32)
+) -> bool
+    lex platform/cs/link_auth
+    @precision C
+    @attested true
+{
+    let source_ok = source_id != bytes(32){0}
+    let sink_ok = sink_id != bytes(32){0}
+    let secret_ok = shared_secret != bytes(32){0}
+    let different_devices = source_id != sink_id
+    source_ok && sink_ok && secret_ok && different_devices
+}
+
+circuit should_rekey(
+    status production
+    frames_since_key: u64,
+    max_frames_per_key: u64,
+    ms_since_key: u64,
+    max_ms_per_key: u64
+) -> bool
+    lex platform/cs/link_auth
+    @precision C
+    @attested true
+{
+    frames_since_key >= max_frames_per_key || ms_since_key >= max_ms_per_key
+}
+
+circuit frame_integrity_check(
+    status production
+    content_hash: bytes(32),
+    expected_hash: bytes(32)
+) -> bool
+    lex platform/cs/link_auth
+    @precision C
+    @attested true
+{
+    content_hash == expected_hash && content_hash != bytes(32){0}
+}
+
+circuit max_handshake_ms(link_type: u8) -> u64
+    @status production
+    lex platform/cs/link_auth
+    @precision C
+    @attested true
+{
+    if link_type == 0 { return 100 }
+    if link_type == 1 { return 100 }
+    if link_type == 2 { return 150 }
+    if link_type == 3 { return 500 }
+    200
+}
+
+circuit rekey_interval_frames(link_type: u8, is_4k: bool) -> u64
+    @status production
+    lex platform/cs/link_auth
+    @precision C
+    @attested true
+{
+    let interval = 108000
+    if is_4k { interval = 54000 }
+    if link_type == 3 { interval = interval / 2 }
+    interval
+}
+
+stream link_auth_events: event<PqLaHandshake>
+    @retention 90d
+    @consumers [streamsight, forensics]

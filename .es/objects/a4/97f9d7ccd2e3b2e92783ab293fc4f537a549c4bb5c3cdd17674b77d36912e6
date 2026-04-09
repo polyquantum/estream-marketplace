@@ -1,0 +1,146 @@
+¤Blob‘Åh/// Spec: specs/verticals/RADIO_SPEC.md
+/// eStream Radio Scatter â€” LI Signal Anomaly Detection
+/// Canary mode: detect threats WITHOUT changing radio behavior.
+/// Distributed continuous learning, not just inference.
+
+type BaselineProfile = struct {
+    node_id: bytes(32),
+    freq_hz: u64,
+    avg_noise_floor_dbm: i16,
+    stddev_noise_x100: u16,
+    avg_signal_count: u16,
+    sample_count: u32,
+    last_updated: u64,
+}
+
+type AnomalyDetection = struct {
+    detection_id: bytes(32),
+    anomaly_type: u8,
+    confidence_pct: u8,
+    severity: u8,
+    canary_only: bool,
+    freq_hz: u64,
+    measured_dbm: i16,
+    baseline_dbm: i16,
+    delta_db: i16,
+    node_id: bytes(32),
+    timestamp: u64,
+}
+
+type ThreatAssessment = struct {
+    assessment_id: bytes(32),
+    threat_type: u8,
+    corroborating_nodes: u8,
+    confidence_pct: u8,
+    recommended_action: u8,
+    timestamp: u64,
+}
+
+type LiModelUpdate = struct {
+    update_id: bytes(32),
+    node_id: bytes(32),
+    model_hash: bytes(32),
+    sample_count: u32,
+    povc_witness: bytes(8),
+    timestamp: u64,
+}
+
+// Severity: 0=Info, 1=Low, 2=Medium, 3=High, 4=Critical
+// Threat types: 0=ActiveJamming, 1=SweepJamming, 2=SpotJamming,
+//   3=GpsSpoofing, 4=TimingSpoofing, 5=Eavesdropping,
+//   6=ManInTheMiddle, 7=ReplayAttack, 8=UnknownEmitter
+// Recommended action: 0=Monitor, 1=Canary_Report, 2=Increase_N,
+//   3=Shift_Aperture, 4=Emergency_Silent, 5=Alert_Command
+
+circuit detect_jamming(
+    status production
+    measured_dbm: i16,
+    baseline_dbm: i16,
+    noise_stddev_x100: u16,
+    threshold_sigma_x100: u16
+) -> bool
+    lex platform/radio/anomaly
+    @precision C
+    @attested true
+{
+    let z = z_score_detect(measured_dbm, baseline_dbm, noise_stddev_x100)
+    z > threshold_sigma_x100
+}
+
+circuit detect_spoofing(
+    status production
+    timing_delta_ns: u64,
+    max_expected_jitter_ns: u64,
+    signal_consistency: u8
+) -> bool
+    lex platform/radio/anomaly
+    @precision C
+    @attested true
+{
+    let timing_anomaly = timing_delta_ns > max_expected_jitter_ns * 3
+    let signal_anomaly = signal_consistency < 50
+    timing_anomaly || signal_anomaly
+}
+
+circuit anomaly_severity(
+    status production
+    confidence_pct: u8,
+    corroborating_nodes: u8,
+    delta_db: i16
+) -> u8
+    lex platform/radio/anomaly
+    @precision C
+    @attested true
+{
+    let score = (confidence_pct / 20) + corroborating_nodes
+    if delta_db > 30 { score = score + 3 }
+    if delta_db > 15 { score = score + 1 }
+    if score >= 8 { return 4 }
+    if score >= 6 { return 3 }
+    if score >= 4 { return 2 }
+    if score >= 2 { return 1 }
+    0
+}
+
+circuit should_canary(
+    status production
+    severity: u8,
+    classification_level: u8
+) -> bool
+    lex platform/radio/anomaly
+    @precision C
+    @attested true
+{
+    if classification_level >= 3 { return severity >= 1 }
+    if classification_level >= 2 { return severity >= 2 }
+    severity >= 3
+}
+
+circuit validate_li_update(
+    status production
+    model_hash: bytes(32),
+    sample_count: u32,
+    povc_witness: bytes(8),
+    min_samples: u32
+) -> bool
+    lex platform/radio/anomaly
+    @precision C
+    @attested true
+{
+    let hash_ok = model_hash != bytes(32){0}
+    let witness_ok = povc_witness != bytes(8){0}
+    let samples_ok = sample_count >= min_samples
+    hash_ok && witness_ok && samples_ok
+}
+
+stream anomaly_events: event<AnomalyDetection>
+    @retention 90d
+    @consumers [streamsight, forensics, governance]
+
+stream threat_events: event<ThreatAssessment>
+    @retention 1y
+    @consumers [streamsight, forensics, governance, command]
+
+stream li_update_events: event<LiModelUpdate>
+    @retention 1y
+    @consumers [streamsight, governance]

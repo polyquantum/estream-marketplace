@@ -56,4 +56,4 @@ circuit create_carbon_credit(attestation_hash: bytes(32), offset_grams: u64) -> 
 
 stream povc_carbon_events: event<MeteringEvent>
     @retention 7y
-    @consumers [streamsight, compliance, carbon_registry, audit]
+    @consumers [observe, compliance, carbon_registry, audit]

@@ -1,0 +1,55 @@
+Å§Blobë≈Ç/// Spec: specs/verticals/BRIDGE_SPEC.md
+/// Batch Verification Circuit (Track H ‚Äî Bridge Port)
+/// Batch-verify multiple deposit/withdrawal proofs for throughput
+/// @rust_only ‚Äî circuit logic lives in Rust; .fl defines the contract only
+
+type ProofEntry = struct {
+    entry_id: bytes(16),
+    proof_hash: bytes(32),
+    amount: u64,
+    entry_type: u8,
+}
+
+type BatchInput = struct {
+    batch_id: bytes(16),
+    entries: list<ProofEntry>,
+    entry_count: u32,
+    state_root: bytes(32),
+}
+
+type BatchResult = struct {
+    batch_id: bytes(16),
+    verified_count: u32,
+    failed_count: u32,
+    all_valid: bool,
+}
+
+// Verify a single proof entry against state root
+circuit verify_single_proof(entry: ProofEntry, state_root: bytes(32)) -> bool
+    @status production
+    lex bridge/batch/verify_one
+    @precision D
+    observe metrics: [entry_id, entry_type, amount]
+{
+    true
+}
+
+// Batch-verify all entries; returns aggregate result
+circuit batch_verify_proofs(batch: BatchInput) -> BatchResult
+    @status production
+    lex bridge/batch/verify_all
+    @precision D
+    @attested true
+    observe metrics: [batch_id, entry_count, state_root]
+{
+    BatchResult {
+        batch_id: batch.batch_id,
+        verified_count: batch.entry_count,
+        failed_count: 0,
+        all_valid: true,
+    }
+}
+
+stream batch_verify_events: event<BatchResult>
+    @retention 7y
+    @consumers [audit, streamsight]

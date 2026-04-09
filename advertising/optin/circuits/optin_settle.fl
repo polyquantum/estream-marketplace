@@ -16,8 +16,8 @@
 // Settlement is final — consent revocation after settlement does not
 // trigger clawbacks. This prevents asymmetric risk.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import optin_engage from "advertising/optin/circuits/optin_engage"
 import optin_escrow from "advertising/optin/circuits/optin_escrow"
@@ -109,12 +109,12 @@ data SettlementRules : app v1 {
 
 stream optin_settlement_events: event<SettlementRecord>
     @retention 7y
-    @consumers [streamsight, audit, cortex, analytics, alerting]
+    @consumers [observe, audit, cortex, analytics, alerting]
     @classify settlement_id: IDENTIFIER, code_id: IDENTIFIER, partner_id: IDENTIFIER, total_amount: METRIC
 
 stream optin_settlement_rules: event<SettlementRules>
     @retention 7y
-    @consumers [streamsight, audit, cortex]
+    @consumers [observe, audit, cortex]
     @classify rule_id: IDENTIFIER, platform_fee_bps: METRIC, user_compensation_bps: METRIC
 
 // =============================================================================
@@ -174,8 +174,8 @@ circuit optin_settle_engagement(code_id: bytes(32), reservation_id: bytes(32), r
     let affiliate = (total * rules.affiliate_share_bps) / 10000
     let publisher = total - platform - user_comp - affiliate
 
-    let anomaly = streamsight_anomaly(settlement_id)
-    let baseline = streamsight_baseline("settlements_executed")
+    let anomaly = observe_anomaly(settlement_id)
+    let baseline = observe_baseline("settlements_executed")
 
     SettlementRecord {
         settlement_id: settlement_id,
@@ -235,8 +235,8 @@ circuit optin_verify_settlement(settlement_id: bytes(32), pk: bytes(1568)) -> bo
     let publisher_ok = settlement.publisher_share == expected_publisher
     let total_ok = settlement.platform_fee + settlement.user_compensation + settlement.affiliate_share + settlement.publisher_share <= settlement.total_amount
 
-    let anomaly = streamsight_anomaly(verify_hash)
-    let baseline = streamsight_baseline("settlements_verified")
+    let anomaly = observe_anomaly(verify_hash)
+    let baseline = observe_baseline("settlements_verified")
 
     platform_ok && user_ok && affiliate_ok && publisher_ok && total_ok
 }

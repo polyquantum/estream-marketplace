@@ -13,7 +13,7 @@ stream settlement_events: event<SettlementResult>
 
 stream payment_telemetry: event<PaymentTelemetrySpan>
     @retention 30d
-    @consumers [streamsight]
+    @consumers [observe]
 
 type PaymentTelemetrySpan = struct {
     trace_id: bytes(16),

@@ -9,8 +9,8 @@
 // Cortex AI classifies transitions in real-time to detect churn risk, identify
 // upsell opportunities, and trigger automated re-engagement workflows.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import crm_graph from "advertising/crm/circuits/crm_graph"
 
@@ -89,7 +89,7 @@ data LifecycleStateRecord : circuit v1 {
 
 stream crm_lifecycle_events: event<LifecycleTransition>
     @retention 7y
-    @consumers [streamsight, audit, cortex, alerting]
+    @consumers [observe, audit, cortex, alerting]
     @classify user_id: IDENTIFIER, from_state: METADATA, to_state: METADATA, trigger: METADATA
 
 // =============================================================================
@@ -147,8 +147,8 @@ circuit crm_transition_lifecycle(user_id: bytes(32), new_state: u8, trigger: byt
 
     let is_valid = valid_anon_to_reg || valid_reg_to_eng || valid_eng_to_qual || valid_qual_to_act || valid_act_to_churn || valid_churn_to_react || valid_react_to_eng || valid_any_to_churn
 
-    let anomaly = streamsight_anomaly(transition_hash)
-    let baseline = streamsight_baseline("churn_events")
+    let anomaly = observe_anomaly(transition_hash)
+    let baseline = observe_baseline("churn_events")
     let now = 0
 
     LifecycleTransition {
@@ -177,8 +177,8 @@ circuit crm_get_lifecycle_state(user_id: bytes(32)) -> u8
     @monitor "miss_rate" { lookup_misses / state_lookups < 0.10 }
 {
     let lookup_hash = sha3_256(user_id)
-    let anomaly = streamsight_anomaly(lookup_hash)
-    let baseline = streamsight_baseline("state_lookups")
+    let anomaly = observe_anomaly(lookup_hash)
+    let baseline = observe_baseline("state_lookups")
     let record = kv_get(user_id)
     record.current_state
 }

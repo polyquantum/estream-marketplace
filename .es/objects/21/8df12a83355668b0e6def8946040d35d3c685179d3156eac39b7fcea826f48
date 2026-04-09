@@ -1,0 +1,176 @@
+¤Blob‘Å#/// Spec: specs/verticals/SVD_SPEC.md
+/// eStream SVD â€” Watermark-aware adaptive streaming
+/// When codec or frame rate changes mid-stream, the forensic watermark must
+/// maintain continuity. Different codecs have different embedding point types.
+/// Frame rate drops reduce effective embedding density.
+/// This module bridges adaptive media decisions with watermark integrity.
+
+type CodecTransition = struct {
+    segment_index: u32,
+    from_codec: u8,
+    to_codec: u8,
+    from_fps_x100: u32,
+    to_fps_x100: u32,
+    trace_mapping_valid: bool,
+    density_compensation: u8,
+}
+
+type WatermarkContinuity = struct {
+    stream_id: bytes(32),
+    transition_count: u32,
+    total_embedding_points: u64,
+    effective_density: u8,
+    attribution_frames_needed: u32,
+    continuity_valid: bool,
+}
+
+type CrossCodecTraceMap = struct {
+    viewer_trace_hash: bytes(32),
+    from_codec: u8,
+    to_codec: u8,
+    from_point_types: u8,
+    to_point_types: u8,
+    mapping_confidence: u8,
+}
+
+// When switching codecs, embedding point types change:
+//   H.264: [QP_macroblock, MV_precision, deblock, CABAC, ref_frame] â†’ 5 types
+//   H.265: [QP_CTU, TU_partition, SAO, MV_fractional, merge_order] â†’ 5 types
+//   VP9:   [QP_segment, loop_filter, ref_frame_prob] â†’ 3 types
+//   AV1:   [film_grain, CDEF, wiener, SB_partition] â†’ 4 types
+//
+// The trace seed stays the same. Only the derivation changes:
+//   SHAKE-256(trace_seed || codec_id || frame_index || block_index) â†’ embedding bit
+// Including codec_id in the derivation means the trace is continuous across transitions.
+
+circuit compensate_density_for_fps_drop(
+    status production
+    base_density: u8,
+    source_fps_x100: u32,
+    current_fps_x100: u32
+) -> u8
+    lex platform/svd/adaptive
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    let ratio_x100 = (current_fps_x100 * 100) / source_fps_x100
+    let effective = base_density
+
+    if ratio_x100 < 50 {
+        if base_density < 3 { effective = base_density + 2 }
+        else { effective = 3 }
+    } else if ratio_x100 < 75 {
+        if base_density < 3 { effective = base_density + 1 }
+        else { effective = 3 }
+    }
+
+    effective
+}
+
+circuit recalc_attribution_frames(
+    status production
+    base_density: u8,
+    effective_density: u8,
+    current_fps_x100: u32,
+    source_fps_x100: u32
+) -> u32
+    lex platform/svd/adaptive
+    @precision C
+    @attested true
+{
+    let base_frames = 300
+    if effective_density == 0 { base_frames = 10000 }
+    if effective_density == 1 { base_frames = 1000 }
+    if effective_density == 2 { base_frames = 300 }
+    if effective_density == 3 { base_frames = 30 }
+
+    let fps_scale = (source_fps_x100 * 100) / current_fps_x100
+    let adjusted = (base_frames * fps_scale) / 100
+
+    adjusted
+}
+
+circuit validate_codec_transition(
+    status production
+    from_codec: u8,
+    to_codec: u8,
+    trace_seed_present: bool,
+    segment_boundary: bool
+) -> bool
+    lex platform/svd/adaptive
+    @precision C
+    @attested true
+{
+    let codecs_valid = from_codec <= 4 && to_codec <= 4
+    let different = from_codec != to_codec
+    codecs_valid && different && trace_seed_present && segment_boundary
+}
+
+circuit cross_codec_embedding_capacity(codec: u8) -> u8
+    @status production
+    lex platform/svd/adaptive
+    @precision C
+    @attested true
+{
+    if codec == 0 { return 5 }
+    if codec == 1 { return 5 }
+    if codec == 2 { return 3 }
+    if codec == 3 { return 4 }
+    0
+}
+
+circuit transition_preserves_attribution(
+    status production
+    points_before_transition: u64,
+    points_after_transition: u64,
+    min_points_for_attribution: u32
+) -> bool
+    lex platform/svd/adaptive
+    @precision C
+    @attested true
+{
+    let total = points_before_transition + points_after_transition
+    total >= min_points_for_attribution
+}
+
+circuit evaluate_watermark_aware_switch(
+    status production
+    adaptive_action: u8,
+    current_codec: u8,
+    candidate_codec: u8,
+    current_density: u8,
+    embedding_points_so_far: u64,
+    min_attribution_points: u32
+) -> u8
+    lex platform/svd/adaptive
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    if adaptive_action == 0 { return 0 }
+
+    if adaptive_action == 9 {
+        return 9
+    }
+
+    let from_capacity = cross_codec_embedding_capacity(current_codec)
+    let to_capacity = cross_codec_embedding_capacity(candidate_codec)
+
+    if to_capacity < from_capacity && embedding_points_so_far < min_attribution_points {
+        if adaptive_action == 4 || adaptive_action == 8 {
+            return adaptive_action
+        }
+        return 0
+    }
+
+    adaptive_action
+}
+
+stream codec_transition_events: event<CodecTransition>
+    @retention 7y
+    @consumers [governance, audit, streamsight, forensics]
+
+stream watermark_continuity_events: event<WatermarkContinuity>
+    @retention 7y
+    @consumers [governance, audit, streamsight, forensics]

@@ -1,0 +1,81 @@
+¤Blob‘ÅÐ/// Spec: specs/verticals/CONTENT_SECURITY_SPEC.md
+/// eStream Content Security â€” Archive phase
+/// Long-term PQ-encrypted content storage and forensic evidence retention.
+/// Films need protection for 70+ year copyright life.
+
+type ArchiveEntry = struct {
+    content_id: bytes(32),
+    archive_id: bytes(32),
+    encryption_algorithm: u8,
+    key_encapsulation: bytes,
+    stored_at: u64,
+    integrity_hash: bytes(32),
+    total_size: u64,
+    retention_years: u16,
+}
+
+type ForensicEvidence = struct {
+    evidence_id: bytes(32),
+    case_type: u8,
+    related_content_id: bytes(32),
+    evidence_hash: bytes(32),
+    signed_by: bytes(32),
+    signature: bytes,
+    created_at: u64,
+}
+
+// Encryption algorithms: 0=ML_KEM_1024, 1=ML_KEM_768, 2=AES_256_GCM_transitional
+// Case types: 0=PiracyAttribution, 1=RevenueDiscrepancy, 2=UnauthorizedAccess,
+//   3=RenderFarmLeak, 4=ScreenerLeak, 5=CamRecording, 6=LinkBypass
+
+circuit validate_archive_entry(
+    status production
+    encryption_algorithm: u8,
+    integrity_hash: bytes(32),
+    total_size: u64,
+    retention_years: u16
+) -> bool
+    lex platform/cs/archive
+    @precision C
+    @attested true
+{
+    let algo_ok = encryption_algorithm <= 2
+    let hash_ok = integrity_hash != bytes(32){0}
+    let size_ok = total_size > 0
+    let retention_ok = retention_years > 0 && retention_years <= 100
+    algo_ok && hash_ok && size_ok && retention_ok
+}
+
+circuit archive_quantum_safe(encryption_algorithm: u8) -> bool
+    @status production
+    lex platform/cs/archive
+    @precision C
+    @attested true
+{
+    encryption_algorithm <= 1
+}
+
+circuit evidence_chain_valid(
+    status production
+    evidence_hash: bytes(32),
+    signed_by: bytes(32),
+    created_at: u64,
+    current_time: u64
+) -> bool
+    lex platform/cs/archive
+    @precision C
+    @attested true
+{
+    let hash_ok = evidence_hash != bytes(32){0}
+    let signer_ok = signed_by != bytes(32){0}
+    let time_ok = created_at <= current_time
+    hash_ok && signer_ok && time_ok
+}
+
+stream archive_events: event<ArchiveEntry>
+    @retention forever
+    @consumers [governance, audit, compliance]
+
+stream forensic_evidence_events: event<ForensicEvidence>
+    @retention forever
+    @consumers [governance, audit, compliance, forensics, legal]

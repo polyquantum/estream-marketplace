@@ -1,0 +1,23 @@
+Å§Blobë≈tree 89b6c0a37a345dcbd1809790d7f682ee56a9222a
+parent 993154779c420fc40893896cd9b7049fb661280a
+author toddrooke <todd@toddrooke.com> 1773402175 -0600
+committer toddrooke <todd@toddrooke.com> 1773402175 -0600
+
+v0.12.0: Populate marketplace packages with migrated vertical circuits
+
+Migrate 55 circuits from estream/circuits/verticals/ into 6 marketplace
+packages with full domain declarations, manifests, and journey tests:
+
+- payments/   (15 circuits): ISO 20022, HTLC, offline payments, settlement DAG
+- radio/      (8 circuits): spectrum mgmt, tactical mesh, VRF, PQ-AKA
+- secure-video/ (13 circuits): SVD watermarking + content security
+- industrial/ (10 circuits): Modbus, IEC 62053, telemetry, alarms
+- bridge/     (8 circuits): deposit, withdraw, fraud proofs, rate limiting
+- widgets/    (1 circuit): impact stream analytics
+
+Deduplicate fintech/iso20022: remove 5 overlapping ISO 20022 circuits
+(now canonical in polyquantum.payments), add payments dependency.
+
+Added 6 journey tests (.flj) for end-to-end verification.
+
+Made-with: Cursor

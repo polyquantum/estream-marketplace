@@ -15,7 +15,7 @@ circuit fpga_verify_segment_attestation(
     lex platform/svd/fpga
     @precision C
     @attested true
-    @streamsight_emit
+    @observe_emit
 {
     let hash_ok = content_hash != bytes(32){0}
     let sig_ok = attestation_sig_len > 0 && attestation_sig_len <= 4627

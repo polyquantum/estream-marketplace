@@ -12,7 +12,7 @@
 //   - EStreamMarketData — Market data snapshot (OHLCV / BBO)
 //
 // Schemas are `data` declarations with verbs (observe, govern, sign, attest)
-// that generate wire encoding, StreamSight hooks, privacy masks, signing
+// that generate wire encoding, Observe hooks, privacy masks, signing
 // envelopes, and PoVC attestation from a single source of truth.
 //
 // Wire adapters (FIX, SWIFT, etc.) produce these schemas; validation circuits
@@ -195,7 +195,7 @@ circuit order_validate(order: EStreamOrder, limits: RiskLimits, pk: bytes(1568))
     let price_ok = order.order_type == 0 || order.price > 0
 
     let risk = li_classify(order.order_id, order.instrument)
-    let anomaly = streamsight_anomaly(order_hash)
+    let anomaly = observe_anomaly(order_hash)
 
     let all_valid = qty_ok && value_ok && side_ok && type_ok && tif_ok && price_ok
 
@@ -242,7 +242,7 @@ circuit quote_validate(quote: EStreamQuote) -> bool
     let spread_ok = quote.ask_price >= quote.bid_price
     let bid_qty_ok = quote.bid_quantity > 0
     let ask_qty_ok = quote.ask_quantity > 0
-    let baseline = streamsight_baseline("crossed_quotes")
+    let baseline = observe_baseline("crossed_quotes")
     spread_ok && bid_qty_ok && ask_qty_ok
 }
 
@@ -302,8 +302,8 @@ circuit position_risk_check(order: EStreamOrder, current_position: u64, daily_or
     let daily_ok = daily_order_count < limits.max_daily_orders
 
     let risk = li_infer(order.order_id, order.instrument)
-    let anomaly = streamsight_anomaly(order_hash)
-    let baseline = streamsight_baseline("risk_breaches")
+    let anomaly = observe_anomaly(order_hash)
+    let baseline = observe_baseline("risk_breaches")
 
     let all_ok = position_ok && notional_ok && daily_ok
 

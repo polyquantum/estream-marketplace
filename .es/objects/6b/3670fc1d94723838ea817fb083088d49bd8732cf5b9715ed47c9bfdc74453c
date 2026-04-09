@@ -1,0 +1,53 @@
+¤Blob‘Åm// Journey: pacs.008 End-to-End Credit Transfer Settlement
+// Tests the full lifecycle: create message â†’ hash â†’ verify determinism â†’ settlement DAG
+
+journey "pacs008_settlement" {
+    description "End-to-end credit transfer via pacs.008: create, hash, verify, settle"
+    package "polyquantum.payments"
+    platform ">= 0.12.0"
+
+    import payments.circuits.pacs008 { pacs008_hash, Pacs008Data }
+    import payments.circuits.settlement_dag { settle_instruction }
+    import payments.circuits.htlc_verify { verify_htlc_lock }
+
+    step "create_credit_transfer" {
+        let msg = Pacs008Data {
+            msg_type: 0x0008,
+            message_id: sha3_256("MSG-2026-SETTLE-001"),
+            creation_timestamp: 1742000000,
+            num_transactions: 1,
+            total_settlement_cents: 250000,
+            settlement_method: 1,
+            instruction_id: sha3_256("INSTR-SETTLE-001"),
+            end_to_end_id: sha3_256("E2E-SETTLE-001"),
+            amount_cents: 250000,
+            currency: "USD",
+            charge_bearer: 0,
+            debtor_name: "PolyQuantum Inc",
+            debtor_account: "US64SVBK80010012345678",
+            debtor_agent_bic: "SVBKUS6SXXX",
+            creditor_name: "ThermogenZero GmbH",
+            creditor_account: "DE89370400440532013000",
+            creditor_agent_bic: "COBADEFFXXX",
+            remittance_info: "License Q1-2026",
+        }
+        assert msg.msg_type == 0x0008
+        assert msg.total_settlement_cents == 250000
+    }
+
+    step "hash_message" {
+        let hash = pacs008_hash(msg)
+        assert hash != 0
+        assert len(hash) == 32
+    }
+
+    step "verify_deterministic_hash" {
+        let hash2 = pacs008_hash(msg)
+        assert hash == hash2
+    }
+
+    step "submit_to_settlement_dag" {
+        let result = settle_instruction(msg.instruction_id, hash, msg.amount_cents)
+        assert result.status == 0
+    }
+}

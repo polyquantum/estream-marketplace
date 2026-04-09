@@ -1,0 +1,90 @@
+¤Blob‘Å	7/// Spec: specs/verticals/CONTENT_SECURITY_SPEC.md
+/// eStream Content Security â€” Screener / Awards phase
+/// Per-voter forensic watermark for awards season distribution.
+/// Dense/Ultra embedding for rapid attribution from leaked footage.
+/// Replaces NAGRA + Brightcove + Akamai + BuyDRM stack.
+
+type ScreenerSession = struct {
+    voter_id: bytes(32),
+    content_id: bytes(32),
+    session_id: bytes(32),
+    trace_seed: bytes(32),
+    density: u8,
+    started_at: u64,
+    device_hash: bytes(32),
+    organization: u8,
+}
+
+type ScreenerPolicy = struct {
+    content_id: bytes(32),
+    max_plays: u32,
+    valid_from: u64,
+    valid_until: u64,
+    allow_download: bool,
+    require_drm_device: bool,
+    min_density: u8,
+}
+
+// Organization: 0=Academy_AMPAS, 1=BAFTA, 2=SAG_AFTRA, 3=DGA, 4=WGA,
+//   5=PGA, 6=HFPA, 7=CriticsChoice, 8=NYFCC, 9=LAFCA, 10=Studio_Internal
+
+circuit validate_screener_session(
+    status production
+    voter_id: bytes(32),
+    content_id: bytes(32),
+    device_hash: bytes(32),
+    current_time: u64,
+    valid_from: u64,
+    valid_until: u64
+) -> bool
+    lex platform/cs/screener
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    let voter_ok = voter_id != bytes(32){0}
+    let content_ok = content_id != bytes(32){0}
+    let device_ok = device_hash != bytes(32){0}
+    let window_ok = current_time >= valid_from && current_time <= valid_until
+    voter_ok && content_ok && device_ok && window_ok
+}
+
+circuit screener_density(organization: u8) -> u8
+    @status production
+    lex platform/cs/screener
+    @precision C
+    @attested true
+{
+    if organization <= 2 { return 3 }
+    if organization <= 6 { return 2 }
+    2
+}
+
+circuit screener_play_limit(organization: u8) -> u32
+    @status production
+    lex platform/cs/screener
+    @precision C
+    @attested true
+{
+    if organization == 0 { return 3 }
+    if organization == 1 { return 3 }
+    2
+}
+
+circuit screener_attribution_time_sec(density: u8, fps: u32) -> u32
+    @status production
+    lex platform/cs/screener
+    @precision C
+    @attested true
+{
+    let frames = 300
+    if density == 2 { frames = 300 }
+    if density == 3 { frames = 30 }
+    let seconds = frames / fps
+    if seconds < 1 { seconds = 1 }
+    seconds
+}
+
+stream screener_events: event<ScreenerSession>
+    @retention 7y
+    @consumers [governance, audit, streamsight, forensics]

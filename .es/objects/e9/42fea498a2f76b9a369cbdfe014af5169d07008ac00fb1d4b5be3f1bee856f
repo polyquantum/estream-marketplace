@@ -1,0 +1,112 @@
+¤Blob‘ÅL/// Spec: specs/verticals/BRIDGE_SPEC.md
+/// Multi-Sig Withdrawal Security (#141)
+/// Large withdrawals (above threshold) require 2-of-3 signer attestation.
+/// Integrates with bridge withdrawal flow and Solana escrow release.
+
+type WithdrawSigner = struct {
+    signer_id: bytes(32),
+    signer_role: u8,
+    pubkey: bytes(32),
+    is_active: bool,
+    last_attest_ts: u64,
+}
+
+type MultisigRequest = struct {
+    request_id: bytes(16),
+    withdrawal_id: u64,
+    amount: u64,
+    solana_recipient: bytes(32),
+    l2_state_root: bytes(32),
+    threshold_count: u8,
+    attestation_count: u8,
+    created_at: u64,
+    expires_at: u64,
+    status: u8,
+}
+
+type SignerAttestation = struct {
+    request_id: bytes(16),
+    signer_id: bytes(32),
+    signature: bytes(64),
+    attested_at: u64,
+}
+
+type MultisigEvent = struct {
+    event_id: bytes(16),
+    event_type: u8,
+    request_id: bytes(16),
+    signer_id: bytes(32),
+    withdrawal_id: u64,
+    amount: u64,
+    timestamp: u64,
+}
+
+type MultisigThresholdCheck = struct {
+    amount: u64,
+    threshold_amount: u64,
+}
+
+state_machine multisig_withdraw_flow {
+    initial MULTISIG_PENDING
+    persistence wal
+    terminal [MULTISIG_EXECUTED, MULTISIG_EXPIRED, MULTISIG_REJECTED]
+    ai_anomaly_detection true
+
+    MULTISIG_PENDING -> MULTISIG_COLLECTING when first_attestation
+    MULTISIG_COLLECTING -> MULTISIG_THRESHOLD_MET when threshold_reached
+    MULTISIG_THRESHOLD_MET -> MULTISIG_EXECUTED when execution_confirmed
+    MULTISIG_COLLECTING -> MULTISIG_EXPIRED when timeout_exceeded
+    MULTISIG_PENDING -> MULTISIG_REJECTED when governance_rejected
+}
+
+circuit requires_multisig(check: MultisigThresholdCheck) -> bool
+    @status production
+    lex bridge/multisig/check
+    @precision D
+    observe metrics: [amount, threshold_amount]
+{
+    check.amount > check.threshold_amount
+}
+
+circuit create_multisig_request(req: MultisigRequest) -> bool
+    @status production
+    lex bridge/multisig/create
+    @precision D
+    @attested true
+    observe metrics: [withdrawal_id, amount, threshold_count]
+{
+    req.threshold_count > 1
+}
+
+circuit submit_attestation(att: SignerAttestation) -> bool
+    @status production
+    lex bridge/multisig/attest
+    @precision D
+    @attested true
+    observe metrics: [request_id, signer_id]
+{
+    true
+}
+
+circuit check_threshold_met(req: MultisigRequest) -> bool
+    @status production
+    lex bridge/multisig/threshold
+    @precision D
+    observe metrics: [request_id, attestation_count, threshold_count]
+{
+    req.attestation_count >= req.threshold_count
+}
+
+circuit execute_multisig_withdrawal(req: MultisigRequest) -> bool
+    @status production
+    lex bridge/multisig/execute
+    @precision D
+    @attested true
+    observe metrics: [request_id, withdrawal_id]
+{
+    true
+}
+
+stream multisig_events: event<MultisigEvent>
+    @retention 7y
+    @consumers [governance, audit, compliance, streamsight]

@@ -54,7 +54,7 @@ circuit validate_challenge(
     lex platform/radio/pq_aka
     @precision C
     @attested true
-    @streamsight_emit
+    @observe_emit
 {
     let network_ok = serving_network_id != bytes(32){0}
     let supi_ok = ue_supi_hash != bytes(32){0}
@@ -120,4 +120,4 @@ circuit max_challenge_age_ms(subscription_type: u8) -> u64
 
 stream pq_aka_events: event<PqAkaSession>
     @retention 90d
-    @consumers [streamsight, governance, audit]
+    @consumers [observe, governance, audit]

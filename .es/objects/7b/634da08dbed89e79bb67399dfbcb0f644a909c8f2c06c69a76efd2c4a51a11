@@ -1,0 +1,77 @@
+¤Blob‘Åì/// Spec: specs/verticals/INDUSTRIAL_SPEC.md
+/// Alarm Threshold Circuit (Track H â€” Industrial Port)
+/// Configurable alarm thresholds with hysteresis for telemetry values
+
+type AlarmConfig = struct {
+    alarm_id: bytes(16),
+    device_id: bytes(16),
+    register_addr: u32,
+    high_threshold: u64,
+    low_threshold: u64,
+    deadband: u64,
+    severity_code: u8,
+}
+
+type AlarmEvent = struct {
+    alarm_id: bytes(16),
+    device_id: bytes(16),
+    current_value: u64,
+    triggered_threshold: u64,
+    severity_code: u8,
+    alarm_active: bool,
+    timestamp_ms: u64,
+}
+
+state_machine alarm_state {
+    initial ALARM_NORMAL
+    persistence wal
+    terminal []
+    ai_anomaly_detection true
+
+    ALARM_NORMAL -> ALARM_HIGH when value_above_high
+    ALARM_NORMAL -> ALARM_LOW when value_below_low
+    ALARM_HIGH -> ALARM_NORMAL when value_below_high_deadband
+    ALARM_LOW -> ALARM_NORMAL when value_above_low_deadband
+    ALARM_HIGH -> ALARM_CRITICAL when value_far_above
+    ALARM_CRITICAL -> ALARM_HIGH when value_returning
+}
+
+// Check a value against alarm thresholds
+circuit check_alarm_threshold(cfg: AlarmConfig, current_value: u64, timestamp_ms: u64) -> AlarmEvent
+    @status production
+    lex industrial/alarm/check
+    @precision B
+    observe metrics: [alarm_id, device_id, current_value, severity_code]
+{
+    AlarmEvent {
+        alarm_id: cfg.alarm_id,
+        device_id: cfg.device_id,
+        current_value: current_value,
+        triggered_threshold: cfg.high_threshold,
+        severity_code: cfg.severity_code,
+        alarm_active: current_value > cfg.high_threshold,
+        timestamp_ms: timestamp_ms,
+    }
+}
+
+// Check high threshold with deadband hysteresis
+circuit check_high_alarm(current_value: u64, high_threshold: u64, deadband: u64, currently_active: bool) -> bool
+    @status production
+    lex industrial/alarm/high
+    @precision B
+{
+    current_value > high_threshold
+}
+
+// Check low threshold with deadband hysteresis
+circuit check_low_alarm(current_value: u64, low_threshold: u64, deadband: u64, currently_active: bool) -> bool
+    @status production
+    lex industrial/alarm/low
+    @precision B
+{
+    current_value < low_threshold
+}
+
+stream alarm_events: event<AlarmEvent>
+    @retention 1y
+    @consumers [streamsight, alerting, analytics]

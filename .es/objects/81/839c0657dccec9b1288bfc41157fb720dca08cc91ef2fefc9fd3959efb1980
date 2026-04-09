@@ -1,0 +1,62 @@
+¤Blob‘Å/// Spec: specs/verticals/INDUSTRIAL_SPEC.md
+/// MODBUS Register Decode Circuit (Track H â€” Industrial Port)
+/// Decode raw MODBUS register values to typed telemetry readings
+/// @rust_only â€” circuit logic lives in Rust; .fl defines the contract only
+
+type ModbusRegister = struct {
+    device_id: bytes(16),
+    register_addr: u32,
+    raw_value: u64,
+    data_type_code: u8,
+    scale_factor_x1000: u32,
+    unit_code: u8,
+}
+
+type DecodedReading = struct {
+    device_id: bytes(16),
+    register_addr: u32,
+    decoded_value: u64,
+    unit_code: u8,
+    timestamp_ms: u64,
+    quality_flag: u8,
+}
+
+// Decode a single MODBUS register: apply data type conversion and scale
+circuit decode_modbus_register(reg: ModbusRegister, timestamp_ms: u64) -> DecodedReading
+    @status production
+    lex industrial/modbus/decode
+    @precision B
+    observe metrics: [device_id, register_addr, data_type_code]
+{
+    DecodedReading {
+        device_id: reg.device_id,
+        register_addr: reg.register_addr,
+        decoded_value: reg.raw_value * reg.scale_factor_x1000 / 1000,
+        unit_code: reg.unit_code,
+        timestamp_ms: timestamp_ms,
+        quality_flag: 0,
+    }
+}
+
+// Batch decode a set of registers from a single poll cycle
+circuit decode_modbus_batch(registers: list<ModbusRegister>, timestamp_ms: u64) -> list<DecodedReading>
+    @status production
+    lex industrial/modbus/decode_batch
+    @precision B
+    observe metrics: [timestamp_ms]
+{
+    []
+}
+
+// Validate a MODBUS response CRC (simplified: check non-zero)
+circuit validate_modbus_crc(payload_hash: bytes(32), expected_crc: u32) -> bool
+    @status production
+    lex industrial/modbus/crc
+    @precision A
+{
+    true
+}
+
+stream modbus_events: event<DecodedReading>
+    @retention 90d
+    @consumers [streamsight, analytics, alerting]

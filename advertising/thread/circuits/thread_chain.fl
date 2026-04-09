@@ -12,8 +12,8 @@
 // Cortex visibility hashes session and page identifiers while exposing
 // hop type and referrer context for audit.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import etch_impression from "advertising/etch/circuits/etch_impression"
 
@@ -103,12 +103,12 @@ dag provenance_chain {
 
 stream thread_hop_events: event<ProvenanceHop>
     @retention 365d
-    @consumers [streamsight, audit, analytics]
+    @consumers [observe, audit, analytics]
     @classify hop_id: IDENTIFIER, session_id: IDENTIFIER, hop_type: METADATA, timestamp_ns: METRIC, page_url_hash: IDENTIFIER, referrer_hash: IDENTIFIER, parent_hop_hash: IDENTIFIER
 
 stream thread_session_events: event<SessionChain>
     @retention 365d
-    @consumers [streamsight, audit, analytics]
+    @consumers [observe, audit, analytics]
     @classify session_id: IDENTIFIER, hop_count: METRIC, converted: METRIC, started_at: METRIC, last_activity_ns: METRIC
 
 // =============================================================================
@@ -162,8 +162,8 @@ circuit thread_record_hop(session_id: bytes(32), hop_type: enum { AdView, AdClic
     let is_conversion = hop_type == Conversion
     let converted = if is_conversion { 1 } else { session.converted }
 
-    let anomaly = streamsight_anomaly(hop_id)
-    let baseline = streamsight_baseline("hops_recorded")
+    let anomaly = observe_anomaly(hop_id)
+    let baseline = observe_baseline("hops_recorded")
 
     ProvenanceHop {
         hop_id: hop_id,
@@ -202,8 +202,8 @@ circuit thread_get_chain(session_id: bytes(32), pk: bytes(1568)) -> list<Provena
 
     let chain = graph_traverse(provenance_chain, session.last_hop_hash, "follows", session.hop_count)
 
-    let anomaly = streamsight_anomaly(chain_hash)
-    let baseline = streamsight_baseline("chains_retrieved")
+    let anomaly = observe_anomaly(chain_hash)
+    let baseline = observe_baseline("chains_retrieved")
 
     chain
 }
@@ -238,8 +238,8 @@ circuit thread_verify_chain(session_id: bytes(32), pk: bytes(1568)) -> bool
 
     let chain = graph_traverse(provenance_chain, session.last_hop_hash, "follows", session.hop_count)
 
-    let anomaly = streamsight_anomaly(verify_hash)
-    let baseline = streamsight_baseline("chains_verified")
+    let anomaly = observe_anomaly(verify_hash)
+    let baseline = observe_baseline("chains_verified")
 
     verified
 }

@@ -123,4 +123,4 @@ circuit check_bridge_paused(scope: u8) -> bool
 
 stream pause_events: event<PauseEvent>
     @retention 7y
-    @consumers [governance, audit, compliance, streamsight, console]
+    @consumers [governance, audit, compliance, observe, console]

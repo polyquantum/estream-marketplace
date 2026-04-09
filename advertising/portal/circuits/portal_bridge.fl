@@ -13,8 +13,8 @@
 // OptinSettled). The portal_route_optin_event circuit dispatches
 // optin:* events to the estream-optin consent circuits for processing.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import optin_engage from "advertising/optin/circuits/optin_engage"
 import portal_widget from "advertising/portal/circuits/portal_widget"
@@ -97,12 +97,12 @@ data BridgeValidation : app v1 {
 
 stream portal_bridge_events: event<BridgeMessage>
     @retention 30d
-    @consumers [streamsight, security]
+    @consumers [observe, security]
     @classify message_id: IDENTIFIER, instance_id: IDENTIFIER, event_type: METADATA, direction: METADATA
 
 stream portal_validation_events: event<BridgeValidation>
     @retention 30d
-    @consumers [streamsight, security, audit]
+    @consumers [observe, security, audit]
     @classify validation_id: IDENTIFIER, message_id: IDENTIFIER, origin_verified: METADATA, signature_valid: METADATA
 
 // =============================================================================
@@ -146,8 +146,8 @@ circuit portal_send_message(instance_id: bytes(32), event_type: enum { Init, Rea
     let sig = mldsa_sign(message_id, sk)
     let verified = mldsa_verify(message_id, sig, pk)
 
-    let anomaly = streamsight_anomaly(message_id)
-    let baseline = streamsight_baseline("messages_sent")
+    let anomaly = observe_anomaly(message_id)
+    let baseline = observe_baseline("messages_sent")
 
     BridgeMessage {
         message_id: message_id,
@@ -200,8 +200,8 @@ circuit portal_validate_message(message: BridgeMessage, expected_origin: bytes(6
     let protocol_hash = sha3_256("estream-embed-v1")
     let payload_valid = constant_time_eq(message.payload_hash, message.payload_hash)
 
-    let anomaly = streamsight_anomaly(validation_id)
-    let baseline = streamsight_baseline("messages_validated")
+    let anomaly = observe_anomaly(validation_id)
+    let baseline = observe_baseline("messages_validated")
 
     BridgeValidation {
         validation_id: validation_id,
@@ -246,8 +246,8 @@ circuit portal_route_optin_event(message: BridgeMessage, pk: bytes(1568)) -> boo
     let sig_valid = mldsa_verify(message.message_id, message.signature, pk)
 
     let instance = kv_get(message.instance_id)
-    let anomaly = streamsight_anomaly(route_hash)
-    let baseline = streamsight_baseline("optin_events_routed")
+    let anomaly = observe_anomaly(route_hash)
+    let baseline = observe_baseline("optin_events_routed")
 
     let routed = match message.event_type {
         OptinPreview => kv_get(instance.config_hash),

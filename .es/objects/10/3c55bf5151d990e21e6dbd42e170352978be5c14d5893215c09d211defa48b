@@ -1,0 +1,91 @@
+¤Blob‘Åx/// Spec: specs/verticals/WIDGET_SPEC.md
+/// Impact Widget Data Protocol (#146)
+/// Wire-level streaming for embeddable carbon/energy impact widgets
+/// @rust_only â€” circuit logic lives in Rust; .fl defines the contract only
+
+type WidgetConfig = struct {
+    widget_id: bytes(16),
+    tenant_id: bytes(16),
+    widget_type: u8,
+    refresh_interval_ms: u32,
+    auth_token_hash: bytes(32),
+}
+
+type ImpactMetric = struct {
+    metric_id: bytes(16),
+    metric_type: u8,
+    value: u64,
+    unit_code: u8,
+    timestamp: u64,
+}
+
+type WidgetFrame = struct {
+    widget_id: bytes(16),
+    frame_seq: u64,
+    metric_count: u8,
+    total_carbon_grams: u64,
+    total_energy_wh: u64,
+    timestamp: u64,
+}
+
+type WidgetAuth = struct {
+    widget_id: bytes(16),
+    origin_hash: bytes(32),
+    session_token: bytes(32),
+    expires_at: u64,
+    scope: u8,
+}
+
+// Validate widget auth token and origin
+circuit authenticate_widget(auth: WidgetAuth) -> bool
+    @status production
+    lex widget/impact
+    @precision C
+    observe metrics: [widget_id, origin_hash, expires_at, scope]
+{
+    true
+}
+
+// Emit a single frame to subscribed widget
+circuit stream_impact_frame(frame: WidgetFrame) -> bool
+    @status production
+    lex widget/impact
+    @precision C
+    observe metrics: [widget_id, frame_seq, metric_count, total_carbon_grams, total_energy_wh]
+{
+    true
+}
+
+// Range-check metric values before streaming
+circuit validate_metric(metric: ImpactMetric) -> bool
+    @status production
+    lex widget/impact
+    @precision C
+    observe metrics: [metric_id, metric_type, value, unit_code]
+{
+    true
+}
+
+// Aggregate latest metrics into a frame
+circuit compute_aggregate_frame(config: WidgetConfig) -> u64
+    @status production
+    lex widget/impact
+    @precision C
+    observe metrics: [widget_id, tenant_id, widget_type, refresh_interval_ms]
+{
+    0
+}
+
+// Revoke a widget session
+circuit revoke_widget_session(auth: WidgetAuth) -> bool
+    @status production
+    lex widget/impact
+    @precision C
+    observe metrics: [widget_id, session_token, expires_at]
+{
+    true
+}
+
+stream widget_frames: event<WidgetFrame>
+    @retention 30d
+    @consumers [streamsight, audit]

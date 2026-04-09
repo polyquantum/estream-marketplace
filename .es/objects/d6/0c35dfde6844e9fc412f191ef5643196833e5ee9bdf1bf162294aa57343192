@@ -1,0 +1,82 @@
+¤Blob‘Å	©/// Spec: specs/verticals/BRIDGE_SPEC.md
+/// Rate Limiter Circuit (Track H â€” Bridge Port)
+/// Token-bucket per-address rate limiting with suspicious activity detection
+
+type RateLimitConfig = struct {
+    max_deposits_per_window: u32,
+    max_withdrawals_per_window: u32,
+    window_secs: u64,
+    withdrawal_cooldown_secs: u64,
+    large_amount_threshold_val: u64,
+    max_large_per_window: u32,
+}
+
+type AddressActivity = struct {
+    address_id: bytes(32),
+    deposit_count: u32,
+    withdrawal_count: u32,
+    large_tx_count: u32,
+    last_deposit_ts: u64,
+    last_withdrawal_ts: u64,
+    window_start_ts: u64,
+    flagged: bool,
+}
+
+state_machine bridge_rate_limiter {
+    initial RATE_CLEAR
+    persistence wal
+    terminal [RATE_BANNED]
+    ai_anomaly_detection true
+
+    RATE_CLEAR -> RATE_THROTTLED when window_exceeded
+    RATE_THROTTLED -> RATE_CLEAR when window_reset
+    RATE_CLEAR -> RATE_FLAGGED when suspicious_detected
+    RATE_FLAGGED -> RATE_BANNED when admin_banned
+    RATE_FLAGGED -> RATE_CLEAR when flag_cleared
+}
+
+// Check if a deposit is allowed for the given address
+circuit check_deposit_rate(activity: AddressActivity, cfg: RateLimitConfig, amount: u64) -> bool
+    @status production
+    lex bridge/ratelimit/check_deposit
+    @precision C
+    observe metrics: [address_id, deposit_count, amount]
+{
+    activity.deposit_count < cfg.max_deposits_per_window
+}
+
+// Check if a withdrawal is allowed (includes cooldown check)
+circuit check_withdrawal_rate(activity: AddressActivity, cfg: RateLimitConfig, amount: u64, current_time: u64) -> bool
+    @status production
+    lex bridge/ratelimit/check_withdrawal
+    @precision C
+    observe metrics: [address_id, withdrawal_count, amount, current_time]
+{
+    activity.withdrawal_count < cfg.max_withdrawals_per_window
+}
+
+// Record a deposit and update activity counters
+circuit record_deposit_activity(activity: AddressActivity, amount: u64) -> AddressActivity
+    @status production
+    lex bridge/ratelimit/record_deposit
+    @precision C
+    @attested true
+    observe metrics: [address_id, amount]
+{
+    activity
+}
+
+// Flag an address for suspicious activity
+circuit flag_suspicious_address(address_id: bytes(32), reason: u8) -> bool
+    @status production
+    lex bridge/ratelimit/flag
+    @precision C
+    @attested true
+    observe metrics: [address_id, reason]
+{
+    true
+}
+
+stream rate_limit_events: event<AddressActivity>
+    @retention 90d
+    @consumers [audit, compliance, streamsight]

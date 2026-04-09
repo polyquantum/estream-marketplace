@@ -1,0 +1,115 @@
+¤Blob‘Å
+¶/// Spec: specs/verticals/RADIO_SPEC.md
+/// eStream Radio Scatter â€” Dynamic Spectrum Management
+/// Interference avoidance, regulatory compliance, aperture optimization.
+
+type SpectrumBlock = struct {
+    block_id: bytes(32),
+    start_hz: u64,
+    end_hz: u64,
+    max_power_dbm: i16,
+    regulatory_region: u8,
+    usage_type: u8,
+    occupied: bool,
+}
+
+type InterferenceReport = struct {
+    report_id: bytes(32),
+    freq_hz: u64,
+    interferer_power_dbm: i16,
+    victim_freq_hz: u64,
+    separation_hz: u32,
+    timestamp: u64,
+}
+
+type ApertureConfig = struct {
+    config_id: bytes(32),
+    min_freq_hz: u64,
+    max_freq_hz: u64,
+    excluded_count: u8,
+    usable_bandwidth_hz: u64,
+    regulatory_region: u8,
+}
+
+// Usage types: 0=Primary_Licensed, 1=Secondary_Licensed, 2=Unlicensed,
+//   3=Military_Exclusive, 4=Emergency, 5=Experimental, 6=Dynamic_Shared
+
+circuit validate_spectrum_block(
+    status production
+    start_hz: u64,
+    end_hz: u64,
+    max_power_dbm: i16
+) -> bool
+    lex platform/radio/spectrum
+    @precision C
+    @attested true
+{
+    let range_ok = end_hz > start_hz
+    let power_ok = max_power_dbm >= -30 && max_power_dbm <= 60
+    let width = end_hz - start_hz
+    let width_ok = width >= 100000 && width <= 1000000000
+    range_ok && power_ok && width_ok
+}
+
+circuit spectrum_utilization_pct(
+    status production
+    total_bandwidth_hz: u64,
+    occupied_bandwidth_hz: u64
+) -> u8
+    lex platform/radio/spectrum
+    @precision C
+    @attested true
+{
+    if total_bandwidth_hz == 0 { return 0 }
+    (occupied_bandwidth_hz * 100) / total_bandwidth_hz
+}
+
+circuit interference_margin_db(
+    status production
+    desired_power_dbm: i16,
+    interferer_power_dbm: i16,
+    min_sinr_db: i16
+) -> i16
+    lex platform/radio/spectrum
+    @precision C
+    @attested true
+{
+    let sinr = desired_power_dbm - interferer_power_dbm
+    sinr - min_sinr_db
+}
+
+circuit should_exclude_band(
+    status production
+    interference_margin_db: i16,
+    occupancy_pct: u8,
+    max_interference_db: i16
+) -> bool
+    lex platform/radio/spectrum
+    @precision C
+    @attested true
+{
+    interference_margin_db < max_interference_db || occupancy_pct > 90
+}
+
+circuit optimal_aperture_width_mhz(
+    status production
+    n_bands: u8,
+    bandwidth_per_band_khz: u32,
+    min_separation_khz: u32
+) -> u32
+    lex platform/radio/spectrum
+    @precision C
+    @attested true
+{
+    let per_band = bandwidth_per_band_khz + min_separation_khz
+    let total_khz = per_band * n_bands * 3
+    total_khz / 1000
+}
+
+stream spectrum_events: event<SpectrumBlock>
+    @retention 90d
+    @consumers [streamsight, governance]
+
+stream interference_events: event<InterferenceReport>
+    @retention 90d
+    @consumers [streamsight, forensics]

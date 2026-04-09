@@ -1,0 +1,102 @@
+Å§Blobë≈
+/// Spec: specs/verticals/RADIO_SPEC.md
+/// eStream Radio Scatter ‚Äî Encoding/decoding across frequency bands
+/// Adapts erasure-coded scatter from network paths to RF bands.
+/// k-of-n reconstruction: <k shards = zero information.
+
+type ScatterTransmission = struct {
+    transmission_id: bytes(32),
+    n_shards: u8,
+    k_threshold: u8,
+    total_payload_bytes: u32,
+    vrf_proof: bytes,
+    timestamp_ns: u64,
+}
+
+type ReconstructionResult = struct {
+    transmission_id: bytes(32),
+    shards_received: u8,
+    shards_required: u8,
+    success: bool,
+    latency_us: u32,
+}
+
+circuit validate_scatter_config(
+    status production
+    n_bands: u8,
+    k_threshold: u8,
+    payload_bytes: u32
+) -> bool
+    lex platform/radio/scatter
+    @precision C
+    @attested true
+{
+    let n_ok = n_bands >= 3 && n_bands <= 32
+    let k_ok = k_threshold >= 2 && k_threshold <= n_bands
+    let ratio_ok = k_threshold <= (n_bands * 3) / 4
+    let payload_ok = payload_bytes > 0 && payload_bytes <= 65536
+    n_ok && k_ok && ratio_ok && payload_ok
+}
+
+circuit shard_size_bytes(payload_bytes: u32, n_shards: u8, k_threshold: u8) -> u32
+    @status production
+    lex platform/radio/scatter
+    @precision C
+    @attested true
+{
+    let data_per_shard = (payload_bytes + k_threshold - 1) / k_threshold
+    data_per_shard + 64
+}
+
+circuit can_reconstruct(shards_received: u8, k_threshold: u8) -> bool
+    @status production
+    lex platform/radio/scatter
+    @precision C
+    @attested true
+{
+    shards_received >= k_threshold
+}
+
+circuit jam_resistance_pct(n_bands: u8, k_threshold: u8) -> u8
+    @status production
+    lex platform/radio/scatter
+    @precision C
+    @attested true
+{
+    let tolerable_jammed = n_bands - k_threshold
+    (tolerable_jammed * 100) / n_bands
+}
+
+circuit information_leakage(shards_captured: u8, k_threshold: u8) -> u8
+    @status production
+    lex platform/radio/scatter
+    @precision C
+    @attested true
+{
+    if shards_captured < k_threshold { return 0 }
+    100
+}
+
+circuit optimal_n_for_environment(
+    status production
+    jam_probability_pct: u8,
+    latency_budget_us: u32,
+    power_budget_dbm: i16
+) -> u8
+    lex platform/radio/scatter
+    @precision C
+    @attested true
+{
+    if jam_probability_pct > 60 { return 11 }
+    if jam_probability_pct > 40 { return 9 }
+    if jam_probability_pct > 20 { return 7 }
+    5
+}
+
+stream scatter_tx_events: event<ScatterTransmission>
+    @retention 30d
+    @consumers [streamsight, forensics]
+
+stream scatter_rx_events: event<ReconstructionResult>
+    @retention 30d
+    @consumers [streamsight, forensics]

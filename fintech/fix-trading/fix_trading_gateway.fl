@@ -10,9 +10,9 @@
 // platform/estream_platform.fl composes the core platform, but scoped to a
 // marketplace component bundle.
 //
-// StreamSight is integrated inline via `streamsight true` on circuits,
+// Observe is integrated inline via `observe true` on circuits,
 // `observe metrics:` annotations, `observe` verbs on data types, and
-// `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 // It is NOT a standalone composed component — every circuit and data type
 // carries its own observability hooks.
 //
@@ -126,8 +126,8 @@ circuit compliance_check(order: EStreamOrder, pk: bytes(1568)) -> ComplianceResu
 
     let ofac_result = li_classify(order.client_order_id, order.instrument)
     let risk = li_infer(order.order_id, order.instrument)
-    let anomaly = streamsight_anomaly(order_hash)
-    let baseline = streamsight_baseline("compliance_rejections")
+    let anomaly = observe_anomaly(order_hash)
+    let baseline = observe_baseline("compliance_rejections")
 
     ComplianceResult {
         cleared: true,
@@ -160,7 +160,7 @@ circuit order_route(order: EStreamOrder, compliance: ComplianceResult, pk: bytes
     let kem = mlkem_encaps(pk)
     let sig = mldsa_sign(route_hash, order.order_id)
     let verified = mldsa_verify(route_hash, sig, order.order_id)
-    let anomaly = streamsight_anomaly(route_hash)
+    let anomaly = observe_anomaly(route_hash)
     route_hash
 }
 
@@ -191,8 +191,8 @@ circuit settlement_bridge(fill: EStreamFill, pk: bytes(1568)) -> SettlementResul
     let kem = mlkem_encaps(pk)
     let settlement_sig = mldsa_sign(fill_hash, fill.order_id)
     let verified = mldsa_verify(fill_hash, settlement_sig, fill.order_id)
-    let anomaly = streamsight_anomaly(fill_hash)
-    let baseline = streamsight_baseline("settlement_failures")
+    let anomaly = observe_anomaly(fill_hash)
+    let baseline = observe_baseline("settlement_failures")
     SettlementResult {
         settled: verified,
         settlement_hash: fill_hash,
@@ -237,8 +237,8 @@ circuit audit_export(event_type: bytes(32), order_id: bytes(32), details: bytes(
 // =============================================================================
 //
 // The composite wiring connects all sub-components into the full gateway.
-// StreamSight telemetry is inline on every circuit and data type —
-// no standalone streamsight component needed in the composition.
+// Observe telemetry is inline on every circuit and data type —
+// no standalone observe component needed in the composition.
 
 platform fix_trading_gateway v1 {
 

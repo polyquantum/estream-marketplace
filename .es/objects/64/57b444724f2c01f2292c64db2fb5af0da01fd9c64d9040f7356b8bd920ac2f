@@ -1,0 +1,126 @@
+¤Blob‘Å?/// Spec: specs/verticals/BRIDGE_SPEC.md
+/// Emergency Pause Circuit (#141)
+/// Platform governance: 5-of-7 multi-sig to pause/resume bridge operations.
+/// Covers: all deposits, all withdrawals, specific token types, or full halt.
+
+type PauseGuardian = struct {
+    guardian_id: bytes(32),
+    pubkey: bytes(32),
+    role: u8,
+    is_active: bool,
+    registered_at: u64,
+}
+
+type PauseRequest = struct {
+    request_id: bytes(16),
+    pause_scope: u8,
+    reason_hash: bytes(32),
+    requested_by: bytes(32),
+    threshold_count: u8,
+    attestation_count: u8,
+    created_at: u64,
+    executed: bool,
+}
+
+type ResumeRequest = struct {
+    request_id: bytes(16),
+    pause_request_id: bytes(16),
+    requested_by: bytes(32),
+    threshold_count: u8,
+    attestation_count: u8,
+    created_at: u64,
+    executed: bool,
+}
+
+type PauseAttestation = struct {
+    request_id: bytes(16),
+    guardian_id: bytes(32),
+    signature: bytes(64),
+}
+
+type PauseEvent = struct {
+    event_id: bytes(16),
+    event_type: u8,
+    request_id: bytes(16),
+    scope: u8,
+    actor_id: bytes(32),
+    timestamp: u64,
+}
+
+state_machine bridge_pause_flow {
+    initial BRIDGE_ACTIVE
+    persistence wal
+    terminal [BRIDGE_PERMANENTLY_HALTED]
+    ai_anomaly_detection true
+
+    BRIDGE_ACTIVE -> PAUSE_COLLECTING when pause_requested
+    PAUSE_COLLECTING -> BRIDGE_PAUSED when pause_threshold_met
+    PAUSE_COLLECTING -> BRIDGE_ACTIVE when pause_expired
+    BRIDGE_PAUSED -> RESUME_COLLECTING when resume_requested
+    RESUME_COLLECTING -> BRIDGE_ACTIVE when resume_threshold_met
+    RESUME_COLLECTING -> BRIDGE_PAUSED when resume_expired
+    BRIDGE_PAUSED -> BRIDGE_PERMANENTLY_HALTED when permanent_halt_confirmed
+}
+
+circuit request_emergency_pause(req: PauseRequest) -> bool
+    @status production
+    lex bridge/pause/request
+    @precision D
+    @attested true
+    observe metrics: [pause_scope, requested_by]
+{
+    true
+}
+
+circuit attest_pause(att: PauseAttestation) -> bool
+    @status production
+    lex bridge/pause/attest
+    @precision D
+    @attested true
+    observe metrics: [request_id, guardian_id]
+{
+    true
+}
+
+circuit execute_pause(req: PauseRequest) -> bool
+    @status production
+    lex bridge/pause/execute
+    @precision D
+    @attested true
+    observe metrics: [request_id, attestation_count, threshold_count]
+{
+    req.attestation_count >= req.threshold_count
+}
+
+circuit request_resume(req: ResumeRequest) -> bool
+    @status production
+    lex bridge/pause/resume_request
+    @precision D
+    @attested true
+    observe metrics: [pause_request_id, requested_by]
+{
+    true
+}
+
+circuit execute_resume(req: ResumeRequest) -> bool
+    @status production
+    lex bridge/pause/resume_execute
+    @precision D
+    @attested true
+    observe metrics: [request_id, attestation_count, threshold_count]
+{
+    req.attestation_count >= req.threshold_count
+}
+
+circuit check_bridge_paused(scope: u8) -> bool
+    @status production
+    lex bridge/pause/check
+    @precision D
+    observe metrics: [scope]
+{
+    false
+}
+
+stream pause_events: event<PauseEvent>
+    @retention 7y
+    @consumers [governance, audit, compliance, streamsight, console]

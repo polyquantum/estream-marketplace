@@ -57,4 +57,4 @@ circuit validate_modbus_crc(payload_hash: bytes(32), expected_crc: u32) -> bool
 
 stream modbus_events: event<DecodedReading>
     @retention 90d
-    @consumers [streamsight, analytics, alerting]
+    @consumers [observe, analytics, alerting]

@@ -1,0 +1,73 @@
+¤Blob‘Å÷/// Spec: specs/verticals/INDUSTRIAL_SPEC.md
+/// Alarm System Graph with Hysteresis and Escalation (#147)
+/// Graph modeling alarm nodes with severity, thresholds, and escalation edges
+
+type AlarmNode = struct {
+    alarm_id: bytes(16),
+    severity: u8,
+    threshold_hi: u64,
+    threshold_lo: u64,
+    hysteresis: u64,
+    current_state: u8,
+}
+
+type EscalationEdge = struct {
+    delay_ms: u32,
+    auto_escalate: bool,
+    notification_channel: u8,
+}
+
+graph alarm_system {
+    node AlarmNode
+    edge EscalationEdge
+    overlay alarm_active: bool bitmask
+    overlay escalation_level: u8 curate
+    overlay acknowledgment: u8 curate
+    observe alarm_system: [alarm_active, escalation_level, acknowledgment] threshold: {
+        anomaly_score 0.9
+        baseline_window 60
+    }
+}
+
+series alarm_series: alarm_system
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+circuit evaluate_alarm(graph_id: bytes(32), alarm: AlarmNode, current_value: u64, timestamp_ms: u64) -> AlarmNode
+    @status production
+    lex industrial/region/fleet
+    @precision B
+    observe metrics: [alarm_id, severity, current_value, timestamp_ms]
+{
+    AlarmNode {
+        alarm_id: alarm.alarm_id,
+        severity: alarm.severity,
+        threshold_hi: alarm.threshold_hi,
+        threshold_lo: alarm.threshold_lo,
+        hysteresis: alarm.hysteresis,
+        current_state: alarm.current_state,
+    }
+}
+
+circuit escalate_alarm(graph_id: bytes(32), alarm_id: bytes(16), new_level: u8, channel: u8) -> bool
+    @status production
+    lex industrial/region/fleet
+    @precision B
+    observe metrics: [alarm_id, new_level, channel]
+{
+    true
+}
+
+circuit acknowledge_alarm(graph_id: bytes(32), alarm_id: bytes(16), operator_id: bytes(16), timestamp_ms: u64) -> bool
+    @status production
+    lex industrial/region/fleet
+    @precision B
+    observe metrics: [alarm_id, operator_id, timestamp_ms]
+{
+    true
+}
+
+stream alarm_system_events: event<AlarmNode>
+    @retention 1y
+    @consumers [streamsight, alerting, analytics, compliance]

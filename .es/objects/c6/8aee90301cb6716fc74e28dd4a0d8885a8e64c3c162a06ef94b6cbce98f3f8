@@ -1,0 +1,80 @@
+¤Blob‘Å¹/// Spec: specs/verticals/BRIDGE_SPEC.md
+/// Mint/Burn Token Circuit (Track H â€” Bridge Port)
+/// Mint pq-tokens on deposit, burn on withdrawal
+/// @rust_only â€” circuit logic lives in Rust; .fl defines the contract only
+
+type TokenAccount = struct {
+    account_id: bytes(32),
+    owner_commitment: bytes(32),
+    token_mint: bytes(32),
+    balance_amount: u64,
+}
+
+type MintOp = struct {
+    account_id: bytes(32),
+    token_mint: bytes(32),
+    mint_amount: u64,
+    deposit_proof: bytes(32),
+}
+
+type BurnOp = struct {
+    account_id: bytes(32),
+    token_mint: bytes(32),
+    burn_amount: u64,
+    withdrawal_proof: bytes(32),
+}
+
+type MintBurnResult = struct {
+    account_id: bytes(32),
+    new_balance: u64,
+    op_type: u8,
+    success: bool,
+}
+
+// Mint pq-tokens into an account (called after deposit verification)
+circuit mint_tokens(op: MintOp) -> MintBurnResult
+    @status production
+    lex bridge/mint
+    @precision D
+    @attested true
+    observe metrics: [account_id, token_mint, mint_amount]
+    invariant op.mint_amount > 0
+{
+    MintBurnResult {
+        account_id: op.account_id,
+        new_balance: op.mint_amount,
+        op_type: 0,
+        success: true,
+    }
+}
+
+// Burn pq-tokens from an account (called before withdrawal submission)
+circuit burn_tokens(op: BurnOp) -> MintBurnResult
+    @status production
+    lex bridge/burn
+    @precision D
+    @attested true
+    observe metrics: [account_id, token_mint, burn_amount]
+    invariant op.burn_amount > 0
+{
+    MintBurnResult {
+        account_id: op.account_id,
+        new_balance: 0,
+        op_type: 1,
+        success: true,
+    }
+}
+
+// Query token balance for an account
+circuit token_balance(account_id: bytes(32), token_mint: bytes(32)) -> u64
+    @status production
+    lex bridge/balance
+    @precision D
+    observe metrics: [account_id, token_mint]
+{
+    0
+}
+
+stream mint_burn_events: event<MintBurnResult>
+    @retention 7y
+    @consumers [governance, audit, compliance, streamsight]

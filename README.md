@@ -1,118 +1,92 @@
-# estream-marketplace
+# eStream Marketplace
 
-SmartCircuit Marketplace for the eStream platform — domain-organized marketplace components including FIX trading, ISO 20022 financial messaging, PCI compliance, industrial protocol gateways, and the full domain package registry, ZK licensing, and solution bundle infrastructure.
+The eStream Marketplace is an open source component exchange for discovering, publishing, installing, and composing reusable eStream components. It distributes six types of components — data schemas, SmartCircuits, wire adapters, FPGA circuits, console widgets, and full integrations — all signed with ML-DSA-87 post-quantum signatures.
 
-## Structure
-
-```
-estream-marketplace/
-├── registry/                 Domain Package Registry (Epic 4)
-│   ├── package_format.fl         .escx format, manifest, attestation, signing
-│   ├── dependency_resolution.fl  DAG topo-sort, version constraints, conflict detection
-│   └── package_mirror.fl         Local cache, scatter-distributed mirrors
-├── licensing/                ZK Licensing & Atomic Settlement (Epic 5)
-│   ├── blinded_tokens.fl         Chaum-style blinded license tokens (PQ-safe)
-│   ├── metering.fl               Per-minute tracking, hourly blind aggregation
-│   ├── settlement.fl             Atomic multi-party settlement, ZK revenue proofs
-│   └── pricing_tiers.fl          Share vs. private tiers, telemetry preferences
-├── solutions/                Solution Bundles — White-Label Distribution (Epic 6)
-│   ├── solution_manifest.fl      Bundle definition, package composition
-│   ├── lex_boundary.fl           Hierarchical lex nesting (Platform→Solution→Customer)
-│   ├── revenue_waterfall.fl      Atomic revenue splits through tier chain
-│   └── customer_onboarding.fl    Provisioning, upgrades, rollback
-├── console/                  Console & Developer Experience (Epic 7)
-│   ├── publisher_console.fl      Publisher dashboard, analytics, deprecation
-│   ├── customer_console.fl       Installed packages, licenses, billing
-│   ├── admin_console.fl          Marketplace health, compliance, FLIR matrix
-│   └── dev_tooling.fl            Dev server, testing, linting, doc generation
-├── fintech/
-│   ├── fix-trading/          FIX protocol trading gateway (FastLang)
-│   ├── pci/                  PCI-DSS cardholder data governance (FastLang)
-│   └── iso20022/             ISO 20022 parser circuit + test vectors (FLIR)
-├── industrial/
-│   ├── components/           Modbus TCP sub-circuits (FLIR)
-│   ├── gateway/              Gateway SKUs: Lite/Standard/Premium (FLIR)
-│   └── specs/                Industrial gateway specifications
-├── pricing/                  Provider-level custom pricing (FastLang)
-├── streams/                  Graph-based registry model (FastLang)
-├── specs/
-│   ├── ESTREAM_MARKETPLACE_SPEC.md   Canonical v2.0.0 spec
-│   ├── standards/
-│   │   ├── ESCX_FORMAT_SPEC.md       .escx binary format specification
-│   │   ├── MANIFEST_SCHEMA_SPEC.md   manifest.toml full schema
-│   │   └── PRIVACY_GUARANTEES_SPEC.md Privacy & ZK proof specs
-│   └── archive/              Superseded specs
-├── docs/
-│   ├── guides/
-│   │   ├── publisher-getting-started.md
-│   │   ├── customer-guide.md
-│   │   ├── pricing-strategy.md
-│   │   └── solution-builder.md
-│   └── (language SDK docs)
-└── templates/                Circuit templates
-```
-
-## Marketplace Infrastructure (Epics 4–8)
-
-### Registry & Distribution (Epic 4)
-
-Domain package (.escx) registry with PoVC attestation, ML-DSA-87 signing, DAG-based dependency resolution, and scatter-distributed mirrors. 16 circuits across package format, dependency resolution, and caching.
-
-### ZK Licensing & Atomic Settlement (Epic 5)
-
-Privacy-preserving licensing with Chaum-style blinded tokens (PQ-safe via ML-KEM + PRIME). Per-minute metering with hourly blind aggregation. Atomic multi-party settlement (publisher + platform + referrer in one transaction). ZK revenue proofs. Share vs. private pricing tiers. 20 circuits.
-
-### Solution Bundles (Epic 6)
-
-White-label distribution with three-tier model: Platform → Solution → Customer. Each tier has its own hardware-attested lex boundary. Revenue flows up atomically through the waterfall. 23 circuits covering bundles, lex nesting, waterfall settlement, and customer lifecycle.
-
-### Console & Developer Experience (Epic 7)
-
-Publisher, customer, and admin consoles plus developer tooling (dev server, test runner, linter, doc generator). 24 circuits. CLI: `estream marketplace {dev, test, lint, docs, solution, update}`.
-
-### Documentation & Standards (Epic 8)
-
-Publisher and customer guides, pricing strategy, solution builder guide. Formal specifications: .escx binary format, manifest.toml schema, privacy guarantees (what the marketplace operator cannot learn), ZK proof specs.
-
-## Domain Components
-
-### Fintech
-
-**FIX Trading** — Three-component decomposition for FIX 4.2/4.4/5.0 protocol integration:
-- `trading_schemas.fl` — Order, Fill, Quote, MarketData data types with validation circuits
-- `fix_wire_adapter.fl` — FIX message parsing/serialization, session management
-- `fix_trading_gateway.fl` — Composite gateway wiring all components together
-
-**PCI** — PCI-DSS cardholder data governance with field-level tokenization and sub-lex fan_out.
-
-**ISO 20022** — Full FLIR circuit for ISO 20022 XML/JSON parsing with PoVC witness generation. Includes pacs.008 and pacs.002 test vectors.
-
-### Industrial
-
-**Components** — Individual FLIR sub-circuits: Modbus TCP client, poll scheduler, stream emitter, StreamSight bridge.
-
-**Gateway SKUs** — Composite gateway circuits at three tiers:
-- **Lite** (free/Apache-2.0) — 10 devices, 256 registers
-- **Standard** ($100/mo) — 50 devices, serial/RTU, FPGA acceleration
-- **Premium** ($300/mo) — 200 devices, DNP3, OPC-UA, hot standby, PoVC attestation
-
-## Relationship to Main Repo
-
-This repo was separated from `polyquantum/estream` (Wave 3, Issue #40). The main repo retains:
-- SmartCircuit compiler support (`compiler/`)
-- Marketplace API types (generated from `.fl`)
-- Testing fixtures (`testing/`)
-
-## Package Format
-
-Domain packages use the `.escx` format defined in `specs/standards/ESCX_FORMAT_SPEC.md`. Component packages follow `specs/ESTREAM_MARKETPLACE_SPEC.md`.
+## Quick Start
 
 ```bash
-estream marketplace install <package-name>
-estream marketplace search "thermal analysis"
-estream marketplace publish .
-estream marketplace solution create my-solution
-estream marketplace dev .
-estream marketplace test .
-estream marketplace lint .
+# Search for components
+estream marketplace search "FIX adapter"
+
+# Install a component
+estream marketplace install estream-wire-fix
+
+# Create your own component
+estream marketplace scaffold smart-circuit my-circuit
+
+# Validate before publishing
+estream marketplace publish my-circuit --dry-run
+
+# Publish with ML-DSA-87 signing
+estream marketplace publish my-circuit
 ```
+
+## Component Categories
+
+| Category | Description | Example |
+|----------|-------------|---------|
+| `data-schema` | Reusable data type definitions | `data-trading`, `data-iot`, `data-carbon` |
+| `wire-adapter` | Protocol adapters (MQTT, FIX, HL7, Modbus, SWIFT) | `estream-wire-fix`, `estream-wire-mqtt` |
+| `smart-circuit` | SmartCircuit logic targeting CPU/WASM | `order-matcher`, `carbon-credit-mint` |
+| `fpga-circuit` | FPGA-targetable circuits with Verilog output | `ntt-accelerator` |
+| `integration` | Full-stack domain integration bundles | Carbon credit pipeline |
+| `console-widget` | Dashboard widgets for the eStream console | `impact-counter` |
+
+## Documentation
+
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](docs/getting-started.md) | 5-minute quickstart — install, create, and publish your first component |
+| [Component Guide](docs/component-guide.md) | Deep dive into component structure, categories, and the manifest format |
+| [CLI Reference](docs/cli-reference.md) | Complete reference for all 7 marketplace commands |
+| [Pricing Guide](docs/pricing-guide.md) | 6 pricing models and 4 visibility levels explained |
+| [Security Model](docs/security-model.md) | ML-DSA-87 post-quantum signatures and SPARK authentication |
+| [API Reference](docs/api-reference.md) | Stream API topics, data types, and subscription patterns |
+| [FAQ](docs/faq.md) | Common questions about the marketplace |
+
+## Branding
+
+| Document | Description |
+|----------|-------------|
+| [Brand Guidelines](branding/BRAND_GUIDELINES.md) | Color palette, typography, component card specs, badge designs |
+| [Badge Descriptions](branding/badge-descriptions.md) | Verified, Official, PQ-Signed, FPGA-Ready, and Community badges |
+
+## Architecture
+
+```
+CLI (estream marketplace)              Console (Marketplace Tab)
+┌──────────────────────────┐          ┌──────────────────────────┐
+│ search · install · pub   │          │ Browse · Install · Rate  │
+│ verify · scaffold        │          │ Component Cards           │
+└────────────┬─────────────┘          └────────────┬─────────────┘
+             │                                      │
+             ▼                                      ▼
+┌──────────────────────────────────────────────────────────────┐
+│              Component Registry (ML-DSA-87 Signed)            │
+├──────────────────────────────────────────────────────────────┤
+│ Data Schemas · SmartCircuits · Wire Adapters · Widgets        │
+│ FPGA Circuits · Full Integrations                            │
+├──────────────────────────────────────────────────────────────┤
+│ Stream API: /marketplace/index, /search, /install, /publish  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Contributing
+
+1. Fork the repository
+2. Scaffold a new component: `estream marketplace scaffold <category> <name>`
+3. Add your schemas, circuits, or widgets
+4. Validate: `estream marketplace publish --dry-run .`
+5. Submit a pull request
+
+All contributions must pass manifest validation and ML-DSA-87 signing. See the [Component Guide](docs/component-guide.md) for authoring details and the [Security Model](docs/security-model.md) for signing requirements.
+
+## License
+
+Open source components: Apache 2.0
+Source available components: BSL 1.1
+Enterprise components: Commercial license
+
+---
+
+**PolyQuantum** | [eStream Platform](https://github.com/polyquantum/estream)

@@ -79,4 +79,4 @@ circuit flag_suspicious_address(address_id: bytes(32), reason: u8) -> bool
 
 stream rate_limit_events: event<AddressActivity>
     @retention 90d
-    @consumers [audit, compliance, streamsight]
+    @consumers [audit, compliance, observe]

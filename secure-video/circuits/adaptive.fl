@@ -52,7 +52,7 @@ circuit compensate_density_for_fps_drop(
     lex platform/svd/adaptive
     @precision C
     @attested true
-    @streamsight_emit
+    @observe_emit
 {
     let ratio_x100 = (current_fps_x100 * 100) / source_fps_x100
     let effective = base_density
@@ -146,7 +146,7 @@ circuit evaluate_watermark_aware_switch(
     lex platform/svd/adaptive
     @precision C
     @attested true
-    @streamsight_emit
+    @observe_emit
 {
     if adaptive_action == 0 { return 0 }
 
@@ -169,8 +169,8 @@ circuit evaluate_watermark_aware_switch(
 
 stream codec_transition_events: event<CodecTransition>
     @retention 7y
-    @consumers [governance, audit, streamsight, forensics]
+    @consumers [governance, audit, observe, forensics]
 
 stream watermark_continuity_events: event<WatermarkContinuity>
     @retention 7y
-    @consumers [governance, audit, streamsight, forensics]
+    @consumers [governance, audit, observe, forensics]

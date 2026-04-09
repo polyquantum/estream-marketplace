@@ -12,8 +12,8 @@
 // verification for a full end-to-end campaign audit — proving both that
 // the impression chain is tamper-free and that the claimed count is correct.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import etch_verify_chain from "advertising/etch/circuits/etch_merkle"
 import etch_chain_head from "advertising/etch/circuits/etch_merkle"
@@ -69,12 +69,12 @@ data VerificationResult : circuit v1 {
 
 stream etch_proof_events: event<ImpressionProof>
     @retention 365d
-    @consumers [streamsight, audit, advertiser_dashboard]
+    @consumers [observe, audit, advertiser_dashboard]
     @classify proof_id: IDENTIFIER, campaign_id: IDENTIFIER, count: METRIC, verified: METADATA
 
 stream etch_verification_events: event<VerificationResult>
     @retention 365d
-    @consumers [streamsight, audit, advertiser_dashboard, alerting]
+    @consumers [observe, audit, advertiser_dashboard, alerting]
     @classify campaign_id: IDENTIFIER, claimed_count: METRIC, verified: METADATA, proof_valid: METADATA, chain_valid: METADATA
 
 // =============================================================================
@@ -120,8 +120,8 @@ circuit etch_generate_count_proof(campaign_id: bytes(32), count: u64, pk: bytes(
     let proof_input = sha3_256(proof_id)
     let proof_bytes = sha3_256(proof_input)
 
-    let anomaly = streamsight_anomaly(proof_id)
-    let baseline = streamsight_baseline("proofs_generated")
+    let anomaly = observe_anomaly(proof_id)
+    let baseline = observe_baseline("proofs_generated")
 
     ImpressionProof {
         proof_id: proof_id,
@@ -166,8 +166,8 @@ circuit etch_verify_count(campaign_id: bytes(32), claimed_count: u64, proof: byt
     let head = etch_chain_head(campaign_id)
     let chain_valid = etch_verify_chain(head.head_hash, head.depth, pk)
 
-    let anomaly = streamsight_anomaly(verify_hash)
-    let baseline = streamsight_baseline("counts_verified")
+    let anomaly = observe_anomaly(verify_hash)
+    let baseline = observe_baseline("counts_verified")
 
     VerificationResult {
         campaign_id: campaign_id,
@@ -215,8 +215,8 @@ circuit etch_audit_campaign(campaign_id: bytes(32), pk: bytes(1568)) -> Verifica
     let count_proof = etch_generate_count_proof(campaign_id, head.total_impressions, pk)
     let proof_valid = mldsa_verify(count_proof.proof_id, sig, campaign_id)
 
-    let anomaly = streamsight_anomaly(audit_hash)
-    let baseline = streamsight_baseline("campaigns_audited")
+    let anomaly = observe_anomaly(audit_hash)
+    let baseline = observe_baseline("campaigns_audited")
 
     VerificationResult {
         campaign_id: campaign_id,

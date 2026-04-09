@@ -1,6 +1,6 @@
 /// Publisher registration: Poly Labs
-/// Registers all 38 Poly products in the marketplace.
-/// Epic: polylabs-dev/polylabs#25, estream-marketplace#19
+/// Registers all 7 PolyKit packages in the marketplace.
+/// Epic: polylabs-dev/polykit#11, Issue: #19
 
 /// govern lex marketplace/registry
 
@@ -18,407 +18,70 @@ circuit register_polylabs_publisher() -> bool
         "https://github.com/polylabs-dev"
     )
 
-    let r_platform = register_polylabs_platform(publisher)
-    let r_productivity = register_polylabs_productivity(publisher)
-    let r_communication = register_polylabs_communication(publisher)
-    let r_security = register_polylabs_security(publisher)
-    let r_developer = register_polylabs_developer(publisher)
-    let r_enterprise = register_polylabs_enterprise(publisher)
-    let r_consumer = register_polylabs_consumer(publisher)
-    let r_data_rooms = register_polylabs_data_rooms(publisher)
-    let r_hardware = register_polylabs_hardware(publisher)
-    let batch_core = if r_platform { r_productivity } else { false }
-    let batch_comms = if r_communication { r_security } else { false }
-    let batch_dev = if r_developer { r_enterprise } else { false }
-    let batch_extra = if r_consumer { if r_data_rooms { r_hardware } else { false } } else { false }
-    if batch_core {
-        if batch_comms {
-            if batch_dev { batch_extra } else { false }
-        } else { false }
-    } else { false }
+    register_polylabs_packages(publisher)
 }
 
-/// Category 90: Platform
-circuit register_polylabs_platform(publisher_id: bytes(32)) -> bool
+circuit register_polylabs_packages(publisher_id: bytes(32)) -> bool
     @lex marketplace/registry
     @precision A
+    @attested true
+    @observe metrics: [packages_registered]
 {
-    let r_kit = register_package(publisher_id, "polykit", "0.22.0", "smart-circuit",
-        "Shared composition framework: identity, metering, telemetry, rate-limiting, sanitization, zero-linkage, governance, blind-telemetry, portal context",
-        ["framework", "composition", "identity", "metering", "pq-crypto"],
-        "0.22.0",
+    register_package(publisher_id, "polykit-identity", "0.2.0", "smart-circuit",
+        "SPARK identity + PQ crypto: HKDF key derivation, ML-DSA-87 signing, ML-KEM-1024 encapsulation, auth handshake FSM",
+        ["identity", "spark", "ml-dsa-87", "ml-kem-1024", "pq-crypto"],
+        "0.11.0",
         [],
-        ["derive_keys", "record_usage", "emit_gauge", "check_rate", "sanitize", "classify_content"]
+        ["derive_keys", "derive_user_id", "sign_message", "verify_signature", "encapsulate_key", "decapsulate_key"]
     )
 
-    let r_console = register_package(publisher_id, "polylabs-console", "0.22.0", "console-widget",
-        "Unified admin console for all Poly products: widget registry, RBAC, event bus",
-        ["console", "admin", "rbac", "widgets"],
-        "0.22.0",
-        ["polykit"],
-        ["check_access", "process_widgets", "emit_widget_event"]
+    register_package(publisher_id, "polykit-metering", "0.2.0", "smart-circuit",
+        "8-dimension resource metering: executions, hashes, bandwidth, storage, observables, proofs, circuits, MPC sessions",
+        ["metering", "billing", "usage"],
+        "0.11.0",
+        [],
+        ["record_usage", "check_limits", "get_usage_summary", "accumulate"]
     )
 
-    if r_kit { r_console } else { false }
-}
-
-/// Category 10: Productivity
-circuit register_polylabs_productivity(publisher_id: bytes(32)) -> bool
-    @lex marketplace/registry
-    @precision A
-{
-    let r_docs = register_package(publisher_id, "polydocs", "0.1.0", "smart-circuit",
-        "PQ-encrypted document editing (DOCX/PDF): client-side WYSIWYG, CRDT collaboration, track changes",
-        ["documents", "wysiwyg", "crdt", "pdf", "docx", "productivity"],
-        "0.22.0",
-        ["polykit"],
-        ["create_document", "edit_document", "export_pdf", "sync_crdt"]
+    register_package(publisher_id, "polykit-telemetry", "0.2.0", "smart-circuit",
+        "Observe telemetry pipeline: Discard Normal, baseline comparison, anomaly detection, Cortex integration",
+        ["telemetry", "observe", "observability"],
+        "0.11.0",
+        [],
+        ["emit_gauge", "emit_counter", "emit_event", "check_baseline"]
     )
 
-    let r_slides = register_package(publisher_id, "polyslides", "0.1.0", "smart-circuit",
-        "PQ-encrypted presentations (PPTX): 9 layouts, transitions, animations, presenter mode",
-        ["presentations", "pptx", "slides", "productivity"],
-        "0.22.0",
-        ["polykit"],
-        ["create_presentation", "add_slide", "export_pptx"]
+    register_package(publisher_id, "polykit-rate-limiter", "0.2.0", "smart-circuit",
+        "Per-tier rate limiting with sliding window FSM, WAL persistence, rollback on failure, bounded history",
+        ["rate-limit", "throttle", "sliding-window"],
+        "0.11.0",
+        [],
+        ["check_rate", "record_operation"]
     )
 
-    let r_sheets = register_package(publisher_id, "polysheets", "0.1.0", "smart-circuit",
-        "PQ-encrypted spreadsheets (XLSX): formulas, charts, pivot tables, CRDT sync",
-        ["spreadsheets", "xlsx", "formulas", "productivity"],
-        "0.22.0",
-        ["polykit"],
-        ["create_workbook", "evaluate_cell", "export_xlsx"]
+    register_package(publisher_id, "polykit-sanitize", "0.2.0", "smart-circuit",
+        "3-stage compliance sanitization: PII detection, value transform, PoVC-witnessed audit. HIPAA/PCI-DSS/GDPR/SOC2/CCPA",
+        ["sanitization", "pii", "compliance", "hipaa", "gdpr"],
+        "0.11.0",
+        [],
+        ["sanitize", "detect_only"]
     )
 
-    let r_notes = register_package(publisher_id, "polynotes", "0.1.0", "smart-circuit",
-        "Lightweight encrypted note-taking: Markdown + rich text, rope-backed buffer",
-        ["notes", "markdown", "productivity"],
-        "0.22.0",
-        ["polykit"],
-        ["create_note", "sync_note", "search_notes"]
+    register_package(publisher_id, "polykit-eslm-classify", "0.2.0", "smart-circuit",
+        "ESLM auto-classification with human-in-the-loop feedback, Cortex AI governance, confidence drift monitoring",
+        ["classification", "eslm", "machine-learning"],
+        "0.11.0",
+        [],
+        ["classify_content", "submit_human_feedback", "get_confidence_thresholds"]
     )
 
-    let r_calendar = register_package(publisher_id, "polycalendar", "0.1.0", "smart-circuit",
-        "PQ-encrypted scheduling + invites: iCal compatible, CRDT sync, availability sharing",
-        ["calendar", "scheduling", "ical", "productivity"],
-        "0.22.0",
-        ["polykit"],
-        ["create_event", "send_invite", "check_availability"]
+    register_package(publisher_id, "polykit-console", "0.2.0", "console-widget",
+        "Shared console infrastructure: widget registry graph, typed event bus, RBAC access control, render-ready payloads",
+        ["console", "widgets", "rbac", "event-bus"],
+        "0.11.0",
+        [],
+        ["check_access", "format_role", "process_widgets", "emit_widget_event"]
     )
 
-    let r_tasks = register_package(publisher_id, "polytasks", "0.1.0", "smart-circuit",
-        "PQ-encrypted project management: sprint circuits, issue tracking, Kanban boards",
-        ["tasks", "project-management", "kanban", "productivity"],
-        "0.22.0",
-        ["polykit"],
-        ["create_task", "assign_task", "update_sprint"]
-    )
-
-    let r_forms = register_package(publisher_id, "polyforms", "0.1.0", "smart-circuit",
-        "PQ-encrypted forms/surveys: PDF form fields, conditional logic, compliance-safe collection",
-        ["forms", "surveys", "compliance", "productivity"],
-        "0.22.0",
-        ["polykit"],
-        ["create_form", "submit_response", "export_results"]
-    )
-
-    let batch_a = if r_docs { r_slides } else { false }
-    let batch_b = if r_sheets { r_notes } else { false }
-    let batch_c = if r_calendar { if r_tasks { r_forms } else { false } } else { false }
-    if batch_a { if batch_b { batch_c } else { false } } else { false }
-}
-
-/// Category 20: Communication
-circuit register_polylabs_communication(publisher_id: bytes(32)) -> bool
-    @lex marketplace/registry
-    @precision A
-{
-    let r_messenger = register_package(publisher_id, "polymessenger", "0.12.0", "smart-circuit",
-        "PQ encrypted messaging: blind relay, double-ratchet forward secrecy, RBAC, incognito, agent-to-agent/human-to-agent wire protocol",
-        ["messaging", "pq-crypto", "blind-relay", "double-ratchet", "rbac", "wire-protocol"],
-        "0.22.0",
-        ["polykit"],
-        ["establish_session", "encrypt_message", "decrypt_message", "rotate_session_key",
-         "init_ratchet", "ratchet_encrypt", "ratchet_decrypt", "advance_chain",
-         "select_relay_path", "generate_cover_traffic", "onion_wrap", "onion_unwrap"]
-    )
-
-    let r_mail = register_package(publisher_id, "polymail", "0.1.0", "smart-circuit",
-        "PQ-encrypted email: SMTP/IMAP bridge, scatter-stored mailbox, ESLM spam detection",
-        ["email", "smtp", "imap", "pq-crypto", "communication"],
-        "0.22.0",
-        ["polykit"],
-        ["send_email", "receive_email", "classify_spam", "bridge_smtp"]
-    )
-
-    let r_phone = register_package(publisher_id, "polyphone", "0.1.0", "smart-circuit",
-        "PQ-encrypted VoIP: SFU media relay, cellular fallback, scatter-routed audio/video",
-        ["voip", "phone", "sfu", "pq-crypto", "communication"],
-        "0.22.0",
-        ["polykit"],
-        ["initiate_call", "join_sfu", "route_media", "fallback_cellular"]
-    )
-
-    if r_messenger { if r_mail { r_phone } else { false } } else { false }
-}
-
-/// Category 30: Security & Identity
-circuit register_polylabs_security(publisher_id: bytes(32)) -> bool
-    @lex marketplace/registry
-    @precision A
-{
-    let r_pass = register_package(publisher_id, "polypass", "0.12.0", "smart-circuit",
-        "PQ password manager: SPARK biometric vault, AES-256-GCM per-credential encryption, breach monitoring, TOTP/HOTP, enterprise RBAC",
-        ["vault", "password-manager", "pq-crypto", "rbac", "breach-monitoring", "totp"],
-        "0.22.0",
-        ["polykit"],
-        ["encrypt_credential", "decrypt_credential", "derive_vault_key", "check_breach", "generate_totp"]
-    )
-
-    let r_oauth = register_package(publisher_id, "polyoauth", "0.1.0", "smart-circuit",
-        "PQ biometric SSO: SPARK-based OAuth 2.0/OIDC provider, ML-DSA-87 signed tokens, SAML bridge",
-        ["oauth", "sso", "identity", "spark", "ml-dsa-87"],
-        "0.22.0",
-        ["polykit"],
-        ["authenticate", "issue_token", "verify_token", "provision_scim"]
-    )
-
-    let r_vpn = register_package(publisher_id, "polyvpn", "0.1.0", "smart-circuit",
-        "PQ scatter-routed VPN: multi-exit routing, traffic mimicry, ad/tracker blocking",
-        ["vpn", "privacy", "scatter", "traffic-mimicry"],
-        "0.22.0",
-        ["polykit"],
-        ["establish_tunnel", "route_traffic", "select_exits", "block_trackers"]
-    )
-
-    let r_auth = register_package(publisher_id, "polyauthenticator", "0.1.0", "smart-circuit",
-        "PQ TOTP/HOTP + FIDO2/WebAuthn: hardware-backed on T0, scatter-stored recovery",
-        ["authenticator", "totp", "fido2", "webauthn", "2fa"],
-        "0.22.0",
-        ["polykit"],
-        ["generate_totp", "verify_totp", "register_fido2", "authenticate_webauthn"]
-    )
-
-    let batch_a = if r_pass { r_oauth } else { false }
-    let batch_b = if r_vpn { r_auth } else { false }
-    if batch_a { batch_b } else { false }
-}
-
-/// Category 40: Developer Tools
-circuit register_polylabs_developer(publisher_id: bytes(32)) -> bool
-    @lex marketplace/registry
-    @precision A
-{
-    let r_git = register_package(publisher_id, "polygit", "0.1.0", "smart-circuit",
-        "PQ-signed version control: es-git, scatter-stored objects, ML-DSA-87 commit signing, enterprise governance",
-        ["git", "vcs", "ml-dsa-87", "governance", "developer"],
-        "0.22.0",
-        ["polykit"],
-        ["init_repo", "commit", "push", "pull", "sign_commit", "verify_signature"]
-    )
-
-    let r_studio = register_package(publisher_id, "polystudio", "0.1.0", "smart-circuit",
-        "PQ-encrypted cloud IDE: rope-backed buffer, 12-layer overlay, CRDT collab, LSP client",
-        ["ide", "editor", "crdt", "developer"],
-        "0.22.0",
-        ["polykit"],
-        ["open_buffer", "edit_buffer", "sync_crdt", "run_lsp"]
-    )
-
-    let r_registry = register_package(publisher_id, "polyregistry", "0.1.0", "smart-circuit",
-        "PQ-signed package registry: ML-DSA-87 signed packages on scatter-CAS",
-        ["registry", "packages", "ml-dsa-87", "developer"],
-        "0.22.0",
-        ["polykit"],
-        ["publish_package", "resolve_dependency", "verify_signature"]
-    )
-
-    let r_monitor = register_package(publisher_id, "polymonitor", "0.1.0", "smart-circuit",
-        "PQ-encrypted observability/APM: scatter-stored metrics, blind telemetry, anomaly detection",
-        ["monitoring", "apm", "observability", "developer"],
-        "0.22.0",
-        ["polykit"],
-        ["ingest_metrics", "query_metrics", "detect_anomalies", "create_dashboard"]
-    )
-
-    let batch_a = if r_git { r_studio } else { false }
-    let batch_b = if r_registry { r_monitor } else { false }
-    if batch_a { batch_b } else { false }
-}
-
-/// Category 50: Enterprise & Compliance
-circuit register_polylabs_enterprise(publisher_id: bytes(32)) -> bool
-    @lex marketplace/registry
-    @precision A
-{
-    let r_comply = register_package(publisher_id, "polycomply", "0.1.0", "smart-circuit",
-        "Multi-framework compliance automation: GDPR, FedRAMP, CMMC, PCI, SOX, NIST, HIPAA, ISO 27001, ITAR, ABA",
-        ["compliance", "gdpr", "fedramp", "hipaa", "enterprise"],
-        "0.22.0",
-        ["polykit"],
-        ["assess_compliance", "generate_evidence", "create_zk_proof", "export_audit"]
-    )
-
-    let r_sign = register_package(publisher_id, "polysign", "0.1.0", "smart-circuit",
-        "PQ document signing: ML-DSA-87 signatures, witness attestation, multi-party signing",
-        ["signing", "ml-dsa-87", "documents", "enterprise"],
-        "0.22.0",
-        ["polykit"],
-        ["sign_document", "verify_signature", "create_envelope", "countersign"]
-    )
-
-    let r_archive = register_package(publisher_id, "polyarchive", "0.1.0", "smart-circuit",
-        "Long-term PQ-encrypted archival: legal hold, retention policies, trust chain verification",
-        ["archive", "retention", "legal-hold", "enterprise"],
-        "0.22.0",
-        ["polykit"],
-        ["archive_document", "set_retention", "verify_integrity", "legal_hold"]
-    )
-
-    let r_audit = register_package(publisher_id, "polyaudit", "0.1.0", "smart-circuit",
-        "Immutable ML-DSA-87 signed audit trail: hash chain, tamper detection, compliance export",
-        ["audit", "ml-dsa-87", "compliance", "enterprise"],
-        "0.22.0",
-        ["polykit"],
-        ["record_event", "verify_chain", "export_trail", "detect_tampering"]
-    )
-
-    let r_vault = register_package(publisher_id, "polyvault", "0.1.0", "smart-circuit",
-        "HSM-backed key management: PRIME hardware protection, threshold signing, key ceremony",
-        ["hsm", "key-management", "prime", "enterprise"],
-        "0.22.0",
-        ["polykit"],
-        ["store_key", "retrieve_key", "threshold_sign", "key_ceremony"]
-    )
-
-    let batch_a = if r_comply { r_sign } else { false }
-    let batch_b = if r_archive { r_audit } else { false }
-    if batch_a { if batch_b { r_vault } else { false } } else { false }
-}
-
-/// Category 60: Consumer & Media
-circuit register_polylabs_consumer(publisher_id: bytes(32)) -> bool
-    @lex marketplace/registry
-    @precision A
-{
-    let r_photos = register_package(publisher_id, "polyphotos", "0.1.0", "smart-circuit",
-        "PQ-encrypted photo library: provenance, SPARK-signed attestation, Cortex AI auto-organize",
-        ["photos", "gallery", "provenance", "consumer"],
-        "0.22.0",
-        ["polykit"],
-        ["upload_photo", "organize_gallery", "verify_provenance", "share_album"]
-    )
-
-    let r_contacts = register_package(publisher_id, "polycontacts", "0.1.0", "smart-circuit",
-        "PQ-encrypted contact management: user graph, SPARK identity linking, sync",
-        ["contacts", "address-book", "consumer"],
-        "0.22.0",
-        ["polykit"],
-        ["add_contact", "sync_contacts", "link_identity", "search"]
-    )
-
-    let r_stream = register_package(publisher_id, "polystream", "0.1.0", "smart-circuit",
-        "PQ-secured streaming media gateway: DRM-to-PQ bridge, ABR transcoding, SVD attestation",
-        ["streaming", "media", "drm", "consumer"],
-        "0.22.0",
-        ["polykit"],
-        ["ingest_stream", "transcode", "serve_abr", "attest_svd"]
-    )
-
-    let r_mind = register_package(publisher_id, "polymind", "0.1.0", "smart-circuit",
-        "Personal ESLM corpus + digital legacy: knowledge graph, fact store, K-of-N guardian governance",
-        ["ai", "eslm", "knowledge-graph", "digital-legacy", "consumer"],
-        "0.22.0",
-        ["polykit"],
-        ["ingest_document", "query_corpus", "generate_response", "configure_legacy"]
-    )
-
-    let batch_a = if r_photos { r_contacts } else { false }
-    let batch_b = if r_stream { r_mind } else { false }
-    if batch_a { batch_b } else { false }
-}
-
-/// Category 70: Enterprise Data Rooms
-circuit register_polylabs_data_rooms(publisher_id: bytes(32)) -> bool
-    @lex marketplace/registry
-    @precision A
-{
-    let r_portal = register_package(publisher_id, "polyportal", "0.1.0", "smart-circuit",
-        "White-label PQ-encrypted data rooms: NDA gating (sign-once-countersign-many), forensic watermarking, Q&A, readiness scoring, 8 room templates",
-        ["data-room", "vdr", "nda", "watermark", "enterprise"],
-        "0.22.0",
-        ["polykit"],
-        ["create_room", "invite_guest", "gate_nda", "watermark_pdf", "submit_question",
-         "generate_report", "bulk_invite", "score_readiness", "map_dns"]
-    )
-
-    r_portal
-}
-
-/// Category 80: Hardware-Enhanced (Software-First MVPs)
-circuit register_polylabs_hardware(publisher_id: bytes(32)) -> bool
-    @lex marketplace/registry
-    @precision A
-{
-    let r_files = register_package(publisher_id, "polyfiles", "0.12.0", "smart-circuit",
-        "Scatter-distributed encrypted storage: classification tiers, version history, shared folders, FPGA-accelerated",
-        ["storage", "scatter", "classification", "encryption"],
-        "0.22.0",
-        ["polykit"],
-        ["upload_file", "download_file", "classify", "share_folder", "scatter_store"]
-    )
-
-    let r_wallet = register_package(publisher_id, "polywallet", "0.1.0", "smart-circuit",
-        "Multi-asset wallet: eStream identity (ESW), crypto, CBDC, NFC tap-to-pay, threshold signing",
-        ["wallet", "crypto", "cbdc", "nfc", "threshold-signing"],
-        "0.22.0",
-        ["polykit"],
-        ["create_wallet", "sign_transaction", "tap_to_pay", "social_recovery"]
-    )
-
-    let r_camera = register_package(publisher_id, "polycamera", "0.1.0", "smart-circuit",
-        "Proof of Reality photography: SPARK-signed capture, MTP timestamp proof, provenance chain",
-        ["camera", "provenance", "attestation", "proof-of-reality"],
-        "0.22.0",
-        ["polykit"],
-        ["capture_photo", "sign_attestation", "verify_provenance"]
-    )
-
-    let r_find = register_package(publisher_id, "polyfind", "0.1.0", "smart-circuit",
-        "PQ-encrypted device location: scatter-distributed, anti-stalking, geofence alerts, remote wipe",
-        ["location", "find-my", "anti-stalking", "geofence"],
-        "0.22.0",
-        ["polykit"],
-        ["share_location", "create_geofence", "remote_wipe", "locate_device"]
-    )
-
-    let r_health = register_package(publisher_id, "polyhealth", "0.1.0", "smart-circuit",
-        "HW-attested biometric tracking: PQ-encrypted health data, HIPAA compliance, provider sharing",
-        ["health", "biometrics", "hipaa", "wellness"],
-        "0.22.0",
-        ["polykit"],
-        ["record_biometric", "share_with_provider", "generate_report"]
-    )
-
-    let r_browse = register_package(publisher_id, "polybrowse", "0.1.0", "smart-circuit",
-        "PQ-secured browser: Servo engine, ad/tracker blocking, DRM-to-PQ content gateway",
-        ["browser", "privacy", "ad-blocking", "servo"],
-        "0.22.0",
-        ["polykit"],
-        ["navigate", "block_tracker", "bridge_drm_content"]
-    )
-
-    let r_maps = register_package(publisher_id, "polymaps", "0.1.0", "smart-circuit",
-        "Offline-first encrypted navigation: HW-attested GPS, anti-spoofing, turn-by-turn",
-        ["maps", "navigation", "gps", "offline-first"],
-        "0.22.0",
-        ["polykit"],
-        ["download_region", "navigate", "verify_location", "create_geofence"]
-    )
-
-    let batch_a = if r_files { r_wallet } else { false }
-    let batch_b = if r_camera { r_find } else { false }
-    let batch_c = if r_health { if r_browse { r_maps } else { false } } else { false }
-    if batch_a { if batch_b { batch_c } else { false } } else { false }
+    true
 }

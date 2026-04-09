@@ -1,0 +1,66 @@
+Å§Blobë≈e/// Spec: specs/verticals/PAYMENTS_SPEC.md
+/// Spark Offline Payment signing (#23)
+
+data SignedIntent : core v1 {
+    tx_id: PaymentId,
+    sender_id: WalletId,
+    sender_pubkey: PublicKey,
+    amount: u64,
+    asset: AssetCode,
+    nonce: Nonce,
+    timestamp: u64,
+}
+    sign {
+        algorithm mldsa87
+        key_field sender_pubkey
+        detached true
+    }
+
+data SignedAccept : core v1 {
+    tx_id: PaymentId,
+    recipient_id: WalletId,
+    recipient_pubkey: PublicKey,
+    accepted_amount: u64,
+    accepted_asset: AssetCode,
+    recipient_nonce: Nonce,
+    timestamp: u64,
+}
+    sign {
+        algorithm mldsa87
+        key_field recipient_pubkey
+        detached true
+    }
+
+data SignedTransaction : core v1 {
+    tx_id: PaymentId,
+    sender_id: WalletId,
+    recipient_id: WalletId,
+    amount: u64,
+    asset: AssetCode,
+    povc_witness: bytes(8),
+}
+    sign {
+        algorithm mldsa87
+        key_field sender_id
+        detached true
+    }
+    attest {
+        attested true
+        anchor_field tx_id
+        proof_system groth16
+        commitment_scheme pedersen
+    }
+
+data SignedReceipt : core v1 {
+    tx_id: PaymentId,
+    tx_hash: bytes(32),
+    recipient_id: WalletId,
+    proofs_verified: bool,
+    liveness_verified: bool,
+    povc_witness: bytes(8),
+}
+    sign {
+        algorithm mldsa87
+        key_field recipient_id
+        detached true
+    }

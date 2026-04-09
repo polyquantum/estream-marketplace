@@ -1,0 +1,66 @@
+¤Blob‘Å™/// Spec: specs/verticals/BRIDGE_SPEC.md
+/// Withdrawal Flow Circuit (Track H â€” Bridge Port)
+/// Processes L2 withdrawal requests â†’ L1 Solana disbursement
+
+type WithdrawalRequest = struct {
+    bridge_id: bytes(32),
+    withdrawal_id: u64,
+    account_id: bytes(32),
+    amount: u64,
+    solana_recipient: bytes(32),
+    l2_state_root: bytes(32),
+    l2_state_slot: u64,
+    proof_len: u32,
+    timestamp_ms: u64,
+}
+
+type WithdrawalRecord = struct {
+    withdrawal_id: u64,
+    status: u8,
+    solana_sig: bytes(64),
+    retries: u32,
+}
+
+state_machine withdrawal_flow {
+    initial WITHDRAWAL_PENDING
+    persistence wal
+    terminal [WITHDRAWAL_COMPLETED, WITHDRAWAL_FAILED]
+    ai_anomaly_detection true
+
+    WITHDRAWAL_PENDING -> WITHDRAWAL_PROCESSING when submit_started
+    WITHDRAWAL_PROCESSING -> WITHDRAWAL_COMPLETED when solana_confirmed
+    WITHDRAWAL_PROCESSING -> WITHDRAWAL_FAILED when submit_failed guard max_retries
+    WITHDRAWAL_FAILED -> WITHDRAWAL_PROCESSING when retry_triggered
+}
+
+// Validate withdrawal proof against L2 state root
+circuit validate_withdrawal(req: WithdrawalRequest, current_state_root: bytes(32)) -> bool
+    @status production
+    lex bridge/withdraw/validate
+    @precision D
+    @attested true
+    observe metrics: [bridge_id, withdrawal_id, amount, account_id]
+    invariant req.amount > 0
+{
+    req.amount > 0
+}
+
+// Process withdrawal: burn pq-tokens on L2, submit to Solana
+circuit process_withdrawal(req: WithdrawalRequest) -> WithdrawalRecord
+    @status production
+    lex bridge/withdraw/process
+    @precision D
+    @attested true
+    observe metrics: [bridge_id, withdrawal_id, amount, solana_recipient]
+{
+    WithdrawalRecord {
+        withdrawal_id: req.withdrawal_id,
+        status: 0,
+        solana_sig: req.solana_recipient,
+        retries: 0,
+    }
+}
+
+stream withdrawal_events: event<WithdrawalRequest>
+    @retention 7y
+    @consumers [governance, audit, compliance, streamsight]

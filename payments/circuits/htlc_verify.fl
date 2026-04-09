@@ -71,4 +71,4 @@ circuit check_dest_timelock(swap_id: bytes(32), current_time: u64, expiry: u64, 
 
 stream htlc_events: event<HtlcResult>
     @retention 7y
-    @consumers [audit, compliance, streamsight]
+    @consumers [audit, compliance, observe]

@@ -86,4 +86,4 @@ circuit revoke_widget_session(auth: WidgetAuth) -> bool
 
 stream widget_frames: event<WidgetFrame>
     @retention 30d
-    @consumers [streamsight, audit]
+    @consumers [observe, audit]

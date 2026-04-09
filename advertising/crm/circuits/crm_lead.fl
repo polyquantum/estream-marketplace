@@ -10,8 +10,8 @@
 // and source channel as inputs. The model suggests optimal partner matches
 // and retrains automatically when prediction drift is detected.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import crm_graph from "advertising/crm/circuits/crm_graph"
 
@@ -97,12 +97,12 @@ data LeadQualification : circuit v1 {
 
 stream crm_lead_events: event<LeadRecord>
     @retention 7y
-    @consumers [streamsight, audit, cortex, alerting, analytics]
+    @consumers [observe, audit, cortex, alerting, analytics]
     @classify lead_id: IDENTIFIER, user_id: IDENTIFIER, partner_id: IDENTIFIER, source: METADATA
 
 stream crm_lead_qualification_events: event<LeadQualification>
     @retention 365d
-    @consumers [streamsight, cortex, analytics]
+    @consumers [observe, cortex, analytics]
     @classify lead_id: IDENTIFIER, partner_match: IDENTIFIER
 
 // =============================================================================
@@ -143,8 +143,8 @@ circuit crm_create_lead(user_id: bytes(32), source: bytes(64), pk: bytes(1568)) 
     let kem = mlkem_encaps(pk)
     let sig = mldsa_sign(lead_id, user_id)
     let verified = mldsa_verify(lead_id, sig, user_id)
-    let anomaly = streamsight_anomaly(lead_id)
-    let baseline = streamsight_baseline("leads_created")
+    let anomaly = observe_anomaly(lead_id)
+    let baseline = observe_baseline("leads_created")
     let now = 0
 
     let edge = graph_add_edge(crm_graph, user_id, lead_id, "generated_lead")
@@ -191,8 +191,8 @@ circuit crm_qualify_lead(lead_id: bytes(32), score: u32, pk: bytes(1568)) -> Lea
     let is_contacted = current.state == 1
 
     let ai_score = li_infer(lead_id, current.source)
-    let anomaly = streamsight_anomaly(qualify_hash)
-    let baseline = streamsight_baseline("leads_qualified")
+    let anomaly = observe_anomaly(qualify_hash)
+    let baseline = observe_baseline("leads_qualified")
     let now = 0
 
     LeadRecord {
@@ -238,8 +238,8 @@ circuit crm_match_lead(lead_id: bytes(32), partner_id: bytes(32), pk: bytes(1568
     let is_qualified = current.state == 2
 
     let edge = graph_add_edge(crm_graph, lead_id, partner_id, "referred_to")
-    let anomaly = streamsight_anomaly(match_hash)
-    let baseline = streamsight_baseline("leads_matched")
+    let anomaly = observe_anomaly(match_hash)
+    let baseline = observe_baseline("leads_matched")
     let now = 0
 
     LeadRecord {
@@ -288,8 +288,8 @@ circuit crm_convert_lead(lead_id: bytes(32), pk: bytes(1568)) -> LeadRecord
     let is_engaged = current.state == 4
 
     let feedback = li_classify(lead_id, current.source)
-    let anomaly = streamsight_anomaly(convert_hash)
-    let baseline = streamsight_baseline("leads_converted")
+    let anomaly = observe_anomaly(convert_hash)
+    let baseline = observe_baseline("leads_converted")
     let now = 0
 
     LeadRecord {

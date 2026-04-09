@@ -12,8 +12,8 @@
 // search rankings and improvement suggestions from engagement metrics,
 // retraining on drift.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import sage_content from "advertising/sage/circuits/sage_content"
 
@@ -146,7 +146,7 @@ graph content_keyword_graph {
     storage csr { tier bram { capacity: 100000 } }
     @sign ml_dsa_87
     ai_feed content_keyword_analysis
-    @observe streamsight: [content_count, keyword_count, avg_ctr] threshold: {
+    @observe observe: [content_count, keyword_count, avg_ctr] threshold: {
         avg_ctr 0.9
         baseline_window 86400
     }
@@ -158,17 +158,17 @@ graph content_keyword_graph {
 
 stream tide_traffic_events: event<TrafficMetrics>
     @retention 365d
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify period_id: IDENTIFIER, page_views: METRIC, organic_pct: METRIC, conversion_rate_pct: METRIC
 
 stream tide_signal_events: event<GrowthSignal>
     @retention 90d
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify signal_id: IDENTIFIER, signal_type: METADATA, magnitude: METRIC, confidence: METRIC
 
 stream tide_content_events: event<ContentPerformance>
     @retention 365d
-    @consumers [streamsight, cortex, analytics]
+    @consumers [observe, cortex, analytics]
     @classify content_id: IDENTIFIER, keyword: METADATA, impressions: METRIC, ctr_pct: METRIC
 
 // =============================================================================
@@ -216,8 +216,8 @@ circuit tide_analyze_traffic(period_id: bytes(32), metrics: TrafficMetrics, pk: 
 
     let patterns = li_infer(period_id, metrics)
     let classification = li_classify(metrics, period_hash)
-    let anomaly = streamsight_anomaly(period_hash)
-    let baseline = streamsight_baseline("periods_analyzed")
+    let anomaly = observe_anomaly(period_hash)
+    let baseline = observe_baseline("periods_analyzed")
 
     [GrowthSignal {
         signal_id: sha3_256(period_hash),
@@ -257,8 +257,8 @@ circuit tide_rank_content(content_ids: list<bytes(32)>, pk: bytes(1568)) -> list
     let verified = mldsa_verify(batch_hash, sig, content_ids)
 
     let rankings = li_infer(content_ids, batch_hash)
-    let anomaly = streamsight_anomaly(batch_hash)
-    let baseline = streamsight_baseline("content_ranked")
+    let anomaly = observe_anomaly(batch_hash)
+    let baseline = observe_baseline("content_ranked")
 
     [ContentPerformance {
         content_id: sha3_256(batch_hash),
@@ -298,8 +298,8 @@ circuit tide_forecast_growth(current_metrics: TrafficMetrics, pk: bytes(1568)) -
     let verified = mldsa_verify(metrics_hash, sig, current_metrics.period_id)
 
     let forecast = li_infer(current_metrics, metrics_hash)
-    let anomaly = streamsight_anomaly(metrics_hash)
-    let baseline = streamsight_baseline("forecasts_generated")
+    let anomaly = observe_anomaly(metrics_hash)
+    let baseline = observe_baseline("forecasts_generated")
 
     TrafficMetrics {
         period_id: sha3_256(metrics_hash),
@@ -318,7 +318,7 @@ circuit tide_forecast_growth(current_metrics: TrafficMetrics, pk: bytes(1568)) -
 // Circuit: Detect Anomaly
 // =============================================================================
 //
-// StreamSight-powered anomaly detection on traffic metrics. Compares current
+// Observe-powered anomaly detection on traffic metrics. Compares current
 // metrics against baseline to detect significant deviations. Returns a
 // GrowthSignal if an anomaly is detected, or none if traffic is normal.
 
@@ -339,8 +339,8 @@ circuit tide_detect_anomaly(current_metrics: TrafficMetrics, pk: bytes(1568)) ->
     let sig = mldsa_sign(metrics_hash, current_metrics.period_id)
     let verified = mldsa_verify(metrics_hash, sig, current_metrics.period_id)
 
-    let anomaly = streamsight_anomaly(metrics_hash)
-    let baseline = streamsight_baseline("page_views")
+    let anomaly = observe_anomaly(metrics_hash)
+    let baseline = observe_baseline("page_views")
     let deviation = li_classify(current_metrics, metrics_hash)
 
     if anomaly {

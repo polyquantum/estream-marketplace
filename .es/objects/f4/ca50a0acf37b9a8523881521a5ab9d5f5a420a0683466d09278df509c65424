@@ -1,0 +1,13 @@
+Å§Blobë≈2domain polyquantum.radio {
+  /// 5G/6G spectrum management, tactical mesh networking, VRF frequency hopping, PQ-AKA authentication
+
+  types types from "circuits/types.fld"
+
+  module vrf_freq       from "circuits/vrf_freq.fl"
+  module tactical_mesh  from "circuits/tactical_mesh.fl"
+  module spectrum_mgmt  from "circuits/spectrum_mgmt.fl"
+  module signal_anomaly from "circuits/signal_anomaly.fl"
+  module ran_protocol   from "circuits/ran_protocol.fl"
+  module radio_scatter  from "circuits/radio_scatter.fl"
+  module pq_aka         from "circuits/pq_aka.fl"
+}

@@ -11,7 +11,7 @@
 // Voice-specific concerns (latency tracking, session FSM, audio hashing) live
 // here.
 //
-// StreamSight monitors latency_to_first_word_ms as a baseline metric — voice
+// Observe monitors latency_to_first_word_ms as a baseline metric — voice
 // UX degrades sharply above 500ms. Adaptive-level observation on all latency
 // metrics enables automatic anomaly detection on regression.
 
@@ -103,17 +103,17 @@ data VoiceTransition : circuit v1 {
 
 stream sage_voice_events: event<VoiceSession>
     @retention 30d
-    @consumers [streamsight, analytics, alerting]
+    @consumers [observe, analytics, alerting]
     @classify session_id: IDENTIFIER, user_id: IDENTIFIER, call_id: IDENTIFIER, state: METADATA
 
 stream sage_voice_metrics_events: event<VoiceMetrics>
     @retention 90d
-    @consumers [streamsight, analytics, ops_dashboard]
+    @consumers [observe, analytics, ops_dashboard]
     @classify latency_to_first_word_ms: METRIC, total_latency_ms: METRIC
 
 stream sage_voice_transition_events: event<VoiceTransition>
     @retention 30d
-    @consumers [streamsight, analytics]
+    @consumers [observe, analytics]
     @classify session_id: IDENTIFIER, from_state: METADATA, to_state: METADATA
 
 // =============================================================================
@@ -163,8 +163,8 @@ circuit sage_voice_process(session_id: bytes(32), audio_hash: bytes(32), pk: byt
 
     let intent = li_classify(transcript, session_id)
     let response = li_infer(session_id, transcript)
-    let anomaly = streamsight_anomaly(process_hash)
-    let baseline = streamsight_baseline("voice_latency_ms")
+    let anomaly = observe_anomaly(process_hash)
+    let baseline = observe_baseline("voice_latency_ms")
 
     AgentResponse {
         response_text: response,
@@ -180,7 +180,7 @@ circuit sage_voice_process(session_id: bytes(32), audio_hash: bytes(32), pk: byt
 // =============================================================================
 //
 // Reports voice pipeline health metrics. Aggregates active session count and
-// total call volume into VoiceMetrics with latency baselines from StreamSight.
+// total call volume into VoiceMetrics with latency baselines from Observe.
 // Used by ops dashboards for real-time pipeline monitoring.
 
 circuit sage_voice_health(active_sessions: u64, total_calls: u64, pk: bytes(1568)) -> VoiceMetrics
@@ -196,8 +196,8 @@ circuit sage_voice_health(active_sessions: u64, total_calls: u64, pk: bytes(1568
     let sig = mldsa_sign(health_hash, active_sessions)
     let verified = mldsa_verify(health_hash, sig, active_sessions)
 
-    let anomaly = streamsight_anomaly(health_hash)
-    let latency_baseline = streamsight_baseline("latency_to_first_word_ms")
+    let anomaly = observe_anomaly(health_hash)
+    let latency_baseline = observe_baseline("latency_to_first_word_ms")
 
     VoiceMetrics {
         latency_to_first_word_ms: latency_baseline,

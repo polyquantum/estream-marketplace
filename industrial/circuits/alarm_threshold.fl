@@ -74,4 +74,4 @@ circuit check_low_alarm(current_value: u64, low_threshold: u64, deadband: u64, c
 
 stream alarm_events: event<AlarmEvent>
     @retention 1y
-    @consumers [streamsight, alerting, analytics]
+    @consumers [observe, alerting, analytics]

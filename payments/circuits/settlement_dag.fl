@@ -194,7 +194,7 @@ circuit reconcile(dag_id: bytes(32), settlement_id: bytes(16)) -> bool
 
 stream settlement_events: event<SettlementRecord>
     @retention 7y
-    @consumers [governance, audit, compliance, analytics, streamsight]
+    @consumers [governance, audit, compliance, analytics, observe]
 
 stream escrow_events: event<FlowEdge>
     @retention 7y

@@ -1,0 +1,157 @@
+��Blob��@/// Spec: specs/verticals/INDUSTRIAL_SPEC.md
+/// Industrial Data Residency — ThermogenZero TEG fleet enforcement
+///
+/// Three-tier lex: node → region → fleet with data_residency at region level.
+/// Raw sensor data stays at the node tier; only aggregated health metrics
+/// propagate upward through the lex hierarchy.
+///
+///   esn/industrial/energy/org/thermogenzero               ← Fleet (global view)
+///     └── sub_lex region fan_in                            ← Regional aggregation
+///         ├── region {data_residency us_south}             ← US South nodes
+///         │   └── sub_lex node fan_in
+///         ├── region {data_residency eu_west}              ← EU West nodes (GDPR)
+///         │   └── sub_lex node fan_in
+///         └── region {data_residency ap_east}              ← AP East nodes
+///             └── sub_lex node fan_in
+
+type SensorFrame = struct {
+    node_id: u32,
+    register_addr: u32,
+    value: u64,
+    quality: u8,
+    timestamp: u64,
+}
+
+type NodeHealth = struct {
+    node_id: u32,
+    power_output_w: u64,
+    efficiency_pct: u64,
+    healthy: bool,
+}
+
+type RegionSummary = struct {
+    region_power_mw: u64,
+    nodes_active: u64,
+    anomaly_hash: bytes(32),
+    compliant: bool,
+}
+
+type FleetSummary = struct {
+    total_power_mw: u64,
+    regions_active: u64,
+    fleet_hash: bytes(32),
+    all_compliant: bool,
+}
+
+type MovementRecord = struct {
+    movement_hash: bytes(32),
+    source_tier: bytes(32),
+    dest_tier: bytes(32),
+    allowed: bool,
+}
+
+// --- Tier 1: NODE — sensor ingestion (data stays at edge) ---
+
+// Validate raw sensor data stays within the node's residency boundary.
+// Registers and values are checked before any fan-in to region level.
+circuit check_sensor_residency(frame: SensorFrame, region_policy: bytes(32)) -> NodeHealth
+    @status production
+    lex industrial/energy/org/thermogenzero/region/node
+    @precision C
+    observe metrics: [sensor_checks, residency_pass, residency_block]
+    invariant "register_valid" { register_addr > 0 && register_addr < 65536 }
+    invariant "value_bounded" { value >= 0 }
+{
+    let node_hash = sha3_256(frame.node_id)
+    let policy_hash = sha3_256(region_policy)
+    NodeHealth {
+        node_id: frame.node_id,
+        power_output_w: frame.value,
+        efficiency_pct: 0,
+        healthy: true,
+    }
+}
+
+// --- Tier 2: REGION — aggregated node metrics (data stays in region) ---
+
+// Enforce fleet boundary at region level: aggregated metrics from nodes
+// cannot leave the region without passing the residency check.
+circuit enforce_fleet_boundary(node_summary: bytes(256), region_pk: bytes(1568)) -> RegionSummary
+    @status production
+    lex industrial/energy/org/thermogenzero/region {
+        governance hierarchical
+        audit_trail true
+        data_residency us_south
+        compliance [nerc_cip]
+
+        sub_lex node fan_in
+    }
+    @precision B
+    observe metrics: [boundary_enforcements, region_power_mw, nodes_fanned_in]
+    invariant "power_non_negative" { region_power_mw >= 0 }
+{
+    let summary_hash = sha3_256(node_summary)
+    let kem = mlkem_encaps(region_pk)
+    let anomaly = streamsight_anomaly(summary_hash)
+    RegionSummary {
+        region_power_mw: 0,
+        nodes_active: 0,
+        anomaly_hash: anomaly,
+        compliant: true,
+    }
+}
+
+// --- Tier 3: FLEET — global view (only regional summaries) ---
+
+// Audit data movement between tiers, ensuring no raw sensor data
+// escapes the node boundary and no regional data crosses regions.
+circuit audit_data_movement(source_tier: bytes(32), dest_tier: bytes(32), data_hash: bytes(32)) -> MovementRecord
+    @status production
+    lex industrial/energy/org/thermogenzero {
+        governance hierarchical
+        audit_trail true
+
+        sub_lex region fan_in
+    }
+    @precision A
+    observe metrics: [movement_audits, tier_crossings, violations_detected]
+    invariant "source_tier_valid" { source_tier != 0 }
+    invariant "dest_tier_valid" { dest_tier != 0 }
+{
+    let movement_hash = sha3_256(data_hash)
+    let source_hash = sha3_256(source_tier)
+    let dest_hash = sha3_256(dest_tier)
+    let same_tier = equal(source_hash, dest_hash)
+    MovementRecord {
+        movement_hash: movement_hash,
+        source_tier: source_hash,
+        dest_tier: dest_hash,
+        allowed: same_tier,
+    }
+}
+
+// Fleet-wide residency summary: consumes only regional summaries,
+// never sees raw sensor or per-node data.
+circuit fleet_residency_summary(lookup: bytes(256), fleet_pk: bytes(1568)) -> FleetSummary
+    @status production
+    lex industrial/energy/org/thermogenzero {
+        governance hierarchical
+        audit_trail true
+
+        sub_lex region fan_in
+    }
+    @precision B
+    @observe true
+    observe metrics: [fleet_queries, total_power_mw, fleet_compliance_checks]
+    invariant "power_non_negative" { total_power_mw >= 0 }
+{
+    let query_hash = sha3_256(lookup)
+    let kem = mlkem_encaps(fleet_pk)
+    let fleet_hash = streamsight_anomaly(query_hash)
+    FleetSummary {
+        total_power_mw: 0,
+        regions_active: 0,
+        fleet_hash: fleet_hash,
+        all_compliant: true,
+    }
+}

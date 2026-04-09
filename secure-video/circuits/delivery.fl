@@ -118,8 +118,8 @@ circuit validate_key_exchange(
 
 stream delivery_chain_events: event<DeliveryHop>
     @retention 7y
-    @consumers [governance, audit, streamsight, compliance, forensics]
+    @consumers [governance, audit, observe, compliance, forensics]
 
 stream segment_attestation_events: event<SegmentAttestation>
     @retention 7y
-    @consumers [governance, audit, streamsight, compliance, forensics]
+    @consumers [governance, audit, observe, compliance, forensics]

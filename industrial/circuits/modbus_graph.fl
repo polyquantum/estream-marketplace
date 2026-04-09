@@ -66,4 +66,4 @@ circuit poll_register_group(map_id: bytes(32), group_start: u16, group_size: u16
 
 stream modbus_register_events: event<ModbusRegister>
     @retention 90d
-    @consumers [streamsight, analytics, alerting]
+    @consumers [observe, analytics, alerting]

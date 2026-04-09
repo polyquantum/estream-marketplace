@@ -1,0 +1,5 @@
+¤Blob‘Ä‘domain polyquantum.widgets {
+  /// UI interaction components: impact stream analytics
+
+  module impact_stream from "circuits/impact_stream.fl"
+}

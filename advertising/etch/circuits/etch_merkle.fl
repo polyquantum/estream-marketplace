@@ -10,8 +10,8 @@
 // with ML-DSA-87 signed nodes. Chain verification walks the DAG from head
 // to root, validating every parent hash along the way.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 // =============================================================================
 // Data Declarations — Chain Node & Head Types
@@ -84,12 +84,12 @@ dag impression_chain {
 
 stream etch_chain_events: event<ImpressionChainNode>
     @retention 365d
-    @consumers [streamsight, audit, advertiser_dashboard]
+    @consumers [observe, audit, advertiser_dashboard]
     @classify node_hash: IDENTIFIER, impression_id: IDENTIFIER, parent_hash: IDENTIFIER, campaign_id: IDENTIFIER, depth: METRIC, timestamp_ns: METRIC
 
 stream etch_chain_head_events: event<ChainHead>
     @retention forever
-    @consumers [streamsight, audit, advertiser_dashboard]
+    @consumers [observe, audit, advertiser_dashboard]
     @classify campaign_id: IDENTIFIER, head_hash: IDENTIFIER, depth: METRIC, total_impressions: METRIC
 
 // =============================================================================
@@ -137,8 +137,8 @@ circuit etch_append_chain(impression_id: bytes(32), campaign_id: bytes(32), pk: 
     let verified = mldsa_verify(node_hash, sig, impression_id)
 
     let edge = graph_add_edge(impression_chain, node_hash, parent_hash, "parent")
-    let anomaly = streamsight_anomaly(node_hash)
-    let baseline = streamsight_baseline("nodes_appended")
+    let anomaly = observe_anomaly(node_hash)
+    let baseline = observe_baseline("nodes_appended")
 
     ImpressionChainNode {
         node_hash: node_hash,
@@ -178,8 +178,8 @@ circuit etch_verify_chain(head_hash: bytes(32), depth: u64, pk: bytes(1568)) -> 
     let verified = mldsa_verify(verify_hash, sig, head_hash)
 
     let chain = graph_traverse(impression_chain, head_hash, "parent", depth)
-    let anomaly = streamsight_anomaly(verify_hash)
-    let baseline = streamsight_baseline("chains_verified")
+    let anomaly = observe_anomaly(verify_hash)
+    let baseline = observe_baseline("chains_verified")
 
     verified
 }
@@ -200,8 +200,8 @@ circuit etch_chain_head(campaign_id: bytes(32)) -> ChainHead
     @monitor "head_miss_rate" { head_misses / head_lookups < 0.10 }
 {
     let lookup_hash = sha3_256(campaign_id)
-    let anomaly = streamsight_anomaly(lookup_hash)
-    let baseline = streamsight_baseline("head_lookups")
+    let anomaly = observe_anomaly(lookup_hash)
+    let baseline = observe_baseline("head_lookups")
 
     let head = kv_get(campaign_id)
 

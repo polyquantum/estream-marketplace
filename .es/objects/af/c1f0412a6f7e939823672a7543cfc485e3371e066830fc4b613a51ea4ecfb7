@@ -1,0 +1,142 @@
+¤Blob‘Å/// Spec: specs/verticals/SVD_SPEC.md
+/// eStream SVD â€” Lex-embedded forensic watermark circuits
+/// The watermark is encoded into codec decisions (QP, MV, filter params),
+/// not pixel values. Deterministically derived from viewer's PRIME-bound trace.
+/// Survives transcoding, screen capture, and analog hole because
+/// the mark is distributed across thousands of encoding decisions.
+
+circuit generate_trace_seed(
+    status production
+    viewer_id: bytes(32),
+    session_id: bytes(32),
+    master_key_hash: bytes(32)
+) -> bytes(32)
+    lex platform/svd/watermark
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    viewer_id
+}
+
+circuit compute_embedding_decision(
+    status production
+    trace_seed: bytes(32),
+    frame_index: u32,
+    block_index: u32,
+    original_value: u32,
+    max_delta: u32
+) -> u32
+    lex platform/svd/watermark
+    @precision C
+    @attested true
+{
+    let sample_embedding = concat(trace_seed, frame_index, block_index)
+    let reference_db = store("watermark_db", original_value)
+    let decision = forensic_embed_decide(sample_embedding, reference_db)
+    decision
+}
+
+circuit select_embedding_points_per_frame(
+    status production
+    frame_index: u32,
+    total_blocks: u32,
+    density: u8,
+    trace_seed_prefix: bytes(32)
+) -> u32
+    lex platform/svd/watermark
+    @precision C
+    @attested true
+{
+    let target_count = 1
+    if density == 0 { target_count = 0 }
+    if density == 0 && (frame_index % 100 == 0) { target_count = 1 }
+    if density == 1 && (frame_index % 10 == 0) { target_count = 1 }
+    if density == 2 { target_count = 1 }
+    if density == 3 { target_count = total_blocks / 100 }
+    if target_count > total_blocks { target_count = total_blocks }
+    target_count
+}
+
+circuit validate_embedding_quality(
+    status production
+    original_value: u32,
+    embedded_value: u32,
+    max_delta: u32
+) -> bool
+    lex platform/svd/watermark
+    @precision C
+    @attested true
+{
+    let diff = 0
+    if embedded_value > original_value {
+        diff = embedded_value - original_value
+    } else {
+        diff = original_value - embedded_value
+    }
+    diff <= max_delta
+}
+
+circuit codec_max_delta(codec: u8, point_type: u8) -> u32
+    @status production
+    lex platform/svd/watermark
+    @precision C
+    @attested true
+{
+    let delta = 2
+    if point_type == 0 || point_type == 5 { delta = 3 }
+    if point_type == 1 || point_type == 8 { delta = 1 }
+    if point_type == 3 { delta = 1 }
+    if point_type == 13 { delta = 4 }
+    if point_type == 14 { delta = 2 }
+    if point_type == 15 { delta = 1 }
+    delta
+}
+
+circuit extraction_confidence(
+    status production
+    points_found: u32,
+    points_expected: u32,
+    match_count: u32
+) -> u8
+    lex platform/svd/watermark
+    @precision C
+    @attested true
+{
+    if points_found == 0 { return 0 }
+    let match_pct = (match_count * 100) / points_found
+    let coverage_pct = (points_found * 100) / points_expected
+    let confidence = (match_pct * coverage_pct) / 100
+    if confidence > 100 { confidence = 100 }
+    confidence
+}
+
+circuit minimum_frames_for_attribution(density: u8) -> u32
+    @status production
+    lex platform/svd/watermark
+    @precision C
+    @attested true
+{
+    let min_frames = 300
+    if density == 0 { min_frames = 10000 }
+    if density == 1 { min_frames = 1000 }
+    if density == 2 { min_frames = 300 }
+    if density == 3 { min_frames = 30 }
+    min_frames
+}
+
+circuit collusion_resistance_threshold(viewer_count: u32, embedding_density: u8) -> u32
+    @status production
+    lex platform/svd/watermark
+    @precision C
+    @attested true
+{
+    let base = 8
+    if embedding_density >= 2 { base = 16 }
+    if embedding_density >= 3 { base = 32 }
+    base
+}
+
+stream watermark_embedding_events: event<EmbeddingPoint>
+    @retention 7y
+    @consumers [governance, audit, streamsight, compliance, forensics]

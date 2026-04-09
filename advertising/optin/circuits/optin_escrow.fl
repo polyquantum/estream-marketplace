@@ -13,8 +13,8 @@
 // preventing over-commitment. Every reservation is PoVC-attested for
 // tamper evidence.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import optin_engage from "advertising/optin/circuits/optin_engage"
 
@@ -111,12 +111,12 @@ data Reservation : app v1 {
 
 stream optin_escrow_events: event<ReservationAccount>
     @retention 7y
-    @consumers [streamsight, audit, cortex, analytics, alerting]
+    @consumers [observe, audit, cortex, analytics, alerting]
     @classify account_id: IDENTIFIER, partner_id: IDENTIFIER, deposited_amount: METRIC, reserved_amount: METRIC
 
 stream optin_reservation_events: event<Reservation>
     @retention 7y
-    @consumers [streamsight, audit, cortex, analytics]
+    @consumers [observe, audit, cortex, analytics]
     @classify reservation_id: IDENTIFIER, account_id: IDENTIFIER, code_id: IDENTIFIER, amount: METRIC, status: METADATA
 
 // =============================================================================
@@ -157,8 +157,8 @@ circuit optin_deposit_escrow(partner_id: bytes(32), amount: u64, currency: bytes
     let sig = mldsa_sign(account_id, partner_id)
     let verified = mldsa_verify(account_id, sig, pk)
 
-    let anomaly = streamsight_anomaly(account_id)
-    let baseline = streamsight_baseline("deposits_made")
+    let anomaly = observe_anomaly(account_id)
+    let baseline = observe_baseline("deposits_made")
 
     ReservationAccount {
         account_id: account_id,
@@ -206,8 +206,8 @@ circuit optin_reserve_against(account_id: bytes(32), code_id: bytes(32), amount:
     let account = kv_get(account_id)
     let available = account.deposited_amount - account.reserved_amount - account.released_amount - account.expired_amount
 
-    let anomaly = streamsight_anomaly(reservation_id)
-    let baseline = streamsight_baseline("reservations_created")
+    let anomaly = observe_anomaly(reservation_id)
+    let baseline = observe_baseline("reservations_created")
 
     Reservation {
         reservation_id: reservation_id,
@@ -252,8 +252,8 @@ circuit optin_release_on_completion(reservation_id: bytes(32), completion_proof:
     let reservation = kv_get(reservation_id)
     let proof_valid = groth16_verify(completion_proof, release_hash)
 
-    let anomaly = streamsight_anomaly(release_hash)
-    let baseline = streamsight_baseline("reservations_released")
+    let anomaly = observe_anomaly(release_hash)
+    let baseline = observe_baseline("reservations_released")
 
     Reservation {
         reservation_id: reservation.reservation_id,
@@ -294,8 +294,8 @@ circuit optin_expire_reservation(reservation_id: bytes(32), pk: bytes(1568)) -> 
 
     let reservation = kv_get(reservation_id)
 
-    let anomaly = streamsight_anomaly(expire_hash)
-    let baseline = streamsight_baseline("reservations_expired")
+    let anomaly = observe_anomaly(expire_hash)
+    let baseline = observe_baseline("reservations_expired")
 
     Reservation {
         reservation_id: reservation.reservation_id,

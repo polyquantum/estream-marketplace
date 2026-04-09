@@ -13,8 +13,8 @@
 // side-channel leakage of the consent decision. Revocation is
 // immediate but does not delete the immutable consent proof.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import thread_chain from "advertising/thread/circuits/thread_chain"
 import optin_profile from "advertising/optin/circuits/optin_profile"
@@ -129,12 +129,12 @@ data ConsentProof : app v1 {
 
 stream optin_engagement_events: event<EngagementCode>
     @retention 7y
-    @consumers [streamsight, audit, cortex, analytics, alerting]
+    @consumers [observe, audit, cortex, analytics, alerting]
     @classify code_id: IDENTIFIER, partner_id: IDENTIFIER, user_id: IDENTIFIER, status: METADATA
 
 stream optin_consent_proofs: event<ConsentProof>
     @retention 7y
-    @consumers [streamsight, audit, cortex, analytics]
+    @consumers [observe, audit, cortex, analytics]
     @classify proof_id: IDENTIFIER, code_id: IDENTIFIER, consent_hash: IDENTIFIER
 
 // =============================================================================
@@ -177,8 +177,8 @@ circuit optin_generate_code(partner_id: bytes(32), user_id: bytes(32), offer_has
     let sig = mldsa_sign(code_id, partner_id)
     let verified = mldsa_verify(code_id, sig, pk)
 
-    let anomaly = streamsight_anomaly(code_id)
-    let baseline = streamsight_baseline("codes_generated")
+    let anomaly = observe_anomaly(code_id)
+    let baseline = observe_baseline("codes_generated")
 
     EngagementCode {
         code_id: code_id,
@@ -234,8 +234,8 @@ circuit optin_activate_code(code_id: bytes(32), user_sk: bytes(4896), user_pk: b
     let code = kv_get(code_id)
     let hop_id = sha3_256(code.partner_id)
 
-    let anomaly = streamsight_anomaly(proof_id)
-    let baseline = streamsight_baseline("codes_activated")
+    let anomaly = observe_anomaly(proof_id)
+    let baseline = observe_baseline("codes_activated")
 
     ConsentProof {
         proof_id: proof_id,
@@ -280,8 +280,8 @@ circuit optin_revoke_code(code_id: bytes(32), user_sk: bytes(4896), pk: bytes(15
 
     let code = kv_get(code_id)
 
-    let anomaly = streamsight_anomaly(revoke_hash)
-    let baseline = streamsight_baseline("codes_revoked")
+    let anomaly = observe_anomaly(revoke_hash)
+    let baseline = observe_baseline("codes_revoked")
 
     EngagementCode {
         code_id: code.code_id,

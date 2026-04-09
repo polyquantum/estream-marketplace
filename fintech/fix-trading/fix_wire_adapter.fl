@@ -11,9 +11,9 @@
 //   data (lex stream) → data_to_fix → fix_session → TCP bytes
 //
 // Data types use `data` declarations with verbs (encode, observe, govern, attest)
-// for wire layout, inline StreamSight hooks, privacy masks, and PoVC attestation.
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` — not as a standalone component.
+// for wire layout, inline Observe hooks, privacy masks, and PoVC attestation.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` — not as a standalone component.
 //
 // The adapter implements the WireAdapter trait via SmartCircuit compilation.
 // Same circuits compile to CPU (Rust/WASM) or FPGA (Verilog) via dual-target codegen.
@@ -132,7 +132,7 @@ circuit fix_parse(raw: bytes(8192), raw_length: u32) -> FixParsedMessage
     let sending_time = extract_fix_timestamp(raw, 52, raw_length)
     let field_count = count_fix_fields(raw, raw_length)
     let computed_checksum = compute_fix_checksum(raw, raw_length)
-    let anomaly = streamsight_anomaly(msg_hash)
+    let anomaly = observe_anomaly(msg_hash)
     FixParsedMessage {
         msg_type: msg_type,
         sender_comp_id: sender,
@@ -180,8 +180,8 @@ circuit fix_session(msg: FixParsedMessage, state: FixSessionState, pk: bytes(156
     let seq_valid = msg.msg_seq_num == state.next_recv_seq
     let new_recv_seq = state.next_recv_seq + 1
     let now = msg.sending_time
-    let gap_anomaly = streamsight_anomaly(msg_type_hash)
-    let baseline = streamsight_baseline("seq_gaps_detected")
+    let gap_anomaly = observe_anomaly(msg_type_hash)
+    let baseline = observe_baseline("seq_gaps_detected")
 
     FixSessionState {
         sender_comp_id: state.sender_comp_id,

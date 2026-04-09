@@ -92,7 +92,7 @@ circuit enforce_fleet_boundary(node_summary: bytes(256), region_pk: bytes(1568))
 {
     let summary_hash = sha3_256(node_summary)
     let kem = mlkem_encaps(region_pk)
-    let anomaly = streamsight_anomaly(summary_hash)
+    let anomaly = observe_anomaly(summary_hash)
     RegionSummary {
         region_power_mw: 0,
         nodes_active: 0,
@@ -147,7 +147,7 @@ circuit fleet_residency_summary(lookup: bytes(256), fleet_pk: bytes(1568)) -> Fl
 {
     let query_hash = sha3_256(lookup)
     let kem = mlkem_encaps(fleet_pk)
-    let fleet_hash = streamsight_anomaly(query_hash)
+    let fleet_hash = observe_anomaly(query_hash)
     FleetSummary {
         total_power_mw: 0,
         regions_active: 0,

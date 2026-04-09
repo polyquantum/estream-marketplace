@@ -75,4 +75,4 @@ circuit token_balance(account_id: bytes(32), token_mint: bytes(32)) -> u64
 
 stream mint_burn_events: event<MintBurnResult>
     @retention 7y
-    @consumers [governance, audit, compliance, streamsight]
+    @consumers [governance, audit, compliance, observe]

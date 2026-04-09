@@ -11,8 +11,8 @@
 // properties against the session's provenance chain, including both
 // individual property validity and overall chain integrity.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import thread_verify_chain from "advertising/thread/circuits/thread_chain"
 import thread_get_chain from "advertising/thread/circuits/thread_chain"
@@ -67,12 +67,12 @@ data PathVerification : circuit v1 {
 
 stream thread_proof_events: event<PathProof>
     @retention 365d
-    @consumers [streamsight, audit, analytics]
+    @consumers [observe, audit, analytics]
     @classify proof_id: IDENTIFIER, session_id: IDENTIFIER, path_property: METADATA, verified: METADATA
 
 stream thread_verification_events: event<PathVerification>
     @retention 365d
-    @consumers [streamsight, audit, analytics, alerting]
+    @consumers [observe, audit, analytics, alerting]
     @classify session_id: IDENTIFIER, all_valid: METADATA, chain_intact: METADATA
 
 // =============================================================================
@@ -119,8 +119,8 @@ circuit thread_prove_path(session_id: bytes(32), property: enum { ReachedConvers
     let proof_input = sha3_256(proof_id)
     let proof_bytes = sha3_256(proof_input)
 
-    let anomaly = streamsight_anomaly(proof_id)
-    let baseline = streamsight_baseline("proofs_generated")
+    let anomaly = observe_anomaly(proof_id)
+    let baseline = observe_baseline("proofs_generated")
 
     PathProof {
         proof_id: proof_id,
@@ -164,8 +164,8 @@ circuit thread_verify_path(session_id: bytes(32), proof: PathProof, pk: bytes(15
 
     let chain_intact = thread_verify_chain(session_id, pk)
 
-    let anomaly = streamsight_anomaly(verify_hash)
-    let baseline = streamsight_baseline("proofs_verified")
+    let anomaly = observe_anomaly(verify_hash)
+    let baseline = observe_baseline("proofs_verified")
 
     PathVerification {
         session_id: session_id,
@@ -217,8 +217,8 @@ circuit thread_prove_attribution(session_id: bytes(32), pk: bytes(1568)) -> Path
     let proof_input = sha3_256(proof_id)
     let proof_bytes = sha3_256(proof_input)
 
-    let anomaly = streamsight_anomaly(proof_id)
-    let baseline = streamsight_baseline("attributions_proved")
+    let anomaly = observe_anomaly(proof_id)
+    let baseline = observe_baseline("attributions_proved")
 
     PathProof {
         proof_id: proof_id,

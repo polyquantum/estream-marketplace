@@ -1,0 +1,94 @@
+¤Blob‘Å
+¥/// Spec: specs/verticals/PAYMENTS_SPEC.md
+/// Corridor Health Circuit (Track H â€” Cross-Border Port)
+/// Corridor capacity, status checks, and health monitoring
+/// @rust_only â€” circuit logic lives in Rust; .fl defines the contract only
+
+type CorridorConfig = struct {
+    corridor_id: bytes(16),
+    source_currency: bytes(4),
+    dest_currency: bytes(4),
+    min_amount: u64,
+    max_amount: u64,
+    daily_capacity: u64,
+    fee_bps: u32,
+    active_flag: bool,
+}
+
+type CorridorHealthStatus = struct {
+    corridor_id: bytes(16),
+    status_code: u8,
+    capacity_used: u64,
+    capacity_remaining: u64,
+    avg_settlement_ms: u64,
+    success_rate_pct: u8,
+    pending_count: u32,
+    last_check_ms: u64,
+}
+
+// Check if a corridor can process a transaction of given amount
+circuit check_corridor_capacity(health: CorridorHealthStatus, cfg: CorridorConfig, amount: u64) -> bool
+    @status production
+    lex crossborder/corridor/check
+    @precision C
+    observe metrics: [corridor_id, amount, capacity_remaining, status_code]
+    invariant amount >= cfg.min_amount
+{
+    cfg.active_flag
+}
+
+// Reserve capacity for a pending transaction
+circuit reserve_corridor_capacity(corridor_id: bytes(16), amount: u64, current_remaining: u64) -> CorridorHealthStatus
+    @status production
+    lex crossborder/corridor/reserve
+    @precision C
+    @attested true
+    observe metrics: [corridor_id, amount]
+    invariant amount <= current_remaining
+{
+    CorridorHealthStatus {
+        corridor_id: corridor_id,
+        status_code: 0,
+        capacity_used: amount,
+        capacity_remaining: current_remaining - amount,
+        avg_settlement_ms: 0,
+        success_rate_pct: 100,
+        pending_count: 1,
+        last_check_ms: 0,
+    }
+}
+
+// Release capacity after failure or refund
+circuit release_corridor_capacity(corridor_id: bytes(16), amount: u64) -> bool
+    @status production
+    lex crossborder/corridor/release
+    @precision C
+    @attested true
+    observe metrics: [corridor_id, amount]
+{
+    true
+}
+
+// Reset daily capacity for all corridors (midnight UTC)
+circuit reset_daily_capacity(corridor_id: bytes(16), daily_capacity: u64) -> CorridorHealthStatus
+    @status production
+    lex crossborder/corridor/reset
+    @precision C
+    @attested true
+    observe metrics: [corridor_id, daily_capacity]
+{
+    CorridorHealthStatus {
+        corridor_id: corridor_id,
+        status_code: 0,
+        capacity_used: 0,
+        capacity_remaining: daily_capacity,
+        avg_settlement_ms: 0,
+        success_rate_pct: 100,
+        pending_count: 0,
+        last_check_ms: 0,
+    }
+}
+
+stream corridor_health_events: event<CorridorHealthStatus>
+    @retention 90d
+    @consumers [analytics, alerting, streamsight]

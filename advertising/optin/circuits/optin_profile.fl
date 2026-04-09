@@ -12,8 +12,8 @@
 // dimension weights from engagement completion rates and flags anomalous
 // score changes (bot detection, score manipulation).
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import crm_graph from "advertising/crm/circuits/crm_graph"
 
@@ -106,12 +106,12 @@ data ScoreEvent : app v1 {
 
 stream optin_score_events: event<ScoreEvent>
     @retention 365d
-    @consumers [streamsight, audit, cortex, analytics]
+    @consumers [observe, audit, cortex, analytics]
     @classify event_id: IDENTIFIER, user_id: IDENTIFIER, event_type: METADATA, points: METRIC, timestamp_ns: METRIC
 
 stream optin_activity_scores: event<ActivityScore>
     @retention 365d
-    @consumers [streamsight, audit, cortex, analytics]
+    @consumers [observe, audit, cortex, analytics]
     @classify user_id: IDENTIFIER, composite_score: METRIC, authentication_score: METRIC, engagement_score: METRIC, sharing_score: METRIC
 
 // =============================================================================
@@ -160,8 +160,8 @@ circuit optin_compute_score(user_id: bytes(32), pk: bytes(1568)) -> ActivityScor
 
     let edge = graph_add_edge(crm_graph, user_id, score_id, "activity_score")
 
-    let anomaly = streamsight_anomaly(score_id)
-    let baseline = streamsight_baseline("scores_computed")
+    let anomaly = observe_anomaly(score_id)
+    let baseline = observe_baseline("scores_computed")
 
     ActivityScore {
         user_id: user_id,
@@ -203,8 +203,8 @@ circuit optin_record_event(user_id: bytes(32), event_type: enum { ApiVerificatio
     let sig = mldsa_sign(event_id, user_id)
     let verified = mldsa_verify(event_id, sig, pk)
 
-    let anomaly = streamsight_anomaly(event_id)
-    let baseline = streamsight_baseline("events_recorded")
+    let anomaly = observe_anomaly(event_id)
+    let baseline = observe_baseline("events_recorded")
 
     ScoreEvent {
         event_id: event_id,
@@ -238,8 +238,8 @@ circuit optin_get_score(user_id: bytes(32), pk: bytes(1568)) -> ActivityScore
 
     let score = kv_get(user_id)
 
-    let anomaly = streamsight_anomaly(lookup_hash)
-    let baseline = streamsight_baseline("scores_retrieved")
+    let anomaly = observe_anomaly(lookup_hash)
+    let baseline = observe_baseline("scores_retrieved")
 
     score
 }

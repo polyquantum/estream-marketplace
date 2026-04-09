@@ -1,0 +1,66 @@
+¤Blob‘Åû// Journey: Forensic Watermark Embed and Verify
+// Tests the SVD watermark lifecycle: seed generation â†’ embedding â†’ quality validation â†’ extraction confidence
+
+journey "watermark_verify" {
+    description "Generate trace seed, compute embedding, validate quality, check extraction confidence"
+    package "polyquantum.secure-video"
+    platform ">= 0.12.0"
+
+    import secure-video.circuits.watermark {
+        generate_trace_seed, compute_embedding_decision,
+        select_embedding_points_per_frame, validate_embedding_quality,
+        codec_max_delta, extraction_confidence,
+        minimum_frames_for_attribution, collusion_resistance_threshold
+    }
+
+    step "generate_viewer_trace_seed" {
+        let seed = generate_trace_seed(
+            sha3_256("viewer-001"),
+            sha3_256("session-abc"),
+            sha3_256("master-key-hash")
+        )
+        assert len(seed) == 32
+        assert seed != 0
+    }
+
+    step "compute_embedding_for_frame" {
+        let decision = compute_embedding_decision(seed, 100, 42, 128, 3)
+        assert decision >= 0
+    }
+
+    step "validate_embedding_within_delta" {
+        let ok = validate_embedding_quality(128, 130, 3)
+        assert ok == true
+    }
+
+    step "reject_excessive_delta" {
+        let bad = validate_embedding_quality(128, 140, 3)
+        assert bad == false
+    }
+
+    step "check_codec_max_delta" {
+        let delta = codec_max_delta(0, 0)
+        assert delta == 3
+    }
+
+    step "select_embedding_density_standard" {
+        let count = select_embedding_points_per_frame(100, 8100, 2, seed)
+        assert count == 1
+    }
+
+    step "compute_extraction_confidence" {
+        let conf = extraction_confidence(500, 600, 450)
+        assert conf > 0
+        assert conf <= 100
+    }
+
+    step "check_minimum_frames_high_density" {
+        let frames = minimum_frames_for_attribution(3)
+        assert frames == 30
+    }
+
+    step "check_collusion_resistance" {
+        let threshold = collusion_resistance_threshold(100, 3)
+        assert threshold == 32
+    }
+}

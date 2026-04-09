@@ -109,4 +109,4 @@ circuit execute_multisig_withdrawal(req: MultisigRequest) -> bool
 
 stream multisig_events: event<MultisigEvent>
     @retention 7y
-    @consumers [governance, audit, compliance, streamsight]
+    @consumers [governance, audit, compliance, observe]

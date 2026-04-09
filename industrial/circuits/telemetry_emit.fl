@@ -1,6 +1,8 @@
 /// Spec: specs/verticals/INDUSTRIAL_SPEC.md
 /// Telemetry Emission Circuit (Track H — Industrial Port)
-/// Stream telemetry data to StreamSight topics
+/// Stream telemetry data to Observe topics
+/// @rust_only — circuit logic lives in Rust; .fl defines the contract only
+
 type TelemetryPoint = struct {
     device_id: bytes(16),
     register_addr: u32,
@@ -24,7 +26,7 @@ type EmitResult = struct {
     batch_timestamp_ms: u64,
 }
 
-// Emit a single telemetry point to StreamSight
+// Emit a single telemetry point to Observe
 circuit emit_telemetry_point(gateway_id: bytes(32), point: TelemetryPoint) -> bool
     @status production
     lex industrial/telemetry/emit_point
@@ -60,4 +62,4 @@ circuit format_telemetry_topic(gateway_id: bytes(32), device_id: bytes(16), regi
 
 stream telemetry_events: event<TelemetryBatch>
     @retention 90d
-    @consumers [streamsight, analytics, dashboard]
+    @consumers [observe, analytics, dashboard]

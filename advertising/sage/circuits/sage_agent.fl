@@ -10,8 +10,8 @@
 // topic, and user profile as inputs. The model retrains on drift with a
 // threshold of 0.08 for tight conversational quality tracking.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import crm_graph from "advertising/crm/circuits/crm_graph"
 
@@ -104,17 +104,17 @@ data RatingRecord : circuit v1 {
 
 stream sage_conversation_events: event<ConversationContext>
     @retention 90d
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify session_id: IDENTIFIER, user_id: IDENTIFIER, intent: METADATA, topic: METADATA
 
 stream sage_response_events: event<AgentResponse>
     @retention 90d
-    @consumers [streamsight, cortex, analytics]
+    @consumers [observe, cortex, analytics]
     @classify intent_classification: METADATA, confidence: METRIC
 
 stream sage_api_call_events: event<ExternalApiCall>
     @retention 365d
-    @consumers [streamsight, audit, analytics]
+    @consumers [observe, audit, analytics]
     @classify provider: METADATA, endpoint: METADATA, request_hash: IDENTIFIER
 
 stream sage_rating_events: event<RatingRecord>
@@ -142,7 +142,7 @@ series sage_api_audit: sage_api_call_events
 //
 // Main inference circuit. Receives a user message within a session, classifies
 // intent via li_classify, infers a response via li_infer using the
-// sage_conversational model, and checks for anomalies via StreamSight.
+// sage_conversational model, and checks for anomalies via Observe.
 // Returns an AgentResponse with confidence, sources, and follow-up questions.
 
 circuit sage_process_message(session_id: bytes(32), user_id: bytes(32), message: bytes(2048), pk: bytes(1568)) -> AgentResponse
@@ -170,8 +170,8 @@ circuit sage_process_message(session_id: bytes(32), user_id: bytes(32), message:
 
     let intent = li_classify(message, session_id)
     let response = li_infer(session_id, message)
-    let anomaly = streamsight_anomaly(session_hash)
-    let baseline = streamsight_baseline("messages_processed")
+    let anomaly = observe_anomaly(session_hash)
+    let baseline = observe_baseline("messages_processed")
 
     let context = kv_get(session_id)
 
@@ -217,8 +217,8 @@ circuit sage_external_query(provider: bytes(64), endpoint: bytes(256), request: 
 
     let response = li_infer(garbled_input, endpoint)
     let response_hash = sha3_256(response)
-    let anomaly = streamsight_anomaly(request_hash)
-    let baseline = streamsight_baseline("api_latency_ms")
+    let anomaly = observe_anomaly(request_hash)
+    let baseline = observe_baseline("api_latency_ms")
 
     response
 }
@@ -251,8 +251,8 @@ circuit sage_rate_response(session_id: bytes(32), message_id: bytes(32), rating:
     let verified = mldsa_verify(rating_hash, sig, session_id)
 
     let feedback = li_classify(session_id, message_id)
-    let anomaly = streamsight_anomaly(rating_hash)
-    let baseline = streamsight_baseline("ratings_submitted")
+    let anomaly = observe_anomaly(rating_hash)
+    let baseline = observe_baseline("ratings_submitted")
 
     verified
 }

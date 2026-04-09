@@ -1,0 +1,207 @@
+Å§Blobë≈i/// Spec: specs/verticals/PAYMENTS_SPEC.md
+/// Multi-Party Settlement DAG (#74)
+/// Dimensional billing with percentage splits, fixed amounts, and delta-based calculations
+/// @rust_only ‚Äî circuit logic lives in Rust; .fl defines the contract only
+
+type SourceNode = struct {
+    source_id: bytes(32),
+    payer_pubkey: bytes(2592),
+    name: string,
+}
+
+type SplitNode = struct {
+    split_id: bytes(16),
+    split_type: u8,
+    percentage_bps: u32,
+    fixed_amount: u64,
+    min_amount: u64,
+    max_amount: u64,
+}
+
+type SinkNode = struct {
+    sink_id: bytes(32),
+    payee_pubkey: bytes(2592),
+    name: string,
+    account_type: u8,
+}
+
+type DimensionNode = struct {
+    dimension_id: bytes(16),
+    name: string,
+    unit: u8,
+    precision_decimals: u8,
+}
+
+type FlowEdge = struct {
+    edge_id: bytes(16),
+    flow_type: u8,
+    token_id: bytes(16),
+    priority: u8,
+}
+
+type SettlementRecord = struct {
+    settlement_id: bytes(16),
+    total_amount: u64,
+    token_id: bytes(16),
+    parties: u32,
+    dimensions: u8,
+    settled_at: u64,
+}
+
+dag settlement {
+    node SourceNode
+    node SplitNode
+    node SinkNode
+    node DimensionNode
+    edge FlowEdge
+    overlay amount: u64 bitmask delta_curate
+    overlay split_ratio: u32 bitmask
+    overlay dimension_value: u64 bitmask delta_curate
+    overlay settlement_status: u8 curate delta_curate
+    overlay fee_accrued: u64 bitmask delta_curate
+    overlay escrow_locked: u64 bitmask
+    overlay reconciled: u8 curate
+    storage csr {
+        hot @bram,
+        warm @ddr,
+        cold @nvme,
+    }
+    @ai_feed settlement_optimization
+    observe settlement: [amount, settlement_status, fee_accrued, escrow_locked] threshold: {
+        anomaly_score 0.9
+        baseline_window 120
+    }
+}
+
+series settlement_series: settlement
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// Create a settlement DAG for a multi-party transaction
+circuit create_settlement(dag_id: bytes(32), sources: list<bytes(32)>, sinks: list<bytes(32)>) -> bytes(32)
+    @status production
+    lex settlement/create
+    @precision D
+    @attested true
+    observe metrics: [dag_id, source_count, sink_count]
+{
+    dag_id
+}
+
+// Add a split rule to the settlement DAG
+circuit add_split(dag_id: bytes(32), split: SplitNode, from: bytes(32), to: bytes(32)) -> bytes(16)
+    @status production
+    lex settlement/split/add
+    @precision D
+    @attested true
+    observe metrics: [split_id, split_type, percentage_bps, from, to]
+{
+    split.split_id
+}
+
+// Add a billing dimension (e.g., royalty tier, tax jurisdiction, currency)
+circuit add_dimension(dag_id: bytes(32), dim: DimensionNode) -> bytes(16)
+    @status production
+    lex settlement/dimension/add
+    @precision D
+    @attested true
+    observe metrics: [dimension_id, name, unit]
+{
+    dim.dimension_id
+}
+
+// Execute settlement: walk the DAG, apply splits, produce per-sink amounts
+circuit execute_settlement(dag_id: bytes(32), total_amount: u64, token_id: bytes(16)) -> SettlementRecord
+    @status production
+    lex settlement/execute
+    @precision D
+    @attested true
+    observe metrics: [dag_id, total_amount, token_id, parties, dimensions]
+{
+    SettlementRecord {
+        settlement_id: dag_id,
+        total_amount: total_amount,
+        token_id: token_id,
+        parties: 0,
+        dimensions: 0,
+        settled_at: 0,
+    }
+}
+
+// Calculate per-sink payouts for preview (no state change)
+circuit preview_settlement(dag_id: bytes(32), total_amount: u64) -> list<u64>
+    @status production
+    lex settlement/preview
+    @precision D
+    observe metrics: [dag_id, total_amount, sink_count]
+{
+    []
+}
+
+// Apply delta-based recalculation (when underlying values change)
+circuit recalculate_delta(dag_id: bytes(32), dimension_id: bytes(16), delta: u64) -> bool
+    @status production
+    lex settlement/delta/recalc
+    @precision D
+    @attested true
+    observe metrics: [dag_id, dimension_id, delta]
+{
+    true
+}
+
+// Lock escrow for pending settlement
+circuit lock_escrow(dag_id: bytes(32), source_id: bytes(32), amount: u64, token_id: bytes(16)) -> bool
+    @status production
+    lex settlement/escrow/lock
+    @precision D
+    @attested true
+    observe metrics: [dag_id, source_id, amount, token_id]
+    invariant amount > 0
+{
+    amount > 0
+}
+
+// Release escrow after successful settlement
+circuit release_escrow(dag_id: bytes(32), settlement_id: bytes(16)) -> bool
+    @status production
+    lex settlement/escrow/release
+    @precision D
+    @attested true
+    observe metrics: [dag_id, settlement_id]
+{
+    true
+}
+
+// Topological ordering of settlement flow (ensures no circular dependencies)
+circuit settlement_ordering(dag_id: bytes(32)) -> list<bytes(16)>
+    @status production
+    lex settlement/ordering
+    @precision B
+    observe metrics: [dag_id, node_count]
+{
+    []
+}
+
+// Reconciliation: verify all amounts balance (sum of sources == sum of sinks + fees)
+circuit reconcile(dag_id: bytes(32), settlement_id: bytes(16)) -> bool
+    @status production
+    lex settlement/reconcile
+    @precision D
+    @attested true
+    observe metrics: [dag_id, settlement_id, balanced]
+{
+    true
+}
+
+stream settlement_events: event<SettlementRecord>
+    @retention 7y
+    @consumers [governance, audit, compliance, analytics, streamsight]
+
+stream escrow_events: event<FlowEdge>
+    @retention 7y
+    @consumers [governance, audit, compliance]
+
+stream dimension_events: event<DimensionNode>
+    @retention 7y
+    @consumers [analytics, audit]

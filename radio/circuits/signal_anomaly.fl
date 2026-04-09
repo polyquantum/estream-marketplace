@@ -135,12 +135,12 @@ circuit validate_li_update(
 
 stream anomaly_events: event<AnomalyDetection>
     @retention 90d
-    @consumers [streamsight, forensics, governance]
+    @consumers [observe, forensics, governance]
 
 stream threat_events: event<ThreatAssessment>
     @retention 1y
-    @consumers [streamsight, forensics, governance, command]
+    @consumers [observe, forensics, governance, command]
 
 stream li_update_events: event<LiModelUpdate>
     @retention 1y
-    @consumers [streamsight, governance]
+    @consumers [observe, governance]

@@ -72,11 +72,11 @@ store kv pricing_store {
 
 stream provider_pricing_events: event<ProviderPricingEvent>
     @retention 365d
-    @consumers [streamsight, console, billing, audit]
+    @consumers [observe, console, billing, audit]
 
 stream provider_usage: event<UsageRecord>
     @retention 365d
-    @consumers [streamsight, console, billing]
+    @consumers [observe, console, billing]
 
 // --- Provider Tier Management ---
 

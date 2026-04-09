@@ -1,0 +1,113 @@
+¤Blob‘Å
+Ö/// Spec: specs/verticals/RADIO_SPEC.md
+/// eStream Radio Scatter â€” O-RAN Protocol Circuits
+/// Validation for E2, A1, O1 interfaces and 3GPP node mapping.
+/// PQ mutual auth replaces classical X.509 at every interface.
+
+type E2Message = struct {
+    message_id: bytes(32),
+    source_node: bytes(32),
+    target_node: bytes(32),
+    message_type: u8,
+    payload_hash: bytes(32),
+    signature: bytes,
+    timestamp: u64,
+}
+
+type A1Policy = struct {
+    policy_id: bytes(32),
+    policy_type: u8,
+    ric_id: bytes(32),
+    target_scope: u32,
+    enforcement_level: u8,
+    signature: bytes,
+}
+
+type O1Config = struct {
+    config_id: bytes(32),
+    node_id: bytes(32),
+    config_type: u8,
+    config_hash: bytes(32),
+    applied_at: u64,
+    attestation: bytes,
+}
+
+type FronthaulLink = struct {
+    link_id: bytes(32),
+    du_id: bytes(32),
+    ru_id: bytes(32),
+    bandwidth_gbps: u8,
+    pq_session_id: bytes(32),
+    established_at: u64,
+}
+
+// E2 message types: 0=Subscription, 1=Indication, 2=Control, 3=PolicyUpdate
+// A1 policy types: 0=QoS, 1=TrafficSteering, 2=SliceManagement, 3=SecurityPolicy
+// O1 config types: 0=Performance, 1=Fault, 2=Configuration, 3=Security
+// Enforcement: 0=Mandatory, 1=BestEffort, 2=Advisory
+
+circuit validate_e2_message(
+    status production
+    source_node: bytes(32),
+    target_node: bytes(32),
+    message_type: u8,
+    payload_hash: bytes(32)
+) -> bool
+    lex platform/radio/ran
+    @precision C
+    @attested true
+    @streamsight_emit
+{
+    let source_ok = source_node != bytes(32){0}
+    let target_ok = target_node != bytes(32){0}
+    let type_ok = message_type <= 3
+    let hash_ok = payload_hash != bytes(32){0}
+    let different = source_node != target_node
+    source_ok && target_ok && type_ok && hash_ok && different
+}
+
+circuit validate_a1_policy(
+    status production
+    policy_type: u8,
+    ric_id: bytes(32),
+    enforcement_level: u8
+) -> bool
+    lex platform/radio/ran
+    @precision C
+    @attested true
+{
+    let type_ok = policy_type <= 3
+    let ric_ok = ric_id != bytes(32){0}
+    let level_ok = enforcement_level <= 2
+    type_ok && ric_ok && level_ok
+}
+
+circuit validate_fronthaul_link(
+    status production
+    du_id: bytes(32),
+    ru_id: bytes(32),
+    bandwidth_gbps: u8
+) -> bool
+    lex platform/radio/ran
+    @precision C
+    @attested true
+{
+    let du_ok = du_id != bytes(32){0}
+    let ru_ok = ru_id != bytes(32){0}
+    let bw_ok = bandwidth_gbps >= 10
+    let different = du_id != ru_id
+    du_ok && ru_ok && bw_ok && different
+}
+
+circuit ran_node_type_valid(ran_type: u8) -> bool
+    @status production
+    lex platform/radio/ran
+    @precision C
+    @attested true
+{
+    ran_type <= 7
+}
+
+stream ran_events: event<E2Message>
+    @retention 90d
+    @consumers [streamsight, governance]

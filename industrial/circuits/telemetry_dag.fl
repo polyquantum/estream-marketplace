@@ -72,4 +72,4 @@ circuit emit_telemetry_event(dag_id: bytes(32), node: TelemetryNode) -> bool
 
 stream telemetry_pipeline_events: event<TelemetryNode>
     @retention 90d
-    @consumers [streamsight, analytics, dashboard]
+    @consumers [observe, analytics, dashboard]

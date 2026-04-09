@@ -107,8 +107,8 @@ circuit optimal_aperture_width_mhz(
 
 stream spectrum_events: event<SpectrumBlock>
     @retention 90d
-    @consumers [streamsight, governance]
+    @consumers [observe, governance]
 
 stream interference_events: event<InterferenceReport>
     @retention 90d
-    @consumers [streamsight, forensics]
+    @consumers [observe, forensics]

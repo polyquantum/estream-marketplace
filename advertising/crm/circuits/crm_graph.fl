@@ -7,9 +7,9 @@
 // traversal, with KV overlay for direct ID lookups.
 //
 // Data types use `data` declarations with verbs (encode, observe, cortex, attest)
-// for wire layout, inline StreamSight hooks, privacy masks, and PoVC attestation.
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// for wire layout, inline Observe hooks, privacy masks, and PoVC attestation.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 // =============================================================================
 // Data Declarations — CRM Core Types
@@ -133,7 +133,7 @@ graph crm_graph {
     storage csr { tier bram { capacity: 100000 } }
     @sign ml_dsa_87
     ai_feed relationship_analysis
-    @observe streamsight: [node_count, edge_count, traversal_depth] threshold: {
+    @observe observe: [node_count, edge_count, traversal_depth] threshold: {
         node_count 0.9
         baseline_window 3600
     }
@@ -145,12 +145,12 @@ graph crm_graph {
 
 stream crm_profile_events: event<UserProfile>
     @retention 7y
-    @consumers [streamsight, audit, cortex]
+    @consumers [observe, audit, cortex]
     @classify id: IDENTIFIER, name: PII, email: PII, status: METADATA
 
 stream crm_relationship_events: event<Relationship>
     @retention 7y
-    @consumers [streamsight, audit]
+    @consumers [observe, audit]
     @classify from_id: IDENTIFIER, to_id: IDENTIFIER, relationship_type: METADATA
 
 // =============================================================================
@@ -199,8 +199,8 @@ circuit crm_create_profile(name: bytes(128), email: bytes(256), phone: bytes(32)
     let kem = mlkem_encaps(pk)
     let sig = mldsa_sign(profile_id, name)
     let verified = mldsa_verify(profile_id, sig, name)
-    let anomaly = streamsight_anomaly(profile_id)
-    let baseline = streamsight_baseline("profiles_created")
+    let anomaly = observe_anomaly(profile_id)
+    let baseline = observe_baseline("profiles_created")
     let now = 0
 
     UserProfile {
@@ -239,8 +239,8 @@ circuit crm_update_profile(profile_id: bytes(32), updates: bytes(512), pk: bytes
     let kem = mlkem_encaps(pk)
     let sig = mldsa_sign(update_hash, profile_id)
     let verified = mldsa_verify(update_hash, sig, profile_id)
-    let anomaly = streamsight_anomaly(update_hash)
-    let baseline = streamsight_baseline("profiles_updated")
+    let anomaly = observe_anomaly(update_hash)
+    let baseline = observe_baseline("profiles_updated")
     let now = 0
 
     UserProfile {
@@ -261,7 +261,7 @@ circuit crm_update_profile(profile_id: bytes(32), updates: bytes(512), pk: bytes
 //
 // Adds a typed edge between two nodes in the CRM graph. Relationship types
 // are CLAIM (0), LEAD (1), PARTNER (2), REFERRAL (3). The edge is signed
-// and produces a relationship event for StreamSight tracking.
+// and produces a relationship event for Observe tracking.
 
 circuit crm_add_relationship(from_id: bytes(32), to_id: bytes(32), rel_type: u8, pk: bytes(1568)) -> Relationship
     @lex marketplace/advertising/crm {
@@ -281,8 +281,8 @@ circuit crm_add_relationship(from_id: bytes(32), to_id: bytes(32), rel_type: u8,
     let kem = mlkem_encaps(pk)
     let sig = mldsa_sign(edge_hash, from_id)
     let verified = mldsa_verify(edge_hash, sig, from_id)
-    let anomaly = streamsight_anomaly(edge_hash)
-    let baseline = streamsight_baseline("relationships_added")
+    let anomaly = observe_anomaly(edge_hash)
+    let baseline = observe_baseline("relationships_added")
     let now = 0
 
     Relationship {
@@ -315,8 +315,8 @@ circuit crm_traverse_relationships(user_id: bytes(32), rel_type: u8, depth: u32,
     let kem = mlkem_encaps(pk)
     let sig = mldsa_sign(traversal_hash, user_id)
     let verified = mldsa_verify(traversal_hash, sig, user_id)
-    let anomaly = streamsight_anomaly(traversal_hash)
-    let baseline = streamsight_baseline("nodes_visited")
+    let anomaly = observe_anomaly(traversal_hash)
+    let baseline = observe_baseline("nodes_visited")
     let result = graph_traverse(crm_graph, user_id, rel_type, depth)
     result
 }

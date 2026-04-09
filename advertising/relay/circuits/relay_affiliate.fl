@@ -12,8 +12,8 @@
 // graph level, with an inference-on-threshold consumer that fires when the
 // viral coefficient exceeds 1.5.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import crm_graph from "advertising/crm/circuits/crm_graph"
 
@@ -195,7 +195,7 @@ graph referral_graph {
     storage csr { tier bram { capacity: 500000 } }
     @sign ml_dsa_87
     ai_feed viral_coefficient_analysis
-    @observe streamsight: [referral_depth, viral_coefficient] threshold: {
+    @observe observe: [referral_depth, viral_coefficient] threshold: {
         viral_coefficient 0.9
         baseline_window 86400
     }
@@ -209,17 +209,17 @@ stream relay_link_events: event<ReferralLink>
     | filter record.click_count > 0
     | throttle 1000/s burst 5000
     @retention 365d
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify link_id: IDENTIFIER, referrer_id: IDENTIFIER, campaign_id: IDENTIFIER, click_count: METRIC, conversion_count: METRIC
 
 stream relay_compensation_events: event<Compensation>
     @retention 7y
-    @consumers [streamsight, audit, cortex, analytics, alerting]
+    @consumers [observe, audit, cortex, analytics, alerting]
     @classify comp_id: IDENTIFIER, referrer_id: IDENTIFIER, referee_id: IDENTIFIER, amount: METRIC, status: METADATA
 
 stream relay_viral_events: event<ViralMetrics>
     @retention 365d
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify campaign_id: IDENTIFIER, period: IDENTIFIER, viral_coefficient: METRIC, referrals_per_user: METRIC
 
 // =============================================================================
@@ -267,8 +267,8 @@ circuit relay_create_link(referrer_id: bytes(32), campaign_id: bytes(32), pk: by
     let sig = mldsa_sign(link_id, referrer_id)
     let verified = mldsa_verify(link_id, sig, referrer_id)
 
-    let anomaly = streamsight_anomaly(link_id)
-    let baseline = streamsight_baseline("links_created")
+    let anomaly = observe_anomaly(link_id)
+    let baseline = observe_baseline("links_created")
 
     let edge = graph_add_edge(referral_graph, referrer_id, link_id, "belongs_to")
 
@@ -289,7 +289,7 @@ circuit relay_create_link(referrer_id: bytes(32), campaign_id: bytes(32), pk: by
 // =============================================================================
 //
 // Increments the click count on an existing referral link. Each click is
-// signed and fed to StreamSight for traffic anomaly detection (bot
+// signed and fed to Observe for traffic anomaly detection (bot
 // filtering, click fraud).
 
 circuit relay_record_click(link_id: bytes(32), pk: bytes(1568)) -> ReferralLink
@@ -311,8 +311,8 @@ circuit relay_record_click(link_id: bytes(32), pk: bytes(1568)) -> ReferralLink
     let verified = mldsa_verify(click_hash, sig, link_id)
 
     let current = kv_get(link_id)
-    let anomaly = streamsight_anomaly(click_hash)
-    let baseline = streamsight_baseline("clicks_recorded")
+    let anomaly = observe_anomaly(click_hash)
+    let baseline = observe_baseline("clicks_recorded")
 
     ReferralLink {
         link_id: link_id,
@@ -362,8 +362,8 @@ circuit relay_record_conversion(link_id: bytes(32), referee_id: bytes(32), pk: b
 
     let edge = graph_add_edge(referral_graph, link.referrer_id, referee_id, "referred")
     let comp_edge = graph_add_edge(referral_graph, link.referrer_id, comp_id, "earned")
-    let anomaly = streamsight_anomaly(conversion_hash)
-    let baseline = streamsight_baseline("conversions_recorded")
+    let anomaly = observe_anomaly(conversion_hash)
+    let baseline = observe_baseline("conversions_recorded")
 
     Compensation {
         comp_id: comp_id,
@@ -415,8 +415,8 @@ circuit relay_calculate_compensation(referrer_id: bytes(32), campaign_id: bytes(
     let campaign = kv_get(campaign_id)
     let attribution = li_infer(referrer_id, campaign_id)
     let classification = li_classify(referrer_id, campaign_id)
-    let anomaly = streamsight_anomaly(calc_hash)
-    let baseline = streamsight_baseline("compensations_calculated")
+    let anomaly = observe_anomaly(calc_hash)
+    let baseline = observe_baseline("compensations_calculated")
 
     Compensation {
         comp_id: comp_id,
@@ -463,8 +463,8 @@ circuit relay_viral_metrics(campaign_id: bytes(32), period: bytes(32), pk: bytes
 
     let graph_stats = li_infer(campaign_id, period)
     let viral_analysis = li_classify(campaign_id, period)
-    let anomaly = streamsight_anomaly(metrics_hash)
-    let baseline = streamsight_baseline("avg_viral_coefficient")
+    let anomaly = observe_anomaly(metrics_hash)
+    let baseline = observe_baseline("avg_viral_coefficient")
 
     ViralMetrics {
         campaign_id: campaign_id,

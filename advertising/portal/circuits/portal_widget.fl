@@ -14,8 +14,8 @@
 // before instantiation — users without the required role for a given
 // widget type are rejected with a cryptographic audit trail.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import optin_engage from "advertising/optin/circuits/optin_engage"
 
@@ -135,12 +135,12 @@ data RbacCheck : app v1 {
 
 stream portal_widget_events: event<WidgetInstance>
     @retention 90d
-    @consumers [streamsight, analytics]
+    @consumers [observe, analytics]
     @classify instance_id: IDENTIFIER, partner_id: IDENTIFIER, user_id: IDENTIFIER, widget_type: METADATA, state: METADATA
 
 stream portal_rbac_events: event<RbacCheck>
     @retention 365d
-    @consumers [streamsight, audit, security]
+    @consumers [observe, audit, security]
     @classify check_id: IDENTIFIER, user_id: IDENTIFIER, widget_type: METADATA, granted: METADATA
 
 // =============================================================================
@@ -190,8 +190,8 @@ circuit portal_create_widget(widget_type: enum { PartnerConnect, EngagementDashb
     let check_id = sha3_256(instance_id)
     let rbac_check = rbac_evaluate(user_roles, widget_type)
 
-    let anomaly = streamsight_anomaly(instance_id)
-    let baseline = streamsight_baseline("widgets_created")
+    let anomaly = observe_anomaly(instance_id)
+    let baseline = observe_baseline("widgets_created")
 
     WidgetInstance {
         instance_id: instance_id,
@@ -250,8 +250,8 @@ circuit portal_transition_widget(instance_id: bytes(32), new_state: enum { Loadi
     let verified = mldsa_verify(transition_hash, sig, pk)
 
     let current = kv_get(instance_id)
-    let anomaly = streamsight_anomaly(transition_hash)
-    let baseline = streamsight_baseline("transitions_count")
+    let anomaly = observe_anomaly(transition_hash)
+    let baseline = observe_baseline("transitions_count")
 
     WidgetInstance {
         instance_id: current.instance_id,
@@ -293,8 +293,8 @@ circuit portal_destroy_widget(instance_id: bytes(32), pk: bytes(1568)) -> bool
     let verified = mldsa_verify(destroy_hash, sig, pk)
 
     let current = kv_get(instance_id)
-    let anomaly = streamsight_anomaly(destroy_hash)
-    let baseline = streamsight_baseline("widgets_destroyed")
+    let anomaly = observe_anomaly(destroy_hash)
+    let baseline = observe_baseline("widgets_destroyed")
 
     let destroyed = WidgetInstance {
         instance_id: current.instance_id,

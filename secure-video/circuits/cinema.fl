@@ -66,7 +66,7 @@ circuit validate_pq_kdm(
     lex platform/cs/cinema
     @precision C
     @attested true
-    @streamsight_emit
+    @observe_emit
 {
     let content_ok = content_id != bytes(32){0}
     let screen_ok = screen_id != bytes(32){0}
@@ -121,7 +121,7 @@ circuit reconcile_revenue(
     lex platform/cs/cinema
     @precision C
     @attested true
-    @streamsight_emit
+    @observe_emit
 {
     if play_attestation_count == 0 { return false }
     let diff = 0
@@ -136,7 +136,7 @@ circuit reconcile_revenue(
 
 stream cinema_play_events: event<PlayAttestation>
     @retention 7y
-    @consumers [governance, audit, streamsight, compliance, forensics]
+    @consumers [governance, audit, observe, compliance, forensics]
 
 stream cinema_revenue_events: event<RevenueRecord>
     @retention 7y

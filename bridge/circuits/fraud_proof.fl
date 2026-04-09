@@ -106,4 +106,4 @@ circuit render_verdict(verdict: FraudVerdict) -> bool
 
 stream fraud_events: event<FraudEvent>
     @retention 7y
-    @consumers [governance, audit, compliance, streamsight, console]
+    @consumers [governance, audit, compliance, observe, console]

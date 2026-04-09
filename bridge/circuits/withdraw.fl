@@ -63,4 +63,4 @@ circuit process_withdrawal(req: WithdrawalRequest) -> WithdrawalRecord
 
 stream withdrawal_events: event<WithdrawalRequest>
     @retention 7y
-    @consumers [governance, audit, compliance, streamsight]
+    @consumers [governance, audit, compliance, observe]

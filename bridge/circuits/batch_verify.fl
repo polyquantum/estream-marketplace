@@ -50,4 +50,4 @@ circuit batch_verify_proofs(batch: BatchInput) -> BatchResult
 
 stream batch_verify_events: event<BatchResult>
     @retention 7y
-    @consumers [audit, streamsight]
+    @consumers [audit, observe]

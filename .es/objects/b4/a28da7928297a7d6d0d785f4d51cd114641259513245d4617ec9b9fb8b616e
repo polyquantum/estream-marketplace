@@ -1,0 +1,69 @@
+¤Blob‘Å
+¤/// Spec: specs/verticals/PAYMENTS_SPEC.md
+/// Spark Offline Payment protocol FSM (#23)
+
+state_machine sender_flow {
+    initial IDLE
+    persistence wal
+    terminal [COMPLETE, ERROR]
+    ai_anomaly_detection true
+
+    IDLE -> PREPARING when initiate_payment
+    PREPARING -> DISPLAYING_INTENT when intent_signed
+    DISPLAYING_INTENT -> RECEIVING_ACCEPT when accept_scanned guard validate_accept
+    RECEIVING_ACCEPT -> STREAMING_TRANSACTION when transaction_signed guard proofs_generated
+    STREAMING_TRANSACTION -> AWAITING_RECEIPT when stream_complete
+    AWAITING_RECEIPT -> COMPLETE when receipt_received guard validate_receipt
+    IDLE -> ERROR when timeout
+    PREPARING -> ERROR when timeout
+    DISPLAYING_INTENT -> ERROR when timeout
+    RECEIVING_ACCEPT -> ERROR when timeout
+    STREAMING_TRANSACTION -> ERROR when timeout
+    AWAITING_RECEIPT -> ERROR when timeout
+    IDLE -> ERROR when cancel
+    PREPARING -> ERROR when cancel
+    DISPLAYING_INTENT -> ERROR when cancel
+    RECEIVING_ACCEPT -> ERROR when cancel
+    STREAMING_TRANSACTION -> ERROR when cancel
+    AWAITING_RECEIPT -> ERROR when cancel
+}
+
+state_machine recipient_flow {
+    initial IDLE
+    persistence wal
+    terminal [COMPLETE, ERROR]
+    ai_anomaly_detection true
+
+    IDLE -> WAITING_FOR_INTENT when start_receiving
+    WAITING_FOR_INTENT -> VERIFYING_INTENT when intent_scanned guard liveness_check
+    VERIFYING_INTENT -> DISPLAYING_ACCEPT when accept_signed guard validate_intent
+    DISPLAYING_ACCEPT -> RECEIVING_TRANSACTION when scan_started
+    RECEIVING_TRANSACTION -> VERIFYING_TRANSACTION when transaction_scanned guard liveness_check
+    VERIFYING_TRANSACTION -> STREAMING_RECEIPT when receipt_built guard verify_all_proofs
+    STREAMING_RECEIPT -> COMPLETE when receipt_signed
+    IDLE -> ERROR when timeout
+    WAITING_FOR_INTENT -> ERROR when timeout
+    VERIFYING_INTENT -> ERROR when timeout
+    DISPLAYING_ACCEPT -> ERROR when timeout
+    RECEIVING_TRANSACTION -> ERROR when timeout
+    VERIFYING_TRANSACTION -> ERROR when timeout
+    STREAMING_RECEIPT -> ERROR when timeout
+    IDLE -> ERROR when cancel
+    WAITING_FOR_INTENT -> ERROR when cancel
+    VERIFYING_INTENT -> ERROR when cancel
+    DISPLAYING_ACCEPT -> ERROR when cancel
+    RECEIVING_TRANSACTION -> ERROR when cancel
+    VERIFYING_TRANSACTION -> ERROR when cancel
+    STREAMING_RECEIPT -> ERROR when cancel
+}
+
+state_machine settlement_lifecycle {
+    initial PENDING_SYNC
+    terminal [SETTLED, EXPIRED, CANCELLED]
+
+    PENDING_SYNC -> SETTLED when batch_confirmed
+    PENDING_SYNC -> DISPUTED when dispute_raised
+    DISPUTED -> SETTLED when dispute_resolved
+    DISPUTED -> CANCELLED when dispute_upheld
+    PENDING_SYNC -> EXPIRED when ttl_exceeded
+}

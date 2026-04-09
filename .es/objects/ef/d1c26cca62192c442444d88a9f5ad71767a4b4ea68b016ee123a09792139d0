@@ -1,0 +1,12 @@
+Å§Blobë≈fdomain polyquantum.bridge {
+  /// Cross-chain bridge: deposit, withdraw, mint/burn, fraud proofs, emergency pause, multi-sig withdrawal, rate limiting
+
+  module deposit          from "circuits/deposit.fl"
+  module withdraw         from "circuits/withdraw.fl"
+  module mint_burn        from "circuits/mint_burn.fl"
+  module fraud_proof      from "circuits/fraud_proof.fl"
+  module emergency_pause  from "circuits/emergency_pause.fl"
+  module batch_verify     from "circuits/batch_verify.fl"
+  module rate_limiter     from "circuits/rate_limiter.fl"
+  module multisig_withdraw from "circuits/multisig_withdraw.fl"
+}

@@ -15,7 +15,7 @@ circuit select_frequency_bands(
     lex platform/radio/vrf_freq
     @precision C
     @attested true
-    @streamsight_emit
+    @observe_emit
 {
     let seed_ok = vrf_seed != bytes(32){0}
     let msg_ok = message_id != bytes(32){0}
@@ -95,4 +95,4 @@ circuit max_simultaneous_bands(aperture_hz: u64, bandwidth_per_band_hz: u32, gua
 
 stream vrf_freq_events: event<RadioShard>
     @retention 30d
-    @consumers [streamsight, forensics]
+    @consumers [observe, forensics]

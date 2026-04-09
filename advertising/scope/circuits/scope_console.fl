@@ -11,8 +11,8 @@
 // engagement events, source, and partner criteria as inputs. Scores are
 // computed per-lead with dimension breakdowns and match confidence.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import crm_lead from "advertising/crm/circuits/crm_lead"
 
@@ -149,17 +149,17 @@ data LeadQualityScore : circuit v1 {
 
 stream scope_partner_events: event<PartnerConfig>
     @retention 365d
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify partner_id: IDENTIFIER, name: METADATA, industry: METADATA, budget_monthly: METRIC
 
 stream scope_pipeline_events: event<LeadPipelineView>
     @retention 365d
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify partner_id: IDENTIFIER, period: IDENTIFIER, leads_generated: METRIC, conversion_rate_pct: METRIC, roi_pct: METRIC
 
 stream scope_quality_events: event<LeadQualityScore>
     @retention 90d
-    @consumers [streamsight, cortex, analytics]
+    @consumers [observe, cortex, analytics]
     @classify lead_id: IDENTIFIER, partner_id: IDENTIFIER, quality_score: METRIC
 
 // =============================================================================
@@ -206,8 +206,8 @@ circuit scope_onboard_partner(name: bytes(128), industry: bytes(64), budget: u64
     let sig = mldsa_sign(config_hash, partner_id)
     let verified = mldsa_verify(config_hash, sig, partner_id)
 
-    let anomaly = streamsight_anomaly(partner_id)
-    let baseline = streamsight_baseline("partners_onboarded")
+    let anomaly = observe_anomaly(partner_id)
+    let baseline = observe_baseline("partners_onboarded")
 
     PartnerConfig {
         partner_id: partner_id,
@@ -252,8 +252,8 @@ circuit scope_score_lead(lead_id: bytes(32), partner_id: bytes(32), pk: bytes(15
 
     let dimensions = li_infer(lead_id, partner_id)
     let classification = li_classify(lead_id, partner_id)
-    let anomaly = streamsight_anomaly(score_hash)
-    let baseline = streamsight_baseline("leads_scored")
+    let anomaly = observe_anomaly(score_hash)
+    let baseline = observe_baseline("leads_scored")
 
     let lead = kv_get(lead_id)
 
@@ -275,7 +275,7 @@ circuit scope_score_lead(lead_id: bytes(32), partner_id: bytes(32), pk: bytes(15
 //
 // Aggregates lead pipeline metrics for a partner over a given period. Computes
 // leads generated, qualified, converted, conversion rate, revenue, cost, and
-// ROI percentage. Feeds metrics to StreamSight for anomaly detection.
+// ROI percentage. Feeds metrics to Observe for anomaly detection.
 
 circuit scope_pipeline_summary(partner_id: bytes(32), period: bytes(32), pk: bytes(1568)) -> LeadPipelineView
     @lex marketplace/advertising/scope {
@@ -301,8 +301,8 @@ circuit scope_pipeline_summary(partner_id: bytes(32), period: bytes(32), pk: byt
 
     let pipeline = li_infer(partner_id, period)
     let classification = li_classify(partner_id, period)
-    let anomaly = streamsight_anomaly(summary_hash)
-    let baseline = streamsight_baseline("summaries_generated")
+    let anomaly = observe_anomaly(summary_hash)
+    let baseline = observe_baseline("summaries_generated")
 
     let config = kv_get(partner_id)
 

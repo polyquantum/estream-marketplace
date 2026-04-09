@@ -14,8 +14,8 @@
 // edges to ConversationContext), creating a closed loop between user questions
 // and published knowledge base articles.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import sage_agent from "advertising/sage/circuits/sage_agent"
 
@@ -107,7 +107,7 @@ graph content_graph {
     storage csr { tier bram { capacity: 50000 } }
     @sign ml_dsa_87
     ai_feed topic_clustering
-    @observe streamsight: [content_count, seo_score_avg] threshold: {
+    @observe observe: [content_count, seo_score_avg] threshold: {
         seo_score_avg 0.9
         baseline_window 86400
     }
@@ -119,12 +119,12 @@ graph content_graph {
 
 stream sage_content_events: event<ContentNode>
     @retention 365d
-    @consumers [streamsight, cortex, analytics, alerting]
+    @consumers [observe, cortex, analytics, alerting]
     @classify content_id: IDENTIFIER, topic: METADATA, seo_score: METRIC
 
 stream sage_content_score_events: event<ContentScore>
     @retention 365d
-    @consumers [streamsight, cortex, analytics]
+    @consumers [observe, cortex, analytics]
     @classify content_id: IDENTIFIER, seo_score: METRIC
 
 // =============================================================================
@@ -171,8 +171,8 @@ circuit sage_generate_content(topic: bytes(128), keywords: bytes(512), source_co
     let body = li_infer(topic, source_conversations)
     let body_hash = sha3_256(body)
     let seo = li_classify(topic, keywords)
-    let anomaly = streamsight_anomaly(content_id)
-    let baseline = streamsight_baseline("content_generated")
+    let anomaly = observe_anomaly(content_id)
+    let baseline = observe_baseline("content_generated")
     let now = 0
 
     let topic_edge = graph_add_edge(content_graph, content_id, topic_hash, "covers_topic")
@@ -216,8 +216,8 @@ circuit sage_score_content(content_id: bytes(32), pk: bytes(1568)) -> u64
 
     let current = kv_get(content_id)
     let seo_analysis = li_infer(content_id, current.keywords)
-    let anomaly = streamsight_anomaly(score_hash)
-    let baseline = streamsight_baseline("content_scored")
+    let anomaly = observe_anomaly(score_hash)
+    let baseline = observe_baseline("content_scored")
 
     let score = li_classify(current.title, current.keywords)
     score
@@ -251,8 +251,8 @@ circuit sage_link_content(content_id: bytes(32), related_ids: bytes(1024), pk: b
     let verified = mldsa_verify(link_hash, sig, content_id)
 
     let edge = graph_add_edge(content_graph, content_id, related_ids, "related")
-    let anomaly = streamsight_anomaly(link_hash)
-    let baseline = streamsight_baseline("content_linked")
+    let anomaly = observe_anomaly(link_hash)
+    let baseline = observe_baseline("content_linked")
 
     verified
 }

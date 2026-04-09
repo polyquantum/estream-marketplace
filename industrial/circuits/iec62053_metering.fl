@@ -101,4 +101,4 @@ circuit detect_tamper(meter_id: bytes(16), voltage_mv: u32, current_ma: u32) -> 
 
 stream energy_metering_events: event<EnergyReading>
     @retention 1y
-    @consumers [streamsight, analytics, compliance, povc]
+    @consumers [observe, analytics, compliance, povc]

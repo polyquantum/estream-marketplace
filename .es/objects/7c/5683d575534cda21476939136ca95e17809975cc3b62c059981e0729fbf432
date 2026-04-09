@@ -1,0 +1,29 @@
+¤Blob‘Å%[package]
+name = "polyquantum.fintech-iso20022"
+version = "0.12.0"
+publisher = "polyquantum"
+description = "ISO 20022 FPGA-accelerated parser and ESCIR codegen reference implementation"
+category = "wire-adapter"
+license = "commercial"
+
+[platform]
+minimum = "0.12.0"
+escir_api = "1.0.0"
+
+[dependencies]
+polyquantum_payments = { package = "polyquantum.payments", version = ">= 0.12.0" }
+
+[wire_adapter]
+protocol_family = "financial"
+transports = ["tcp", "tls"]
+
+[include]
+circuits = ["circuit.v091.escir.yaml"]
+tests = ["test_vectors/**"]
+docs = ["README.md", "COMPONENT_MARKETPLACE.md"]
+
+[boundary]
+tier = "application"
+rationale = "ISO 20022 FPGA/codegen reference; core message circuits live in polyquantum.payments"
+migrated_from = "estream/runtime/iso20022"
+migration_issue = "polyquantum/estream#179"

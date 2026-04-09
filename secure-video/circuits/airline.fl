@@ -87,7 +87,7 @@ circuit validate_sync_batch(
 
 stream airline_play_events: event<SeatPlayback>
     @retention 7y
-    @consumers [governance, audit, streamsight, compliance]
+    @consumers [governance, audit, observe, compliance]
 
 stream airline_sync_events: event<OfflineSyncBatch>
     @retention 7y

@@ -1,0 +1,66 @@
+¤Blob‘Åå/// Spec: specs/verticals/BRIDGE_SPEC.md
+/// Deposit Flow Circuit (Track H â€” Bridge Port)
+/// Processes L1 deposit events â†’ L2 pq-token minting
+
+type DepositEvent = struct {
+    bridge_id: bytes(32),
+    deposit_id: u64,
+    depositor: bytes(32),
+    amount: u64,
+    recipient_commitment: bytes(32),
+    nonce: u64,
+    slot: u64,
+    sig: bytes(64),
+    timestamp_ms: u64,
+}
+
+type DepositRecord = struct {
+    deposit_id: u64,
+    status: u8,
+    l2_tx_id: bytes(32),
+    retries: u32,
+}
+
+state_machine deposit_flow {
+    initial DEPOSIT_PENDING
+    persistence wal
+    terminal [DEPOSIT_COMPLETED, DEPOSIT_FAILED]
+    ai_anomaly_detection true
+
+    DEPOSIT_PENDING -> DEPOSIT_PROCESSING when processing_started
+    DEPOSIT_PROCESSING -> DEPOSIT_COMPLETED when mint_success
+    DEPOSIT_PROCESSING -> DEPOSIT_FAILED when mint_failed guard max_retries
+    DEPOSIT_FAILED -> DEPOSIT_PROCESSING when retry_triggered
+}
+
+// Validate a deposit event signature and amount
+circuit validate_deposit(evt: DepositEvent) -> bool
+    @status production
+    lex bridge/deposit/validate
+    @precision D
+    @attested true
+    observe metrics: [bridge_id, deposit_id, depositor, amount]
+    invariant evt.amount > 0
+{
+    evt.amount > 0
+}
+
+// Process deposit: verify on L1, mint pq-tokens on L2
+circuit process_deposit(evt: DepositEvent) -> DepositRecord
+    @status production
+    lex bridge/deposit/process
+    @precision D
+    @attested true
+    observe metrics: [bridge_id, deposit_id, amount, slot]
+{
+    DepositRecord {
+        deposit_id: evt.deposit_id,
+        status: 0,
+        l2_tx_id: evt.recipient_commitment,
+        retries: 0,
+    }
+}
+
+stream deposit_events: event<DepositEvent>
+    @retention 7y
+    @consumers [governance, audit, compliance, streamsight]

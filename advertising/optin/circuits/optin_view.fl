@@ -15,8 +15,8 @@
 // Every partner access is logged as a ViewAccess record with PoVC
 // attestation for tamper-evident audit.
 //
-// StreamSight is integrated inline via `streamsight true`, `observe metrics:`,
-// and `streamsight_anomaly()`/`streamsight_baseline()` calls in circuit bodies.
+// Observe is integrated inline via `observe true`, `observe metrics:`,
+// and `observe_anomaly()`/`observe_baseline()` calls in circuit bodies.
 
 import optin_engage from "advertising/optin/circuits/optin_engage"
 
@@ -104,12 +104,12 @@ data ViewAccess : app v1 {
 
 stream optin_view_events: event<ViewRecord>
     @retention 7y
-    @consumers [streamsight, audit, cortex, analytics]
+    @consumers [observe, audit, cortex, analytics]
     @classify record_id: IDENTIFIER, partner_id: IDENTIFIER, user_id: IDENTIFIER, visible_fields: METADATA
 
 stream optin_access_events: event<ViewAccess>
     @retention 7y
-    @consumers [streamsight, audit, compliance, analytics]
+    @consumers [observe, audit, compliance, analytics]
     @classify access_id: IDENTIFIER, record_id: IDENTIFIER, partner_id: IDENTIFIER, accessed_fields: METADATA
 
 // =============================================================================
@@ -156,8 +156,8 @@ circuit optin_generate_view(partner_id: bytes(32), user_id: bytes(32), consent_p
     let visible_mask = sha3_256(consent.consented_fields)
     let redacted_mask = bitwise_not(visible_mask)
 
-    let anomaly = streamsight_anomaly(record_id)
-    let baseline = streamsight_baseline("views_generated")
+    let anomaly = observe_anomaly(record_id)
+    let baseline = observe_baseline("views_generated")
 
     ViewRecord {
         record_id: record_id,
@@ -211,8 +211,8 @@ circuit optin_enforce_view(record_id: bytes(32), partner_id: bytes(32), requeste
     let output = kv_get(record.user_id)
     let masked_output = bitwise_and(output, allowed)
 
-    let anomaly = streamsight_anomaly(enforce_hash)
-    let baseline = streamsight_baseline("views_enforced")
+    let anomaly = observe_anomaly(enforce_hash)
+    let baseline = observe_baseline("views_enforced")
 
     masked_output
 }
@@ -247,8 +247,8 @@ circuit optin_log_access(record_id: bytes(32), partner_id: bytes(32), accessed_f
 
     let ip_hash = sha3_256(partner_id)
 
-    let anomaly = streamsight_anomaly(access_id)
-    let baseline = streamsight_baseline("accesses_logged")
+    let anomaly = observe_anomaly(access_id)
+    let baseline = observe_baseline("accesses_logged")
 
     ViewAccess {
         access_id: access_id,
